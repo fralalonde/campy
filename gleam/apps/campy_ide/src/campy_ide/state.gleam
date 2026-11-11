@@ -682,6 +682,14 @@ pub fn toggle_field(state: State, field: String, value: Bool) -> State {
 
 // Cursor gestures commit once on release; the UI tracks the drag locally and
 // sends X then Y (or W then H), which share one undo entry.
+pub fn begin_gesture(state: State) -> State {
+  State(..state, merge_undo: False)
+}
+
+pub fn end_gesture(state: State) -> State {
+  State(..state, merge_undo: False)
+}
+
 fn move_selected_raw(state: State, dx: Int, dy: Int) -> State {
   case state.selected, active_form(state) {
     Some(id), Some(form) -> {
@@ -716,7 +724,80 @@ pub fn move_gesture_x(state: State, dx: Int) -> State {
 
 pub fn move_gesture_y(state: State, dy: Int) -> State {
   let committed = commit(state, move_selected_raw(state, 0, dy))
-  State(..committed, merge_undo: False)
+  reparent_after_drop(State(..committed, merge_undo: False))
+}
+
+// Dropping a control over a panel (or group box) adopts it. Dropping outside
+// every container moves it back to the window root.
+fn reparent_after_drop(state: State) -> State {
+  case state.selected, active_form(state) {
+    Some(id), Some(form) ->
+      case campy_form.find_control(form, id) {
+        None -> state
+        Some(control) -> {
+          let target = drop_target(form, control)
+          case target == campy_form.parent_of(form, id) {
+            True -> state
+            False -> {
+              let next_form = campy_form.set_parent(form, id, target)
+              let next = update_active_form(state, fn(_) { next_form })
+              State(..next, status: case target == "" {
+                True -> "Moved to the window"
+                False ->
+                  case campy_form.find_control(next_form, target) {
+                    Some(parent) -> "Adopted by " <> parent.name
+                    None -> "Adopted"
+                  }
+              })
+            }
+          }
+        }
+      }
+    _, _ -> state
+  }
+}
+
+fn drop_target(form: Form, control: Control) -> String {
+  let blocked = campy_form.subtree_ids(form, control.id)
+  let cx = control.x + control.width / 2
+  let cy = control.y + control.height / 2
+  let candidates =
+    list.filter(form.controls, fn(candidate) {
+      !list.contains(blocked, candidate.id)
+      && candidate.visible
+      && campy_form.accepts_children(candidate.kind)
+      && cx >= candidate.x
+      && cx <= candidate.x + candidate.width
+      && cy >= candidate.y
+      && cy <= candidate.y + candidate.height
+    })
+  let deepest = smallest_control(candidates, None)
+  case deepest {
+    Some(candidate) -> candidate.id
+    None -> ""
+  }
+}
+
+fn smallest_control(
+  candidates: List(Control),
+  best: Option(Control),
+) -> Option(Control) {
+  case candidates {
+    [] -> best
+    [candidate, ..rest] -> {
+      let next = case best {
+        None -> Some(candidate)
+        Some(current) ->
+          case
+            candidate.width * candidate.height < current.width * current.height
+          {
+            True -> Some(candidate)
+            False -> Some(current)
+          }
+      }
+      smallest_control(rest, next)
+    }
+  }
 }
 
 fn resize_selected_raw(state: State, dw: Int, dh: Int) -> State {
@@ -747,6 +828,90 @@ pub fn resize_gesture_w(state: State, dw: Int) -> State {
 
 pub fn resize_gesture_h(state: State, dh: Int) -> State {
   let committed = commit(state, resize_selected_raw(state, 0, dh))
+  State(..committed, merge_undo: False)
+}
+
+fn resize_left_raw(state: State, dx: Int) -> State {
+  case state.selected, active_form(state) {
+    Some(id), Some(form) ->
+      change_control(state, form, id, fn(control) {
+        let new_x =
+          int.max(0, int.min(control.x + dx, control.x + control.width - 8))
+        campy_form.Control(
+          ..control,
+          x: new_x,
+          width: control.width + control.x - new_x,
+        )
+      })
+    _, _ -> state
+  }
+}
+
+fn resize_right_raw(state: State, dx: Int) -> State {
+  case state.selected, active_form(state) {
+    Some(id), Some(form) ->
+      change_control(state, form, id, fn(control) {
+        campy_form.Control(
+          ..control,
+          width: int.max(8, int.min(4095, control.width + dx)),
+        )
+      })
+    _, _ -> state
+  }
+}
+
+fn resize_top_raw(state: State, dy: Int) -> State {
+  case state.selected, active_form(state) {
+    Some(id), Some(form) ->
+      change_control(state, form, id, fn(control) {
+        let new_y =
+          int.max(0, int.min(control.y + dy, control.y + control.height - 8))
+        campy_form.Control(
+          ..control,
+          y: new_y,
+          height: control.height + control.y - new_y,
+        )
+      })
+    _, _ -> state
+  }
+}
+
+fn resize_bottom_raw(state: State, dy: Int) -> State {
+  case state.selected, active_form(state) {
+    Some(id), Some(form) ->
+      change_control(state, form, id, fn(control) {
+        campy_form.Control(
+          ..control,
+          height: int.max(8, int.min(4095, control.height + dy)),
+        )
+      })
+    _, _ -> state
+  }
+}
+
+pub fn resize_left(state: State, dx: Int) -> State {
+  let committed = commit(state, resize_left_raw(state, dx))
+  State(
+    ..committed,
+    merge_undo: list.length(committed.undo) > list.length(state.undo),
+  )
+}
+
+pub fn resize_right(state: State, dx: Int) -> State {
+  let committed = commit(state, resize_right_raw(state, dx))
+  State(
+    ..committed,
+    merge_undo: list.length(committed.undo) > list.length(state.undo),
+  )
+}
+
+pub fn resize_top(state: State, dy: Int) -> State {
+  let committed = commit(state, resize_top_raw(state, dy))
+  State(..committed, merge_undo: False)
+}
+
+pub fn resize_bottom(state: State, dy: Int) -> State {
+  let committed = commit(state, resize_bottom_raw(state, dy))
   State(..committed, merge_undo: False)
 }
 

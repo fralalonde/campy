@@ -155,7 +155,10 @@ standalone form-window emitter. Panels and the window root
 accept children; adoption walks from the selected control to its first accepting
 ancestor and falls back to the window. Picture stores its path in the control's
 text field and is emitted with `@image-url(...)` in the run window. Free forms
-support cursor move/resize; Column/Row forms use Slint layouts. The designer
+support cursor move and eight-handle resize; Column/Row forms use Slint
+layouts. Dropping a control over a panel/group box reparents it; dropping it
+outside all containers returns it to the window. Rendering orders a container
+before its children so adopted controls stay visible. The designer
 model is deliberately separate
 from the M1 versioned component schema: the visual designer was built ahead of
 M1 to validate the interaction model (palette → canvas → inspector → handler

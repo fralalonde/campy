@@ -25,17 +25,21 @@ Layout:
   the CCL catalog (Label, Edit, Memo, Button, Check box, Radio button, Combo
   box, List, Slider, Progress, Panel, Group box, Picture), and the object
   inspector shares the pane.
-- **Form canvas**: drag a control to move it and its corner handle to resize it
-  (the UI tracks the gesture locally and sends the delta once on release). Click
-  the empty canvas to select the **window** itself. The form can use **Free**,
-  **Column**, or **Row** layout; Column/Row use Slint layouts, so resizing the
-  window reflows the controls without sending any geometry messages. Free
-  controls can also use LCL-style **alignment** (Top, Bottom, Left, Right,
-  Client), which binds their geometry to the form's Slint layout.
-- **Adoption and clipboard**: new and pasted controls are adopted by the selected
-  component when it accepts children (panels do), otherwise by its first
-  accepting ancestor, otherwise by the window. Edit → Copy / Cut / Paste works on
-  whole subtrees; moving a panel moves its children with it.
+- **Form canvas**: drag a control to move it and use any of the **eight resize
+  handles** (four corners and four sides) to resize it. The UI tracks the gesture
+  locally and commits once on release; corners/edges resize both geometry and
+  origin as needed, with directional cursors. Click the empty canvas to select
+  the **window** itself. The form can use **Free**, **Column**, or **Row**
+  layout; Column/Row use Slint layouts, so resizing the window reflows the
+  controls without sending any geometry messages. Free controls can also use
+  LCL-style **alignment** (Top, Bottom, Left, Right, Client), which binds their
+  geometry to the form's Slint layout.
+- **Adoption and clipboard**: panels and group boxes accept children. New and
+  pasted controls are adopted by the selected container, its first accepting
+  ancestor, or the window; **dragging a control onto a panel reparents it**, and
+  dragging it out returns it to the window. Nested panels work, children draw
+  above their container, and moving a panel moves its children with it. Edit →
+  Copy / Cut / Paste works on whole subtrees.
 - **Workspace**: several independent projects can be open at once. Switching,
   creating, and deleting projects is done in the left manager. The workspace and
   every project edit are persisted automatically in
@@ -110,7 +114,9 @@ tests, and `campy_search_box` remain as the original runtime spike.
 ## Quick start
 
 Prerequisites: Rust/Cargo (Rust 1.92+), Gleam 1.16+, Erlang/OTP 27+, Python 3,
-and `just`. Native execution requires a working Wayland or X11 display and the
+and `just`. Cargo builds go through `scripts/cargo.sh`, which selects the
+project's compatible toolchain when installed (the system clang/mold toolchain
+can produce a NIF requiring a newer glibc than the runtime provides). Native execution requires a working Wayland or X11 display and the
 Winit runtime libraries. X11 needs `libxkbcommon-x11` in addition to the usual X11
 and keyboard libraries. The lockfiles record the resolved dependency graph. Slint is pinned
 to 1.18.1 and Rustler to 0.39.0. First builds need network access.

@@ -205,6 +205,88 @@ pub fn align_of(form: Form, id: String) -> Align {
   }
 }
 
+pub fn set_parent(form: Form, id: String, parent: String) -> Form {
+  let cycles = case parent == id {
+    True -> True
+    False ->
+      case parent == "" {
+        True -> False
+        False -> is_descendant(form, id, parent)
+      }
+  }
+  let missing = case parent == "" {
+    True -> False
+    False ->
+      case find_control(form, parent) {
+        Some(_) -> False
+        None -> True
+      }
+  }
+  case cycles || missing {
+    True -> form
+    False -> {
+      let without = list.filter(form.parents, fn(entry) { entry.0 != id })
+      let parents = case parent {
+        "" -> without
+        _ -> [#(id, parent), ..without]
+      }
+      Form(..form, parents: parents)
+    }
+  }
+}
+
+fn is_descendant(form: Form, ancestor: String, id: String) -> Bool {
+  case parent_of(form, id) {
+    "" -> False
+    parent -> parent == ancestor || is_descendant(form, ancestor, parent)
+  }
+}
+
+// Render order for the designer and previews: a container is drawn before its
+// children, so adopted controls are visible above their panel.
+pub fn render_controls(form: Form) -> List(Control) {
+  let roots =
+    list.filter(form.controls, fn(control) {
+      !has_existing_parent(form, control.id)
+    })
+  let #(ordered, seen) = visit_controls(roots, form, [], [])
+  let remaining =
+    list.filter(form.controls, fn(control) { !list.contains(seen, control.id) })
+  list.append(ordered, remaining)
+}
+
+fn has_existing_parent(form: Form, id: String) -> Bool {
+  case list.find(form.parents, fn(entry) { entry.0 == id }) {
+    Ok(entry) ->
+      entry.1 != ""
+      && list.any(form.controls, fn(control) { control.id == entry.1 })
+    Error(_) -> False
+  }
+}
+
+fn visit_controls(
+  controls: List(Control),
+  form: Form,
+  seen: List(String),
+  acc: List(Control),
+) -> #(List(Control), List(String)) {
+  list.fold(controls, #(acc, seen), fn(state, control) {
+    let #(acc, seen) = state
+    case list.contains(seen, control.id) {
+      True -> #(acc, seen)
+      False -> {
+        let acc = list.append(acc, [control])
+        let seen = [control.id, ..seen]
+        let children =
+          list.filter(form.controls, fn(child) {
+            parent_of(form, child.id) == control.id
+          })
+        visit_controls(children, form, seen, acc)
+      }
+    }
+  })
+}
+
 pub fn set_align(form: Form, id: String, align: Align) -> Form {
   let others = list.filter(form.aligns, fn(entry) { entry.0 != id })
   let aligns = case align {

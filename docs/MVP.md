@@ -89,9 +89,10 @@ Delivered:
    adoption parent map, and alignment. Workspaces are versioned compressed terms
    (`projects/workspace.campy`, v1) holding full project snapshots and the active
    project path.
-6. Form editor: absolutely positioned canvas with click-to-select, cursor drag to
-   move, and a corner handle to resize (committed once on release); the same
-   form model drives the run window. Clicking the empty canvas selects the
+6. Form editor: absolutely positioned canvas with click-to-select, cursor drag
+   to move, and eight resize handles (corners and sides) with directional
+   cursors and a live outline (committed once on release); the same form model
+   drives the run window. Clicking the empty canvas selects the
    **window** itself. A form can use Free, Column, or Row layout; Column/Row
    delegate placement to Slint layouts and need no geometry messages.
 7. CCL components: Label, Edit, Memo, Button, Check box, Radio button, Combo
@@ -100,8 +101,11 @@ Delivered:
    **Choose picture…** path dialog) and renders in the designer and run window.
    The `campy_ccl` package is the single catalog used for keys, labels, default
    sizes/text, event names, and palette rows by both the designer and the IDE.
-8. Alignment: Free-layout controls can use LCL-style Top, Bottom, Left, Right, or
-   Client alignment. The preview binds aligned geometry to Slint's parent
+8. Containers: panels and group boxes accept children from the palette, paste,
+   or a drag; dropping over a container reparents, dropping outside returns the
+   control to the window, and rendering order draws containers before their
+   children. Alignment: Free-layout controls can use LCL-style Top, Bottom,
+   Left, Right, or Client alignment. The preview binds aligned geometry to Slint's parent
    width/height; the designer computes the same geometry. Column/Row layouts
    ignore alignment. (LCL's dock ordering and anchors are intentionally not
    reproduced yet; Slint's layout model is authoritative.)
@@ -130,7 +134,10 @@ Delivered:
     Adding/deleting controls, opening modules, applying handler code, and loading
     projects are model updates — no reload, focus loss, or flicker. F6 is the
     explicit hot-reload exception.
-15. The default project's modules are the **Cat Café** demo (a panel with adopted
+15. Cargo builds use `scripts/cargo.sh`, which selects the compatible toolchain
+    (Bootlin glibc 2.39 on this machine) when installed, so `just run` and
+    `just check` work without the sandbox environment and the NIF loads on the
+    runtime glibc. The default project's modules are the **Cat Café** demo (a panel with adopted
     picture/label/list/edit/button children, handler stubs, and a generated cat
     illustration) and **CCL Widgets** (every CCL control plus top/bottom aligned
     labels).

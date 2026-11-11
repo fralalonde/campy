@@ -265,6 +265,93 @@ pub fn workspace_roundtrip_test() {
   active.title |> should.equal("Campy")
 }
 
+pub fn render_order_puts_containers_before_children_test() {
+  let form =
+    campy_form.Form(
+      "campy.form",
+      "x",
+      320,
+      200,
+      campy_form.Free,
+      [
+        campy_form.Control(
+          "button-1",
+          "button1",
+          campy_form.Button,
+          10,
+          10,
+          80,
+          30,
+          "B",
+          True,
+          True,
+        ),
+        campy_form.Control(
+          "panel-1",
+          "panel1",
+          campy_form.Panel,
+          0,
+          0,
+          200,
+          200,
+          "P",
+          True,
+          True,
+        ),
+      ],
+      [#("button-1", "panel-1")],
+      [],
+    )
+  campy_form.render_controls(form)
+  |> list.map(fn(control) { control.id })
+  |> should.equal(["panel-1", "button-1"])
+}
+
+pub fn set_parent_refuses_cycles_and_missing_parents_test() {
+  let form =
+    campy_form.Form(
+      "campy.form",
+      "x",
+      320,
+      200,
+      campy_form.Free,
+      [
+        campy_form.Control(
+          "panel-1",
+          "panel1",
+          campy_form.Panel,
+          0,
+          0,
+          200,
+          200,
+          "P",
+          True,
+          True,
+        ),
+        campy_form.Control(
+          "panel-2",
+          "panel2",
+          campy_form.Panel,
+          10,
+          10,
+          100,
+          100,
+          "P2",
+          True,
+          True,
+        ),
+      ],
+      [#("panel-2", "panel-1")],
+      [],
+    )
+  let next = campy_form.set_parent(form, "panel-1", "panel-2")
+  campy_form.parent_of(next, "panel-1") |> should.equal("")
+  let next = campy_form.set_parent(form, "panel-1", "missing")
+  campy_form.parent_of(next, "panel-1") |> should.equal("")
+  let next = campy_form.set_parent(form, "panel-1", "panel-2")
+  campy_form.parent_of(next, "panel-1") |> should.equal("")
+}
+
 pub fn aligned_controls_follow_the_window_test() {
   let form =
     campy_form.Form(

@@ -10,7 +10,7 @@ doctor:
     python3 scripts/workspace.py doctor
 
 build-rust:
-    cargo build --manifest-path rust/Cargo.toml --locked
+    ./scripts/cargo.sh build --manifest-path rust/Cargo.toml --locked
 
 stage-nif: build-rust
     python3 scripts/workspace.py stage-nif
@@ -38,15 +38,15 @@ snapshot-ide: build
     python3 scripts/workspace.py snapshot-ide
 
 test: stage-nif
-    cargo test --manifest-path rust/Cargo.toml --locked
+    ./scripts/cargo.sh test --manifest-path rust/Cargo.toml --locked
     python3 scripts/workspace.py gleam test
 
 fmt:
-    cargo fmt --manifest-path rust/Cargo.toml --all
+    ./scripts/cargo.sh fmt --manifest-path rust/Cargo.toml --all
     python3 scripts/workspace.py gleam format
 
 fmt-check:
-    cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+    ./scripts/cargo.sh fmt --manifest-path rust/Cargo.toml --all -- --check
     python3 scripts/workspace.py gleam format --check
 
 check: fmt-check test
@@ -62,6 +62,6 @@ smoke: build
 
 # Native rendering/input/lifecycle test; `just smoke-native x11` tests X11.
 smoke-native backend="auto": build-gleam
-    cargo build --manifest-path rust/Cargo.toml --locked --features campy-bridge/ui-testing
+    ./scripts/cargo.sh build --manifest-path rust/Cargo.toml --locked --features campy-bridge/ui-testing
     python3 scripts/workspace.py stage-nif
     python3 scripts/smoke_native.py {{backend}}

@@ -38,7 +38,7 @@ pub fn snapshot(form: Form) -> Snapshot {
     form.width,
     form.height,
     form.layout,
-    list.map(form.controls, fn(control) {
+    list.map(campy_form.render_controls(form), fn(control) {
       let #(x, y, w, h) = case form.layout {
         Free ->
           case campy_form.align_of(form, control.id) {

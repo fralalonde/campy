@@ -166,10 +166,13 @@ Structural edits — add/delete control, open module, apply code, load project �
 are model updates, so focus, selection, scroll, and the window itself survive.
 `LoadUi` is only used once at startup.
 
-Layout is part of the form: **Free** uses absolute geometry (drag moves and the
-corner handle resizes; the UI tracks the gesture locally and sends the delta
-once on release), while **Column**/**Row** wrap the control model in Slint
-`VerticalLayout`/`HorizontalLayout`. Free controls may also declare an
+Layout is part of the form: **Free** uses absolute geometry (drag moves and any
+of the eight corner/side handles resize; the UI tracks the gesture locally and
+sends the deltas once on release), while **Column**/**Row** wrap the control
+model in Slint `VerticalLayout`/`HorizontalLayout`. A move drop re-parents the
+control to the smallest accepting panel under its center (or to the window when
+dropped outside); `render_controls` sorts containers before their children so
+adopted controls draw above their panel. Free controls may also declare an
 LCL-style **alignment** (Top/Bottom/Left/Right/Client); the preview emits Slint
 bindings to the parent's width/height, while the designer resolves the same
 geometry from the form size. Column/Row layouts take precedence over alignment. In layout modes the host sends no geometry
@@ -180,7 +183,9 @@ stub in that module's source, and the code view displays the highlighted source
 or edits one handler at a time. The Settings → Editor dialog changes the code
 font family/size and the color scheme. Project files are compressed, versioned
 Erlang terms validated on load; v1 (single form), v2 (modules), and v3 (layout)
-files upgrade to v5 (parent and alignment maps). The selected component can be
+files upgrade to v5 (parent and alignment maps). Cargo builds use
+`scripts/cargo.sh`, which selects the compatible glibc toolchain when installed
+and avoids producing a NIF that requires a newer glibc than the runtime. The selected component can be
 removed with the inspector trashcan or the Delete key; both go through the
 undoable `delete_selected` transition. The UI command queue is bounded and the
 snapshot harness uses a ReadText barrier to drain updates before capturing.

@@ -484,6 +484,90 @@ pub fn live_preview_shell_and_snapshot_test() {
   list.length(live_preview_ui.wire(snapshot.controls)) |> should.equal(12)
 }
 
+pub fn resize_from_every_edge_test() {
+  let model = demo_state() |> state.select("pet-button")
+
+  let assert Some(control) =
+    state.selected_control(state.resize_left(model, -10))
+  control.x |> should.equal(34)
+  control.width |> should.equal(150)
+
+  let assert Some(control) =
+    state.selected_control(state.resize_right(model, 10))
+  control.width |> should.equal(150)
+
+  let assert Some(control) =
+    state.selected_control(state.resize_top(model, -10))
+  control.y |> should.equal(226)
+  control.height |> should.equal(42)
+
+  let assert Some(control) =
+    state.selected_control(state.resize_bottom(model, 10))
+  control.height |> should.equal(42)
+
+  let assert Some(control) =
+    state.selected_control(state.resize_left(model, 500))
+  control.x |> should.equal(176)
+  control.width |> should.equal(8)
+}
+
+pub fn corner_resize_is_one_undo_step_test() {
+  let corner =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.begin_gesture
+    |> state.resize_left(-10)
+    |> state.resize_top(-10)
+    |> state.end_gesture
+  let assert Some(control) = state.selected_control(corner)
+  control.x |> should.equal(34)
+  control.y |> should.equal(226)
+  control.width |> should.equal(150)
+  control.height |> should.equal(42)
+
+  let undone = state.undo(corner)
+  let assert Some(control) = state.selected_control(undone)
+  control.x |> should.equal(44)
+  control.y |> should.equal(236)
+  control.width |> should.equal(140)
+  control.height |> should.equal(32)
+  state.undo(undone).status |> should.equal("Nothing to undo")
+}
+
+pub fn dragging_onto_a_panel_adopts_it_test() {
+  let added = state.add(state.select(demo_state(), ""), campy_form.Button)
+  let moved =
+    added
+    |> state.begin_gesture
+    |> state.move_gesture_x(50)
+    |> state.move_gesture_y(50)
+    |> state.end_gesture
+  let assert Some(form) = state.active_form(moved)
+  let assert Some(control) = state.selected_control(moved)
+  campy_form.parent_of(form, control.id) |> should.equal("panel-1")
+
+  let outside =
+    moved
+    |> state.begin_gesture
+    |> state.move_gesture_x(600)
+    |> state.move_gesture_y(0)
+    |> state.end_gesture
+  let assert Some(form) = state.active_form(outside)
+  campy_form.parent_of(form, control.id) |> should.equal("")
+}
+
+pub fn nested_panels_accept_children_test() {
+  let added = state.add(state.select(demo_state(), "panel-1"), campy_form.Panel)
+  let assert Some(form) = state.active_form(added)
+  let assert Some(child_panel) = state.selected_control(added)
+  campy_form.parent_of(form, child_panel.id) |> should.equal("panel-1")
+
+  let nested = state.add(added, campy_form.Button)
+  let assert Some(form) = state.active_form(nested)
+  let assert Some(button) = state.selected_control(nested)
+  campy_form.parent_of(form, button.id) |> should.equal(child_panel.id)
+}
+
 // Models and scalars must apply to the live instance without a new LoadUi.
 pub fn models_apply_on_the_live_instance_test() {
   let model = demo_state()

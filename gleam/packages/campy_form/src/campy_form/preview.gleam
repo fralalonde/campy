@@ -49,7 +49,7 @@ fn content(form: Form) -> String {
       "    ScrollView { width: 100%; height: 100%;\n"
       <> "      VerticalLayout { padding: 8px; spacing: 8px;\n"
       <> string.join(
-        list.map(form.controls, fn(control) {
+        list.map(campy_form.render_controls(form), fn(control) {
           indent(control_element(form, control, False))
         }),
         "",
@@ -59,7 +59,7 @@ fn content(form: Form) -> String {
     campy_form.Row ->
       "    HorizontalLayout { padding: 8px; spacing: 8px; height: 100%;\n"
       <> string.join(
-        list.map(form.controls, fn(control) {
+        list.map(campy_form.render_controls(form), fn(control) {
           indent(control_element(form, control, False))
         }),
         "",
