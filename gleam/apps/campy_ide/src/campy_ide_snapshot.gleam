@@ -89,6 +89,47 @@ pub fn main() {
   let last = apply(session, ide_ui.snapshot(column), last)
   snapshot(session, "ide-layout.png")
 
+  let multi =
+    model
+    |> state.select("pet-button")
+    |> state.toggle_select("feed-button")
+  let last = apply(session, ide_ui.snapshot(multi), last)
+  snapshot(session, "ide-multiselect.png")
+
+  let dropping =
+    model
+    |> state.select("pet-button")
+    |> state.begin_drag
+    |> state.set_drop_x(300)
+    |> state.update_drop(300)
+  let last = apply(session, ide_ui.snapshot(dropping), last)
+  snapshot(session, "ide-drop-target.png")
+
+  let placing = state.arm_component(model, "button")
+  let last = apply(session, ide_ui.snapshot(placing), last)
+  snapshot(session, "ide-place.png")
+
+  let assert Ok(_) =
+    bridge.submit(session, bridge.SetBool(1, "shift-down", True))
+  let assert Ok(_) = bridge.submit(session, bridge.ReadText(1, "status"))
+  wait_for(1, "property:status", "select-mode barrier")
+  snapshot(session, "ide-select-mode.png")
+  let assert Ok(_) =
+    bridge.submit(session, bridge.SetBool(1, "shift-down", False))
+
+  let console =
+    model
+    |> state.set_console_tab(True)
+    |> state.log_console("$ campy demo")
+    |> state.log_console("App ready")
+    |> state.log_console("Event: pet_button_clicked")
+  let last = apply(session, ide_ui.snapshot(console), last)
+  snapshot(session, "ide-console.png")
+
+  let agent = state.set_agent_open(model, True)
+  let last = apply(session, ide_ui.snapshot(agent), last)
+  snapshot(session, "ide-agent.png")
+
   let two_projects = state.create_project(model)
   let _last = apply(session, ide_ui.snapshot(two_projects), last)
   snapshot(session, "ide-workspace.png")

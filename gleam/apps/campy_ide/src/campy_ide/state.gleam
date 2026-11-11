@@ -5,6 +5,7 @@ import campy_form/workspace.{type Workspace}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 
 pub type Tab {
   Properties
@@ -62,6 +63,7 @@ pub type History {
     view: ModuleView,
     slint_tab: Bool,
     selected: Option(String),
+    selection: List(String),
     tab: Tab,
     active_handler: Option(String),
     highlight: Option(#(Int, Int)),
@@ -77,6 +79,7 @@ pub type State {
     view: ModuleView,
     slint_tab: Bool,
     selected: Option(String),
+    selection: List(String),
     tab: Tab,
     editor: Editor,
     active_handler: Option(String),
@@ -92,6 +95,19 @@ pub type State {
     font_size: Int,
     scheme: Scheme,
     settings_open: Bool,
+    agent_open: Bool,
+    mcp_enabled: Bool,
+    mcp_port: Int,
+    mcp_status: String,
+    hints: Bool,
+    pending_kind: Option(Kind),
+    drop_active: Bool,
+    drop_candidate: String,
+    drop_x: Int,
+    rect: #(Int, Int, Int, Int),
+    console: List(String),
+    console_tab: Bool,
+    window_positions: List(#(String, #(Int, Int))),
     status: String,
   )
 }
@@ -121,6 +137,7 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     view: FormView,
     slint_tab: False,
     selected: None,
+    selection: [],
     tab: Properties,
     editor: View,
     active_handler: None,
@@ -136,6 +153,19 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     font_size: 13,
     scheme: Dark,
     settings_open: False,
+    agent_open: False,
+    mcp_enabled: False,
+    mcp_port: 7817,
+    mcp_status: "Stopped",
+    hints: True,
+    pending_kind: None,
+    drop_active: False,
+    drop_candidate: "",
+    drop_x: 0,
+    rect: #(0, 0, 0, 0),
+    console: [],
+    console_tab: False,
+    window_positions: [],
     status: "Ready",
   )
 }
@@ -148,6 +178,7 @@ fn history(state: State) -> History {
     state.view,
     state.slint_tab,
     state.selected,
+    state.selection,
     state.tab,
     state.active_handler,
     state.highlight,
@@ -163,6 +194,7 @@ fn restore(state: State, past: History) -> State {
     view: past.view,
     slint_tab: past.slint_tab,
     selected: past.selected,
+    selection: past.selection,
     tab: past.tab,
     active_handler: past.active_handler,
     highlight: past.highlight,
@@ -342,6 +374,7 @@ pub fn open_module(state: State, id: String) -> State {
         opened: list.unique([id, ..state.opened]),
         view: FormView,
         selected: None,
+        selection: [],
         active_handler: None,
         highlight: None,
         editing: None,
@@ -361,6 +394,7 @@ pub fn activate_module(state: State, id: String) -> State {
         active: id,
         opened: list.unique([id, ..state.opened]),
         selected: None,
+        selection: [],
         active_handler: None,
         highlight: None,
         editing: None,
@@ -387,6 +421,7 @@ pub fn close_module(state: State, id: String) -> State {
             active: next,
             view: FormView,
             selected: None,
+            selection: [],
             active_handler: None,
             highlight: None,
             editing: None,
@@ -453,6 +488,7 @@ pub fn add(state: State, kind: Kind) -> State {
         State(
           ..next,
           selected: Some(control.id),
+          selection: [control.id],
           tab: Properties,
           status: "Added " <> campy_form.kind_label(kind),
         ),
@@ -495,6 +531,7 @@ pub fn select(state: State, id: String) -> State {
       State(
         ..state,
         selected: None,
+        selection: [],
         active_handler: None,
         highlight: None,
         editing: None,
@@ -507,6 +544,7 @@ pub fn select(state: State, id: String) -> State {
               State(
                 ..state,
                 selected: Some(id),
+                selection: [id],
                 tab: Properties,
                 active_handler: None,
                 highlight: None,
@@ -520,28 +558,85 @@ pub fn select(state: State, id: String) -> State {
   }
 }
 
+// Ctrl-click toggles membership; the last added control is the inspector primary.
+pub fn toggle_select(state: State, id: String) -> State {
+  case active_form(state) {
+    None -> state
+    Some(form) ->
+      case campy_form.find_control(form, id) {
+        None -> state
+        Some(_) -> {
+          let selected = list.contains(state.selection, id)
+          case selected {
+            True -> {
+              let rest = list.filter(state.selection, fn(item) { item != id })
+              let primary = case list.reverse(rest) {
+                [first, ..] -> Some(first)
+                [] -> None
+              }
+              State(
+                ..state,
+                selected: primary,
+                selection: rest,
+                active_handler: None,
+                highlight: None,
+                editing: None,
+                status: "Selected " <> int.to_string(list.length(rest)),
+              )
+            }
+            False ->
+              State(
+                ..state,
+                selected: Some(id),
+                selection: list.append(state.selection, [id]),
+                tab: Properties,
+                active_handler: None,
+                highlight: None,
+                editing: None,
+                status: "Selected "
+                  <> int.to_string(list.length(state.selection) + 1),
+              )
+          }
+        }
+      }
+  }
+}
+
 pub fn set_tab(state: State, tab: Tab) -> State {
   State(..state, tab: tab)
 }
 
 pub fn delete_selected(state: State) -> State {
-  case state.selected, active_form(state) {
-    Some(id), Some(form) -> {
-      let next =
-        update_active_form(state, fn(_) { campy_form.remove_control(form, id) })
-      commit(
-        state,
-        State(
-          ..next,
-          selected: None,
-          active_handler: None,
-          highlight: None,
-          editing: None,
-          status: "Control deleted",
-        ),
-      )
+  case active_form(state) {
+    None -> status(state, "Select a control to delete")
+    Some(form) -> {
+      let ids = selection_subtree_ids(state, form)
+      case ids {
+        [] -> status(state, "Select a control to delete")
+        _ -> {
+          let next =
+            update_active_form(state, fn(_) {
+              campy_form.remove_controls(form, ids)
+            })
+          let count = list.length(state.selection)
+          commit(
+            state,
+            State(
+              ..next,
+              selected: None,
+              selection: [],
+              active_handler: None,
+              highlight: None,
+              editing: None,
+              status: case count {
+                1 -> "Component deleted"
+                _ -> int.to_string(count) <> " components deleted"
+              },
+            ),
+          )
+        }
+      }
     }
-    _, _ -> status(state, "Select a control to delete")
   }
 }
 
@@ -687,13 +782,27 @@ pub fn begin_gesture(state: State) -> State {
 }
 
 pub fn end_gesture(state: State) -> State {
-  State(..state, merge_undo: False)
+  State(..state, merge_undo: False, drop_active: False, drop_candidate: "")
 }
 
 fn move_selected_raw(state: State, dx: Int, dy: Int) -> State {
-  case state.selected, active_form(state) {
-    Some(id), Some(form) -> {
-      let ids = campy_form.subtree_ids(form, id)
+  case state.selection, active_form(state) {
+    [_], Some(form) -> {
+      let ids = selection_subtree_ids(state, form)
+      let next =
+        list.fold(ids, form, fn(acc, control_id) {
+          campy_form.update_selected(acc, control_id, fn(control) {
+            campy_form.Control(
+              ..control,
+              x: int.max(0, int.min(4095, control.x + dx)),
+              y: int.max(0, int.min(4095, control.y + dy)),
+            )
+          })
+        })
+      update_active_form(state, fn(_) { next })
+    }
+    [_, _, ..], Some(form) -> {
+      let ids = selection_subtree_ids(state, form)
       let next =
         list.fold(ids, form, fn(acc, control_id) {
           campy_form.update_selected(acc, control_id, fn(control) {
@@ -730,37 +839,43 @@ pub fn move_gesture_y(state: State, dy: Int) -> State {
 // Dropping a control over a panel (or group box) adopts it. Dropping outside
 // every container moves it back to the window root.
 fn reparent_after_drop(state: State) -> State {
-  case state.selected, active_form(state) {
-    Some(id), Some(form) ->
-      case campy_form.find_control(form, id) {
-        None -> state
-        Some(control) -> {
-          let target = drop_target(form, control)
-          case target == campy_form.parent_of(form, id) {
-            True -> state
-            False -> {
-              let next_form = campy_form.set_parent(form, id, target)
-              let next = update_active_form(state, fn(_) { next_form })
-              State(..next, status: case target == "" {
+  case active_form(state) {
+    None -> state
+    Some(form) -> {
+      let roots = selection_roots(state, form)
+      let #(next_form, labels) =
+        list.fold(roots, #(form, []), fn(acc, id) {
+          let #(current, labels) = acc
+          case campy_form.find_control(current, id) {
+            None -> #(current, labels)
+            Some(control) -> {
+              let #(x, y, width, height) = campy_form.bounds(current, control)
+              let target =
+                drop_target_at(current, control, x + width / 2, y + height / 2)
+              let next = campy_form.set_parent(current, id, target)
+              let label = case target == "" {
                 True -> "Moved to the window"
                 False ->
-                  case campy_form.find_control(next_form, target) {
+                  case campy_form.find_control(next, target) {
                     Some(parent) -> "Adopted by " <> parent.name
                     None -> "Adopted"
                   }
-              })
+              }
+              #(next, [label, ..labels])
             }
           }
-        }
-      }
-    _, _ -> state
+        })
+      let next = update_active_form(state, fn(_) { next_form })
+      State(..next, status: case labels {
+        [label, ..] -> label
+        [] -> "Moved"
+      })
+    }
   }
 }
 
-fn drop_target(form: Form, control: Control) -> String {
+fn drop_target_at(form: Form, control: Control, cx: Int, cy: Int) -> String {
   let blocked = campy_form.subtree_ids(form, control.id)
-  let cx = control.x + control.width / 2
-  let cy = control.y + control.height / 2
   let candidates =
     list.filter(form.controls, fn(candidate) {
       !list.contains(blocked, candidate.id)
@@ -771,8 +886,7 @@ fn drop_target(form: Form, control: Control) -> String {
       && cy >= candidate.y
       && cy <= candidate.y + candidate.height
     })
-  let deepest = smallest_control(candidates, None)
-  case deepest {
+  case smallest_control(candidates, None) {
     Some(candidate) -> candidate.id
     None -> ""
   }
@@ -915,6 +1029,14 @@ pub fn resize_bottom(state: State, dy: Int) -> State {
   State(..committed, merge_undo: False)
 }
 
+pub fn layout_from_name(name: String) -> campy_form.Layout {
+  case name {
+    "Column" -> campy_form.Column
+    "Row" -> campy_form.Row
+    _ -> campy_form.Free
+  }
+}
+
 pub fn set_layout(state: State, layout: campy_form.Layout) -> State {
   case active_form(state) {
     Some(form) ->
@@ -960,32 +1082,59 @@ pub fn align_from_name(name: String) -> campy_form.Align {
 }
 
 pub fn copy_selected(state: State) -> State {
-  case selected_control(state), active_form(state) {
-    Some(control), Some(form) -> {
-      let ids = campy_form.subtree_ids(form, control.id)
-      let controls =
-        list.filter(form.controls, fn(item) { list.contains(ids, item.id) })
-      let parents =
-        list.filter(form.parents, fn(entry) { list.contains(ids, entry.0) })
-      let aligns =
-        list.filter(form.aligns, fn(entry) { list.contains(ids, entry.0) })
-      State(
-        ..state,
-        clipboard: Some(Clipboard(controls, parents, aligns)),
-        status: "Copied " <> control.name,
-      )
+  case active_form(state) {
+    None -> status(state, "Select a component to copy")
+    Some(form) -> {
+      let roots = selection_roots(state, form)
+      case roots {
+        [] -> status(state, "Select a component to copy")
+        _ -> {
+          let ids =
+            roots
+            |> list.flat_map(fn(root) { campy_form.subtree_ids(form, root) })
+            |> list.unique
+          let ordered_ids =
+            roots
+            |> list.flat_map(fn(root) {
+              [root, ..campy_form.descendant_ids(form, root)]
+            })
+            |> list.unique
+          let controls =
+            list.filter_map(ordered_ids, fn(id) {
+              case campy_form.find_control(form, id) {
+                Some(control) -> Ok(control)
+                None -> Error(Nil)
+              }
+            })
+          let parents =
+            list.filter(form.parents, fn(entry) { list.contains(ids, entry.0) })
+          let aligns =
+            list.filter(form.aligns, fn(entry) { list.contains(ids, entry.0) })
+          State(
+            ..state,
+            clipboard: Some(Clipboard(controls, parents, aligns)),
+            status: case list.length(state.selection) {
+              1 -> "Component copied"
+              count -> int.to_string(count) <> " components copied"
+            },
+          )
+        }
+      }
     }
-    _, _ -> status(state, "Select a component to copy")
   }
 }
 
 pub fn cut_selected(state: State) -> State {
-  case selected_control(state) {
-    None -> status(state, "Select a component to cut")
-    Some(control) -> {
+  case state.selection {
+    [] -> status(state, "Select a component to cut")
+    _ -> {
+      let count = list.length(state.selection)
       let copied = copy_selected(state)
       let removed = delete_selected(copied)
-      State(..removed, status: "Cut " <> control.name)
+      State(..removed, status: case count {
+        1 -> "Component cut"
+        _ -> int.to_string(count) <> " components cut"
+      })
     }
   }
 }
@@ -1007,6 +1156,7 @@ pub fn paste(state: State) -> State {
           State(
             ..next,
             selected: Some(control.id),
+            selection: [control.id],
             tab: Properties,
             status: "Pasted " <> control.name,
           )
@@ -1031,6 +1181,75 @@ pub fn set_scheme(state: State, scheme: Scheme) -> State {
 
 pub fn set_settings_open(state: State, open: Bool) -> State {
   State(..state, settings_open: open)
+}
+
+pub fn set_agent_open(state: State, open: Bool) -> State {
+  State(..state, agent_open: open)
+}
+
+pub fn set_mcp_port(state: State, port: Int) -> State {
+  State(..state, mcp_port: port)
+}
+
+pub fn set_mcp(state: State, enabled: Bool, status: String) -> State {
+  State(..state, mcp_enabled: enabled, mcp_status: status)
+}
+
+pub fn window_position(state: State) -> #(Int, Int) {
+  case active_module(state) {
+    None -> #(32, 40)
+    Some(module) ->
+      case
+        list.find(state.window_positions, fn(entry) { entry.0 == module.id })
+      {
+        Ok(entry) -> entry.1
+        Error(_) -> #(32, 40)
+      }
+  }
+}
+
+pub fn move_window(state: State, dx: Int, dy: Int) -> State {
+  case active_module(state) {
+    None -> state
+    Some(module) -> {
+      let #(x, y) = window_position(state)
+      let position = #(
+        int.max(0, int.min(2000, x + dx)),
+        int.max(0, int.min(2000, y + dy)),
+      )
+      State(..state, window_positions: [
+        #(module.id, position),
+        ..list.filter(state.window_positions, fn(entry) { entry.0 != module.id })
+      ])
+    }
+  }
+}
+
+fn resize_form_raw(state: State, dw: Int, dh: Int) -> State {
+  case active_form(state) {
+    None -> state
+    Some(form) ->
+      update_active_form(state, fn(_) {
+        campy_form.Form(
+          ..form,
+          width: int.max(240, int.min(4096, form.width + dw)),
+          height: int.max(160, int.min(4096, form.height + dh)),
+        )
+      })
+  }
+}
+
+pub fn resize_window_w(state: State, dw: Int) -> State {
+  let committed = commit(state, resize_form_raw(state, dw, 0))
+  State(
+    ..committed,
+    merge_undo: list.length(committed.undo) > list.length(state.undo),
+  )
+}
+
+pub fn resize_window_h(state: State, dh: Int) -> State {
+  let committed = commit(state, resize_form_raw(state, 0, dh))
+  State(..committed, merge_undo: False)
 }
 
 pub fn scheme_from_name(name: String) -> Scheme {
@@ -1156,6 +1375,215 @@ pub fn set_preview(state: State, preview: Option(Preview)) -> State {
   State(..state, preview: preview)
 }
 
+pub fn selection_roots(state: State, form: Form) -> List(String) {
+  list.filter(state.selection, fn(id) {
+    !list.any(state.selection, fn(other) {
+      other != id && list.contains(campy_form.descendant_ids(form, other), id)
+    })
+  })
+}
+
+pub fn selection_subtree_ids(state: State, form: Form) -> List(String) {
+  selection_roots(state, form)
+  |> list.flat_map(fn(root) { campy_form.subtree_ids(form, root) })
+  |> list.unique
+}
+
+pub fn log_console(state: State, line: String) -> State {
+  let line = case string.length(line) > 500 {
+    True -> string.slice(line, 0, 500)
+    False -> line
+  }
+  let lines = list.append(state.console, [line])
+  let lines = case list.length(lines) > 400 {
+    True -> list.drop(lines, list.length(lines) - 400)
+    False -> lines
+  }
+  State(..state, console: lines)
+}
+
+pub fn clear_console(state: State) -> State {
+  State(..state, console: [])
+}
+
+pub fn set_console_tab(state: State, open: Bool) -> State {
+  State(..state, console_tab: open)
+}
+
+pub fn console_input(state: State, text: String) -> State {
+  let next = log_console(state, "> " <> text)
+  let next = case state.preview {
+    Some(_) -> log_console(next, "stdin → running app")
+    None -> log_console(next, "stdin: app is not running")
+  }
+  State(..next, status: "Console input sent")
+}
+
+pub fn console_text(state: State) -> String {
+  string.join(state.console, "\n")
+}
+
+pub fn set_hints(state: State, hints: Bool) -> State {
+  State(..state, hints: hints)
+}
+
+pub fn arm_component(state: State, key: String) -> State {
+  case campy_form.kind_from_key(key) {
+    None -> state
+    Some(kind) ->
+      State(
+        ..state,
+        pending_kind: Some(kind),
+        drop_active: False,
+        drop_candidate: "",
+        status: "Drag on the form to place " <> campy_form.kind_label(kind),
+      )
+  }
+}
+
+pub fn cancel_pending(state: State) -> State {
+  State(..state, pending_kind: None, status: "Placement cancelled")
+}
+
+pub fn set_rect_x(state: State, value: Int) -> State {
+  let #(_, y, w, h) = state.rect
+  State(..state, rect: #(value, y, w, h))
+}
+
+pub fn set_rect_y(state: State, value: Int) -> State {
+  let #(x, _, w, h) = state.rect
+  State(..state, rect: #(x, value, w, h))
+}
+
+pub fn set_rect_w(state: State, value: Int) -> State {
+  let #(x, y, _, h) = state.rect
+  State(..state, rect: #(x, y, value, h))
+}
+
+pub fn set_rect_h(state: State, value: Int) -> State {
+  let #(x, y, w, _) = state.rect
+  State(..state, rect: #(x, y, w, value))
+}
+
+pub fn select_frame(state: State) -> State {
+  case active_form(state) {
+    None -> state
+    Some(form) -> {
+      let #(x, y, w, h) = state.rect
+      let min_x = int.min(x, x + w)
+      let max_x = int.max(x, x + w)
+      let min_y = int.min(y, y + h)
+      let max_y = int.max(y, y + h)
+      let picked =
+        campy_form.render_controls(form)
+        |> list.filter(fn(control) {
+          let #(bx, by, bw, bh) = campy_form.bounds(form, control)
+          [
+            #(bx, by),
+            #(bx + bw / 2, by),
+            #(bx + bw, by),
+            #(bx, by + bh / 2),
+            #(bx + bw, by + bh / 2),
+            #(bx, by + bh),
+            #(bx + bw / 2, by + bh),
+            #(bx + bw, by + bh),
+          ]
+          |> list.any(fn(point) {
+            point.0 >= min_x
+            && point.0 <= max_x
+            && point.1 >= min_y
+            && point.1 <= max_y
+          })
+        })
+        |> list.map(fn(control) { control.id })
+      let primary = case picked {
+        [first, ..] -> Some(first)
+        [] -> None
+      }
+      State(
+        ..state,
+        selected: primary,
+        selection: picked,
+        active_handler: None,
+        highlight: None,
+        editing: None,
+        status: case list.length(picked) {
+          0 -> "No components in frame"
+          1 -> "1 component selected"
+          count -> int.to_string(count) <> " components selected"
+        },
+      )
+    }
+  }
+}
+
+pub fn place_component(state: State) -> State {
+  case state.pending_kind, active_form(state) {
+    None, _ -> state
+    _, None -> status(state, "Open a module first")
+    Some(kind), Some(form) -> {
+      let #(start_x, start_y, dw, dh) = state.rect
+      let left = int.max(0, int.min(start_x, start_x + dw))
+      let top = int.max(0, int.min(start_y, start_y + dh))
+      let abs_w = case dw < 0 {
+        True -> -dw
+        False -> dw
+      }
+      let abs_h = case dh < 0 {
+        True -> -dh
+        False -> dh
+      }
+      let width = int.max(8, int.min(4095, abs_w))
+      let height = int.max(8, int.min(4095, abs_h))
+      let parent = campy_form.container_at(form, start_x, start_y)
+      let #(form, control) =
+        campy_form.add_control_rect(
+          form,
+          kind,
+          parent,
+          left,
+          top,
+          width,
+          height,
+        )
+      let next = update_active_form(state, fn(_) { form })
+      commit(
+        state,
+        State(
+          ..next,
+          selected: Some(control.id),
+          selection: [control.id],
+          tab: Properties,
+          pending_kind: None,
+          drop_active: False,
+          drop_candidate: "",
+          status: "Added " <> campy_form.kind_label(kind),
+        ),
+      )
+    }
+  }
+}
+
+pub fn begin_drag(state: State) -> State {
+  State(..state, drop_active: True, drop_candidate: "", drop_x: 0)
+}
+
+pub fn set_drop_x(state: State, value: Int) -> State {
+  State(..state, drop_x: value)
+}
+
+pub fn update_drop(state: State, y: Int) -> State {
+  case selected_control(state), active_form(state) {
+    Some(control), Some(form) ->
+      State(
+        ..state,
+        drop_active: True,
+        drop_candidate: drop_target_at(form, control, state.drop_x, y),
+      )
+    _, _ -> state
+  }
+}
+
 pub fn selected_control(state: State) -> Option(Control) {
   case state.selected, active_form(state) {
     Some(id), Some(form) -> campy_form.find_control(form, id)
@@ -1166,7 +1594,15 @@ pub fn selected_control(state: State) -> Option(Control) {
 pub fn selection_label(state: State) -> String {
   case selected_control(state) {
     Some(control) ->
-      campy_form.kind_label(control.kind) <> " · " <> control.name
+      case list.length(state.selection) {
+        1 -> campy_form.kind_label(control.kind) <> " · " <> control.name
+        count ->
+          int.to_string(count)
+          <> " selected · "
+          <> campy_form.kind_label(control.kind)
+          <> " · "
+          <> control.name
+      }
     None ->
       case active_form(state) {
         Some(form) -> "Window · " <> form.title

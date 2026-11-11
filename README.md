@@ -31,7 +31,9 @@ Layout:
   origin as needed, with directional cursors. Click the empty canvas to select
   the **window** itself. The form can use **Free**, **Column**, or **Row**
   layout; Column/Row use Slint layouts, so resizing the window reflows the
-  controls without sending any geometry messages. Free controls can also use
+  controls without sending any geometry messages. In the Free designer the
+  form is a **module window** with a title bar: drag the bar to move it and the
+  corner handle to resize the form. Window positions are kept per module. Free controls can also use
   LCL-style **alignment** (Top, Bottom, Left, Right, Client), which binds their
   geometry to the form's Slint layout.
 - **Adoption and clipboard**: panels and group boxes accept children. New and
@@ -68,9 +70,13 @@ Layout:
   Shift+F5, and Escape. Text
   fields keep their own editing shortcuts; otherwise the bindings act on the
   designer.
-- **Settings — Editor…**: font family, font size, and color scheme (Dark, Light,
-  Solarized). The scheme themes the shell, the code view, and the native Slint
-  widgets via `Palette.color-scheme`.
+- **Console**: the form editor's **Console** tab shows the running app's
+  lifecycle/events and accepts stdin lines. The current preview logs input but
+  does not execute handler code yet, so stdin is reserved for the app runtime.
+- **Settings — Editor… / Agent…**: the Editor page sets font family, font size,
+  color scheme and UI hints. The Agent page enables the optional **MCP server**
+  (disabled by default), edits its localhost port, and shows the endpoint
+  (`http://127.0.0.1:<port>/mcp`).
 - **Top — menus**: File, Edit (undo/redo and copy/cut/paste/delete), Run, and
   Settings, plus ↶ / ↷, ▶ Run, and ■ Stop.
 
@@ -152,8 +158,10 @@ Café form), `ide-widgets.png` (the CCL Widgets module), `ide-code.png`
 `ide-slint.png` (generated Slint tab), `ide-light.png` (light color scheme),
 `ide-form.png` (the static generated preview), `app-live.png` and
 `app-updated.png` (the live app before/after an F7-style update in the same
-window), `ide-updated.png` (selection applied through properties only), and
-`ide-workspace.png` (two projects in one workspace) for visual review. `just generate` writes the derived
+window), `ide-updated.png` (selection applied through properties only),
+`ide-multiselect.png`, `ide-drop-target.png`, `ide-place.png`,
+`ide-select-mode.png`, `ide-console.png`, `ide-agent.png`, and
+`ide-workspace.png` for visual review. `just generate` writes the derived
 `generated/search_box.slint` fixture; do not edit it. `just fmt` formats both
 languages. `just check` runs the display-free test suite, including real NIF
 integration.

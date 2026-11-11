@@ -198,6 +198,66 @@ pub fn align_from_key(key: String) -> Align {
   }
 }
 
+// Effective geometry used by the designer and live preview, including design
+// alignment. Column/Row layouts position controls with Slint, so their stored
+// geometry is returned for editor-side hit testing only.
+pub fn bounds(form: Form, control: Control) -> #(Int, Int, Int, Int) {
+  case form.layout {
+    Free ->
+      case align_of(form, control.id) {
+        NoAlign -> #(control.x, control.y, control.width, control.height)
+        Top -> #(0, 0, form.width, control.height)
+        Bottom -> #(0, form.height - control.height, form.width, control.height)
+        Left -> #(0, 0, control.width, form.height)
+        Right -> #(form.width - control.width, 0, control.width, form.height)
+        Client -> #(0, 0, form.width, form.height)
+      }
+    Column | Row -> #(control.x, control.y, control.width, control.height)
+  }
+}
+
+pub fn remove_controls(form: Form, ids: List(String)) -> Form {
+  list.fold(ids, form, fn(current, id) { remove_control(current, id) })
+}
+
+pub fn container_at(form: Form, x: Int, y: Int) -> String {
+  let candidates =
+    list.filter(form.controls, fn(candidate) {
+      candidate.visible
+      && accepts_children(candidate.kind)
+      && x >= candidate.x
+      && x <= candidate.x + candidate.width
+      && y >= candidate.y
+      && y <= candidate.y + candidate.height
+    })
+  case smallest_container(candidates, None) {
+    Some(candidate) -> candidate.id
+    None -> ""
+  }
+}
+
+fn smallest_container(
+  candidates: List(Control),
+  best: Option(Control),
+) -> Option(Control) {
+  case candidates {
+    [] -> best
+    [candidate, ..rest] -> {
+      let next = case best {
+        None -> Some(candidate)
+        Some(current) ->
+          case
+            candidate.width * candidate.height < current.width * current.height
+          {
+            True -> Some(candidate)
+            False -> Some(current)
+          }
+      }
+      smallest_container(rest, next)
+    }
+  }
+}
+
 pub fn align_of(form: Form, id: String) -> Align {
   case list.find(form.aligns, fn(entry) { entry.0 == id }) {
     Ok(entry) -> entry.1
@@ -320,6 +380,50 @@ fn default_text(kind: Kind) -> String {
 
 // Adds a control. `parent_id` is "" for the window root; panels adopt children
 // and position them inside their bounds.
+pub fn add_control_rect(
+  form: Form,
+  kind: Kind,
+  parent_id: String,
+  x: Int,
+  y: Int,
+  width: Int,
+  height: Int,
+) -> #(Form, Control) {
+  let prefix = kind_key(kind)
+  let suffix = next_suffix(form.controls, prefix, 1)
+  let #(default_width, default_height) = default_size(kind)
+  let width = case width >= 8 {
+    True -> width
+    False -> default_width
+  }
+  let height = case height >= 8 {
+    True -> height
+    False -> default_height
+  }
+  let control =
+    Control(
+      prefix <> "-" <> suffix,
+      prefix <> suffix,
+      kind,
+      int.max(0, int.min(4095, x)),
+      int.max(0, int.min(4095, y)),
+      int.max(8, int.min(4095, width)),
+      int.max(8, int.min(4095, height)),
+      default_text(kind),
+      True,
+      True,
+    )
+  let parents = list.append(form.parents, [#(control.id, parent_id)])
+  #(
+    Form(
+      ..form,
+      controls: list.append(form.controls, [control]),
+      parents: parents,
+    ),
+    control,
+  )
+}
+
 pub fn add_control(
   form: Form,
   kind: Kind,

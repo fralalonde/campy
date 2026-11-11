@@ -3,14 +3,16 @@ import campy_form
 import campy_form/live_preview
 import campy_form/preview
 import campy_form/project
+import campy_ide
 import campy_ide/ide_ui
 import campy_ide/live_preview_ui
+import campy_ide/mcp
 import campy_ide/state
 import campy_search_box
 import campy_ui
 import gleam/io
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -566,6 +568,273 @@ pub fn nested_panels_accept_children_test() {
   let assert Some(form) = state.active_form(nested)
   let assert Some(button) = state.selected_control(nested)
   campy_form.parent_of(form, button.id) |> should.equal(child_panel.id)
+}
+
+pub fn ctrl_click_toggles_multi_selection_test() {
+  let model =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.toggle_select("feed-button")
+  list.length(model.selection) |> should.equal(2)
+  state.selected_control(model)
+  |> should.equal(campy_form.find_control(
+    {
+      let assert Some(form) = state.active_form(model)
+      form
+    },
+    "feed-button",
+  ))
+  let snapshot = ide_ui.snapshot(model)
+  snapshot.controls
+  |> list.any(fn(control) { control.id == "pet-button" && control.selected })
+  |> should.be_true
+  snapshot.controls
+  |> list.any(fn(control) {
+    control.id == "feed-button" && control.selected && control.primary
+  })
+  |> should.be_true
+
+  let removed = state.toggle_select(model, "feed-button")
+  removed.selection |> should.equal(["pet-button"])
+  removed.selected |> should.equal(Some("pet-button"))
+}
+
+pub fn frame_selects_components_by_resize_handles_test() {
+  let framed =
+    demo_state()
+    |> state.set_rect_x(40)
+    |> state.set_rect_y(230)
+    |> state.set_rect_w(300)
+    |> state.set_rect_h(40)
+    |> state.select_frame
+  list.length(framed.selection) |> should.equal(2)
+  list.contains(framed.selection, "pet-button") |> should.be_true
+  list.contains(framed.selection, "feed-button") |> should.be_true
+  framed.selected |> should.equal(Some("pet-button"))
+
+  // A frame over the middle of a control but containing no handle selects none.
+  let center_only =
+    demo_state()
+    |> state.set_rect_x(110)
+    |> state.set_rect_y(248)
+    |> state.set_rect_w(8)
+    |> state.set_rect_h(8)
+    |> state.select_frame
+  center_only.selection |> should.equal([])
+}
+
+pub fn multi_selection_delete_move_copy_test() {
+  let two =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.toggle_select("feed-button")
+
+  let deleted = state.delete_selected(two)
+  let assert Some(form) = state.active_form(deleted)
+  list.length(form.controls) |> should.equal(5)
+  deleted.selection |> should.equal([])
+
+  let moved =
+    two
+    |> state.begin_gesture
+    |> state.move_gesture_x(10)
+    |> state.move_gesture_y(0)
+    |> state.end_gesture
+  let assert Some(form) = state.active_form(moved)
+  let assert Ok(pet) = list.find(form.controls, fn(c) { c.id == "pet-button" })
+  let assert Ok(feed) =
+    list.find(form.controls, fn(c) { c.id == "feed-button" })
+  pet.x |> should.equal(54)
+  feed.x |> should.equal(206)
+
+  let copied = state.copy_selected(two)
+  let pasted = state.paste(state.select(copied, ""))
+  let assert Some(form) = state.active_form(pasted)
+  list.length(form.controls) |> should.equal(9)
+  list.length(pasted.selection) |> should.equal(1)
+}
+
+pub fn palette_arms_and_drag_places_component_test() {
+  let armed = state.arm_component(demo_state(), "button")
+  armed.pending_kind |> should.equal(Some(campy_form.Button))
+  list.length(ide_ui.snapshot(armed).controls) |> should.equal(7)
+
+  let placed =
+    armed
+    |> state.set_rect_x(300)
+    |> state.set_rect_y(300)
+    |> state.set_rect_w(120)
+    |> state.set_rect_h(32)
+    |> state.place_component
+  let assert Some(form) = state.active_form(placed)
+  list.length(form.controls) |> should.equal(8)
+  placed.pending_kind |> should.equal(None)
+  let assert Some(control) = state.selected_control(placed)
+  control.x |> should.equal(300)
+  control.y |> should.equal(300)
+  control.width |> should.equal(120)
+  control.height |> should.equal(32)
+  campy_form.parent_of(form, control.id) |> should.equal("panel-1")
+}
+
+pub fn drag_over_reports_the_target_parent_test() {
+  let dragged =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.begin_drag
+    |> state.set_drop_x(300)
+    |> state.update_drop(300)
+  dragged.drop_active |> should.be_true
+  dragged.drop_candidate |> should.equal("panel-1")
+
+  let outside =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.begin_drag
+    |> state.set_drop_x(700)
+    |> state.update_drop(10)
+  outside.drop_candidate |> should.equal("")
+
+  state.end_gesture(dragged).drop_active |> should.be_false
+}
+
+pub fn hints_toggle_is_a_scalar_test() {
+  let model = demo_state()
+  let off = state.set_hints(model, False)
+  ide_ui.diff(ide_ui.snapshot(model).scalars, ide_ui.snapshot(off).scalars)
+  |> list.any(fn(update) { ide_ui.update_name(update) == "show-hints" })
+  |> should.be_true
+}
+
+pub fn shell_contains_ui_hints_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  string.contains(shell, "if root.show-hints: Tooltip") |> should.be_true
+  string.contains(shell, "Show UI hints") |> should.be_true
+  string.contains(shell, "for item in root.palette-items")
+  |> should.be_true
+}
+
+pub fn console_logs_and_clears_test() {
+  let logged =
+    demo_state()
+    |> state.log_console("hello")
+    |> state.log_console("world")
+  state.console_text(logged) |> should.equal("hello\nworld")
+  state.console_text(state.clear_console(logged)) |> should.equal("")
+}
+
+pub fn console_input_is_logged_test() {
+  let model = state.console_input(demo_state(), "ping")
+  let text = state.console_text(model)
+  string.contains(text, "> ping") |> should.be_true
+  string.contains(text, "app is not running") |> should.be_true
+}
+
+pub fn layout_selection_is_a_scalar_test() {
+  let model = state.set_layout(demo_state(), campy_form.Column)
+  let snapshot = ide_ui.snapshot(model)
+  let assert Ok(update) =
+    list.find(snapshot.scalars, fn(item) {
+      ide_ui.update_name(item) == "layout-index"
+    })
+  update |> should.equal(ide_ui.ScalarIntUpdate("layout-index", 1))
+  let assert Some(form) = state.active_form(model)
+  form.layout |> should.equal(campy_form.Column)
+}
+
+pub fn mcp_protocol_handles_initialize_and_tools_test() {
+  let init =
+    mcp.test_handle(
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+    )
+  string.contains(init, "campy") |> should.be_true
+  string.contains(init, "protocolVersion") |> should.be_true
+
+  let tools =
+    mcp.test_handle("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}")
+  string.contains(tools, "campy_status") |> should.be_true
+  string.contains(tools, "campy_console") |> should.be_true
+}
+
+pub fn mcp_http_server_serves_initialize_test() {
+  let port = 39_817
+  let assert Ok(_) = mcp.start(port)
+  let init =
+    mcp.test_post(
+      port,
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+    )
+  string.contains(init, "200 OK") |> should.be_true
+  string.contains(init, "campy") |> should.be_true
+  let _ = mcp.stop()
+}
+
+pub fn agent_settings_are_state_test() {
+  let model = demo_state()
+  model.mcp_enabled |> should.be_false
+  model.mcp_port |> should.equal(7817)
+  model.mcp_status |> should.equal("Stopped")
+
+  let opened = state.set_agent_open(model, True)
+  opened.agent_open |> should.be_true
+
+  let configured =
+    state.set_mcp_port(opened, 9000)
+    |> state.set_mcp(True, "Listening")
+  configured.mcp_port |> should.equal(9000)
+  configured.mcp_enabled |> should.be_true
+  configured.mcp_status |> should.equal("Listening")
+}
+
+pub fn module_window_moves_and_resizes_test() {
+  let model = demo_state()
+  state.window_position(model) |> should.equal(#(32, 40))
+
+  let moved = state.move_window(model, 20, 30)
+  state.window_position(moved) |> should.equal(#(52, 70))
+
+  let resized =
+    model
+    |> state.begin_gesture
+    |> state.resize_window_w(40)
+    |> state.resize_window_h(20)
+    |> state.end_gesture
+  let assert Some(form) = state.active_form(resized)
+  form.width |> should.equal(680)
+  form.height |> should.equal(440)
+
+  let undone = state.undo(resized)
+  let assert Some(form) = state.active_form(undone)
+  form.width |> should.equal(640)
+  form.height |> should.equal(420)
+}
+
+pub fn mcp_tools_read_and_edit_state_test() {
+  let assert #(_model, status, False) =
+    campy_ide.mcp_handle(demo_state(), "status", "")
+  string.contains(status, "Cat Café") |> should.be_true
+
+  let assert #(_model, modules, False) =
+    campy_ide.mcp_handle(demo_state(), "modules", "")
+  string.contains(modules, "cat-cafe") |> should.be_true
+
+  let assert #(_model, form, False) =
+    campy_ide.mcp_handle(demo_state(), "form", "")
+  string.contains(form, "pet-button") |> should.be_true
+
+  let assert #(selected, _text, False) =
+    campy_ide.mcp_handle(demo_state(), "select", "feed-button")
+  let assert Some(control) = state.selected_control(selected)
+  control.id |> should.equal("feed-button")
+
+  let assert #(updated, _text, False) =
+    campy_ide.mcp_handle(demo_state(), "set_field", "pet-button	text	MCP")
+  let assert Some(control) = state.selected_control(updated)
+  control.text |> should.equal("MCP")
+
+  let assert #(console, _text, False) =
+    campy_ide.mcp_handle(demo_state(), "send_input", "hello")
+  string.contains(state.console_text(console), "> hello") |> should.be_true
 }
 
 // Models and scalars must apply to the live instance without a new LoadUi.

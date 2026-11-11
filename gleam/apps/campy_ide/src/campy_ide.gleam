@@ -6,6 +6,7 @@ import campy_form/project
 import campy_form/workspace
 import campy_ide/ide_ui
 import campy_ide/live_preview_ui
+import campy_ide/mcp
 import campy_ide/state.{
   type State, Events, NoPopup, OpenFile, PickPicture, Preview, Properties,
   SaveAs,
@@ -112,70 +113,187 @@ pub fn loop(
   last: ide_ui.Snapshot,
   heartbeat: Int,
 ) -> Nil {
-  let event = bridge.poll(100)
-  let now = now_ms()
-  let heartbeat = case now - heartbeat >= 1000 {
-    True -> {
-      io.println("BEAM heartbeat; ui generation=" <> int.to_string(accepted))
-      now
+  case mcp.next_request() {
+    Some(#(handle, tool, arg)) -> {
+      let #(next, text, is_error) = mcp_handle(model, tool, arg)
+      let _ = mcp.reply(handle, text, is_error)
+      let last = sync(native, accepted, next, last)
+      continue(native, session, next, submitted, accepted, last, heartbeat)
     }
-    False -> heartbeat
-  }
-  case event {
-    None ->
-      continue(native, session, model, submitted, accepted, last, heartbeat)
-    Some(bridge.NativeEvent(event_session, generation, kind, payload)) ->
-      case event_session == session {
-        True ->
-          case
-            loop_ide_event(
-              native,
-              model,
-              accepted,
-              last,
-              generation,
-              kind,
-              payload,
-            )
-          {
-            IdeContinue(next, next_accepted, next_last) ->
-              continue(
-                native,
-                session,
-                next,
-                submitted,
-                next_accepted,
-                next_last,
-                heartbeat,
-              )
-            IdeStop -> Nil
-          }
-        False ->
-          case preview_event(model, event_session, kind, payload) {
-            Some(next) -> {
-              let last = sync(native, accepted, next, last)
-              continue(
-                native,
-                session,
-                next,
-                submitted,
-                accepted,
-                last,
-                heartbeat,
-              )
-            }
-            None ->
-              continue(
-                native,
-                session,
-                model,
-                submitted,
-                accepted,
-                last,
-                heartbeat,
-              )
+    None -> {
+      let event = bridge.poll(100)
+      let now = now_ms()
+      let heartbeat = case now - heartbeat >= 1000 {
+        True -> {
+          io.println(
+            "BEAM heartbeat; ui generation=" <> int.to_string(accepted),
+          )
+          now
+        }
+        False -> heartbeat
+      }
+      case event {
+        None ->
+          continue(native, session, model, submitted, accepted, last, heartbeat)
+        Some(bridge.NativeEvent(event_session, generation, kind, payload)) ->
+          case event_session == session {
+            True ->
+              case
+                loop_ide_event(
+                  native,
+                  model,
+                  accepted,
+                  last,
+                  generation,
+                  kind,
+                  payload,
+                )
+              {
+                IdeContinue(next, next_accepted, next_last) ->
+                  continue(
+                    native,
+                    session,
+                    next,
+                    submitted,
+                    next_accepted,
+                    next_last,
+                    heartbeat,
+                  )
+                IdeStop -> Nil
+              }
+            False ->
+              case preview_event(model, event_session, kind, payload) {
+                Some(next) -> {
+                  let last = sync(native, accepted, next, last)
+                  continue(
+                    native,
+                    session,
+                    next,
+                    submitted,
+                    accepted,
+                    last,
+                    heartbeat,
+                  )
+                }
+                None ->
+                  continue(
+                    native,
+                    session,
+                    model,
+                    submitted,
+                    accepted,
+                    last,
+                    heartbeat,
+                  )
+              }
           }
       }
+    }
+  }
+}
+
+pub fn mcp_handle(
+  model: State,
+  tool: String,
+  arg: String,
+) -> #(State, String, Bool) {
+  case tool {
+    "status" -> #(model, mcp_status_text(model), False)
+    "modules" -> #(model, mcp_modules_text(model), False)
+    "form" -> #(model, mcp_form_text(model), False)
+    "console" -> #(model, state.console_text(model), False)
+    "run" -> {
+      let next = run_form(model) |> state.log_console("MCP: run")
+      #(next, "Run requested", False)
+    }
+    "stop" -> {
+      let next = stop_form(model) |> state.log_console("MCP: stop")
+      #(next, "Stop requested", False)
+    }
+    "update_app" -> {
+      let next = update_app(model) |> state.log_console("MCP: update app")
+      #(next, "App update requested", False)
+    }
+    "select" -> {
+      let next =
+        state.select(model, arg) |> state.log_console("MCP: select " <> arg)
+      #(next, "Selected " <> arg, False)
+    }
+    "set_field" ->
+      case string.split(arg, "\t") {
+        [id, field, value] -> {
+          let next = state.select(model, id)
+          let next = state.commit_field(next, field, value)
+          let next = state.log_console(next, "MCP: set " <> id <> "." <> field)
+          #(next, "Updated " <> id <> "." <> field, False)
+        }
+        _ -> #(model, "Expected id<TAB>field<TAB>value", True)
+      }
+    "send_input" -> {
+      let next =
+        state.console_input(model, arg) |> state.log_console("MCP: input")
+      #(next, "Console input accepted", False)
+    }
+    _ -> #(model, "Unknown MCP tool: " <> tool, True)
+  }
+}
+
+fn mcp_status_text(model: State) -> String {
+  "project: "
+  <> model.project.title
+  <> "\npath: "
+  <> model.project.path
+  <> "\nmodule: "
+  <> state.active_name(model)
+  <> "\nselection: "
+  <> state.selection_label(model)
+  <> "\nstatus: "
+  <> model.status
+}
+
+fn mcp_modules_text(model: State) -> String {
+  model.project.modules
+  |> list.map(fn(module) { module.id <> ": " <> module.name })
+  |> string.join("\n")
+}
+
+fn mcp_form_text(model: State) -> String {
+  case state.active_form(model) {
+    None -> "no active form"
+    Some(form) -> {
+      let header =
+        "title: "
+        <> form.title
+        <> "\nsize: "
+        <> int.to_string(form.width)
+        <> "x"
+        <> int.to_string(form.height)
+        <> "\nlayout: "
+        <> campy_form.layout_key(form.layout)
+        <> "\ncontrols: "
+        <> int.to_string(list.length(form.controls))
+      let controls =
+        form
+        |> campy_form.render_controls
+        |> list.map(fn(control) {
+          control.id
+          <> " "
+          <> control.name
+          <> " ["
+          <> campy_form.kind_key(control.kind)
+          <> "] x="
+          <> int.to_string(control.x)
+          <> " y="
+          <> int.to_string(control.y)
+          <> " w="
+          <> int.to_string(control.width)
+          <> " h="
+          <> int.to_string(control.height)
+          <> " parent="
+          <> campy_form.parent_of(form, control.id)
+        })
+      string.join([header, ..controls], "\n")
+    }
   }
 }
 
@@ -218,6 +336,46 @@ fn reload_native(
         }
       }
     }
+  }
+}
+
+fn toggle_mcp(model: State, enabled: Bool) -> State {
+  case enabled {
+    False -> {
+      let _ = mcp.stop()
+      state.set_mcp(model, False, "Stopped")
+    }
+    True ->
+      case mcp.start(model.mcp_port) {
+        Ok(_) -> state.set_mcp(model, True, mcp.status())
+        Error(error) ->
+          state.set_mcp(model, False, "MCP error: " <> short_error(error))
+      }
+  }
+}
+
+fn set_mcp_port(model: State, text: String) -> State {
+  case int.parse(text) {
+    Ok(port) if port >= 1024 && port <= 65_535 -> {
+      let next = state.set_mcp_port(model, port)
+      case next.mcp_enabled {
+        False -> state.set_mcp(next, False, "Stopped")
+        True -> {
+          let _ = mcp.stop()
+          case mcp.start(port) {
+            Ok(_) -> state.set_mcp(next, True, mcp.status())
+            Error(error) ->
+              state.set_mcp(next, False, "MCP error: " <> short_error(error))
+          }
+        }
+      }
+    }
+    _ ->
+      state.set_mcp(
+        model,
+        model.mcp_enabled,
+        "Port must be between 1024 and 65535",
+      )
   }
 }
 
@@ -337,21 +495,31 @@ fn preview_event(
   case model.preview {
     Some(preview) if preview.id == event_session ->
       case kind {
-        "ui-loaded" -> Some(state.set_status(model, "App running"))
+        "ui-loaded" ->
+          Some(
+            state.set_status(model, "App running")
+            |> state.log_console("App ready"),
+          )
         "closed" ->
           Some(
             state.set_preview(model, None)
-            |> state.set_status("App stopped"),
+            |> state.set_status("App stopped")
+            |> state.log_console("■ App stopped"),
           )
         "command-failed" ->
-          Some(state.set_status(model, "App error: " <> payload))
+          Some(
+            state.set_status(model, "App error: " <> payload)
+            |> state.log_console("App error: " <> payload),
+          )
         _ ->
           case kind == "callback:event" {
-            True ->
-              Some(state.set_status(
-                model,
-                preview_event_label(model, preview.module, payload),
-              ))
+            True -> {
+              let label = preview_event_label(model, preview.module, payload)
+              Some(
+                state.set_status(model, label)
+                |> state.log_console(label),
+              )
+            }
             False -> None
           }
       }
@@ -471,10 +639,21 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "cut-component" -> state.cut_selected(model)
     "paste-component" -> state.paste(model)
     "toggle-view" -> state.toggle_view(model)
-    "show-ui" -> state.set_slint_tab(model, False)
-    "show-slint" -> state.set_slint_tab(model, True)
+    "show-ui" -> state.set_console_tab(state.set_slint_tab(model, False), False)
+    "show-slint" ->
+      state.set_console_tab(state.set_slint_tab(model, True), False)
+    "show-console" ->
+      state.set_console_tab(state.set_slint_tab(model, False), True)
+    "console-input" -> state.console_input(model, payload)
+    "clear-console" -> state.clear_console(model)
     "browse-picture" -> pick_picture(model)
-    "open-settings" -> state.set_settings_open(model, True)
+    "open-settings" ->
+      state.set_agent_open(state.set_settings_open(model, True), False)
+    "open-agent" ->
+      state.set_agent_open(state.set_settings_open(model, False), True)
+    "close-agent" -> state.set_agent_open(model, False)
+    "toggle-mcp" -> toggle_mcp(model, payload == "true")
+    "mcp-port" -> set_mcp_port(model, payload)
     "close-settings" -> state.set_settings_open(model, False)
     "font-selected" -> state.set_font(model, payload)
     "font-size-selected" -> state.set_font_size(model, delta(payload))
@@ -489,10 +668,27 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "resize-top" -> state.resize_top(model, delta(payload))
     "resize-bottom" -> state.resize_bottom(model, delta(payload))
     "set-align" -> state.set_align(model, state.align_from_name(payload))
+    "set-layout" -> state.set_layout(model, state.layout_from_name(payload))
     "set-layout-free" -> state.set_layout(model, campy_form.Free)
     "set-layout-column" -> state.set_layout(model, campy_form.Column)
     "set-layout-row" -> state.set_layout(model, campy_form.Row)
     "select" -> state.select(model, payload)
+    "toggle-select" -> state.toggle_select(model, payload)
+    "drag-start" -> state.begin_drag(model)
+    "drag-over-x" -> state.set_drop_x(model, delta(payload))
+    "drag-over-y" -> state.update_drop(model, delta(payload))
+    "window-move-x" -> state.move_window(model, delta(payload), 0)
+    "window-move-y" -> state.move_window(model, 0, delta(payload))
+    "window-resize-w" -> state.resize_window_w(model, delta(payload))
+    "window-resize-h" -> state.resize_window_h(model, delta(payload))
+    "rect-x" -> state.set_rect_x(model, delta(payload))
+    "rect-y" -> state.set_rect_y(model, delta(payload))
+    "rect-w" -> state.set_rect_w(model, delta(payload))
+    "rect-h" -> state.set_rect_h(model, delta(payload))
+    "frame-apply" -> state.select_frame(model)
+    "place-apply" -> state.place_component(model)
+    "cancel-place" -> state.cancel_pending(model)
+    "toggle-hints" -> state.set_hints(model, payload == "true")
     "field-name" -> state.commit_field(model, "name", payload)
     "field-text" -> state.commit_field(model, "text", payload)
     "field-x" -> state.commit_field(model, "x", payload)
@@ -535,10 +731,7 @@ fn dispatch(model: State, name: String, payload: String) -> State {
 }
 
 fn add_component(model: State, key: String) -> State {
-  case campy_form.kind_from_key(key) {
-    Some(kind) -> state.add(model, kind)
-    None -> model
-  }
+  state.arm_component(model, key)
 }
 
 fn delta(payload: String) -> Int {
@@ -683,6 +876,7 @@ fn open_preview(model: State, module: project.Module) -> State {
                     Some(Preview(preview_session, id, module.id)),
                   )
                   |> state.set_status("Starting " <> module.name)
+                  |> state.log_console("▶ Running " <> module.name)
               }
           }
       }
@@ -713,6 +907,7 @@ fn update_app(model: State) -> State {
                     Some(Preview(preview.session, preview.id, module.id)),
                   )
                   |> state.set_status("App updated — " <> module.name)
+                  |> state.log_console("⟳ Updated " <> module.name)
                 Error(_) -> {
                   let _ = bridge.close_session(preview.session)
                   state.set_preview(model, None)
@@ -733,6 +928,7 @@ fn stop_form(model: State) -> State {
       let _ = bridge.close_session(preview.session)
       state.set_preview(model, None)
       |> state.set_status("Form stopped")
+      |> state.log_console("■ App stopped")
     }
   }
 }

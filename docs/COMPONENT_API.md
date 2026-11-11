@@ -135,6 +135,21 @@ no `LoadUi` or window recreation is involved. Events are mapped back to the
 derived handler names (`<control>_<event>`). The static form emitter is still
 used for the read-only generated-Slint tab and visual fixtures.
 
+## MCP tools
+
+When enabled from Settings → Agent, Campy exposes a localhost streamable HTTP
+MCP endpoint (`http://127.0.0.1:<port>/mcp`) with these tools:
+
+- `campy_status`, `campy_modules`, `campy_form`, `campy_console`
+- `campy_run`, `campy_stop`, `campy_update_app`
+- `campy_select_control` (`id`)
+- `campy_set_control` (`id`, `field`, `value`)
+- `campy_send_input` (`text`)
+
+Tools are executed by the IDE loop; the server is disabled by default and binds
+to localhost only. The console's stdin is logged/reserved because the preview
+does not yet execute handler code.
+
 ## Workspace
 
 A workspace is a versioned compressed Erlang term

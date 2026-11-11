@@ -109,8 +109,9 @@ it on first run.
 ListView, workspace/project navigator, module navigator, tabbed module editor,
 object inspector, code view, generated-Slint view, and settings dialog — as one
 interpreted Slint component per structure. A single top-right button switches the editor between the form and
-the handler code; the form editor's bottom tabs switch between the actual design
-and the generated Slint source. The window uses a preferred (not fixed) size, so
+the handler code; the form editor's bottom tabs switch between the actual design,
+the generated Slint source, and the **Console**. The component palette is a
+horizontal pictogram bar above the workspace. The window uses a preferred (not fixed) size, so
 the window manager can resize and maximize it. Every panel is data-driven and
 every interaction returns through the generic callback channel, so the IDE uses
 exactly the same bridge as a designed app. Choosing the window (clicking the
@@ -165,6 +166,19 @@ can change live; Slint's `Palette.color-scheme` is updated through an
 Structural edits — add/delete control, open module, apply code, load project —
 are model updates, so focus, selection, scroll, and the window itself survive.
 `LoadUi` is only used once at startup.
+
+The Free designer renders the form as a module window: its title bar moves a
+per-module canvas position (UI-only) and its corner handle resizes the form
+(committed to the form model). The form's controls remain form-relative.
+
+The console stores a capped line log in IDE state. Preview lifecycle and
+callback events are appended (the app's visible stdout); the input line is sent
+to the console (stdin is logged/reserved until handler execution lands).
+
+The optional MCP server is a small Erlang HTTP process bound to 127.0.0.1. It
+implements MCP initialize, tools/list and tools/call over JSON-RPC; tool calls
+are forwarded to the IDE loop, which owns the current state and replies with
+text. It is disabled by default and started/stopped from Settings → Agent.
 
 Layout is part of the form: **Free** uses absolute geometry (drag moves and any
 of the eight corner/side handles resize; the UI tracks the gesture locally and

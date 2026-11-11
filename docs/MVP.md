@@ -79,20 +79,23 @@ Delivered:
    top-right button switches between the **form editor** and the module's
    **handler code**. The form editor's bottom tabs are **UI (actual)** and
    **Code (Slint file)**; the latter shows the generated, read-only Slint source.
-4. Components + object inspector (right): the **CCL** palette is a `ListView`
-   driven by the shared component catalog (Label, Edit, Memo, Button, Check box,
-   Radio button, Combo box, List, Slider, Progress, Panel, Group box, Picture);
-   the Properties/Events inspector shares the pane.
+4. Components + inspector: the **CCL** palette is a horizontal pictogram bar
+   above the workspace (Label, Edit, Memo, Button, Check box, Radio button,
+   Combo box, List, Slider, Progress, Panel, Group box, Picture), with type
+   tooltips; clicking arms click-drag placement on the form. The right pane is
+   the Properties/Events inspector.
 5. File menu: New project / New module / Open… / Save / Save As… / Quit.
    Projects are versioned, compressed Erlang terms (`projects/*.campy`, v5),
    validated on load; v1–v4 files are upgraded, including form layout, the
    adoption parent map, and alignment. Workspaces are versioned compressed terms
    (`projects/workspace.campy`, v1) holding full project snapshots and the active
    project path.
-6. Form editor: absolutely positioned canvas with click-to-select, cursor drag
-   to move, and eight resize handles (corners and sides) with directional
-   cursors and a live outline (committed once on release); the same form model
-   drives the run window. Clicking the empty canvas selects the
+6. Form editor: the form is a movable/resizable **module window** (title bar,
+   per-module position, corner resize) on a larger design canvas. Controls use
+   cursor drag to move and eight resize handles (corners and sides) with
+   directional cursors and a live outline (committed once on release); the same
+   form model drives the run window. Layout is chosen from a Properties
+   dropdown. Clicking the empty canvas selects the
    **window** itself. A form can use Free, Column, or Row layout; Column/Row
    delegate placement to Slint layouts and need no geometry messages.
 7. CCL components: Label, Edit, Memo, Button, Check box, Radio button, Combo
@@ -152,17 +155,24 @@ Delivered:
     Shift+F5, Escape) are bound through a root `FocusScope`/`KeyBinding`; text
     fields keep their local clipboard/delete behavior. The selected component is
     deleted with the Delete key or the small trashcan in the inspector.
-19. Hot reload (F6): the in-IDE action rebuilds the Gleam app, hot-loads the
+19. Console: the form editor's Console tab shows app lifecycle/events and an
+    input line. The current preview does not execute handler source, so stdin
+    is logged/reserved rather than consumed by app code.
+20. MCP: an optional localhost MCP server (streamable HTTP JSON-RPC), disabled
+    by default and enabled from Settings → Agent. It exposes status, modules,
+    form, console, run/stop/update, select, set-field and send-input tools to the
+    IDE loop. Rust/NIF changes still need a restart.
+21. Hot reload (F6): the in-IDE action rebuilds the Gleam app, hot-loads the
     new Beams into the running VM, and reloads the Slint shell from the new
     `ide_ui` source. The loop re-enters through a stable external call, so the
     new loop/dispatch/state code is used; a full scalar/model sync restores the
     UI. Rust/NIF and state-shape changes still require a restart.
-20. Live app update (F7): Run opens a model-driven preview shell. F7 re-sends
+22. Live app update (F7): Run opens a model-driven preview shell. F7 re-sends
     the active form's title, size, layout, controls, alignment, and image model
     to the existing session, so the running app updates in place without a
     window reload or restart. The generated Slint tab still shows the static
     source.
-21. Workspace manager: projects can be switched, created (generated
+23. Workspace manager: projects can be switched, created (generated
     `projects/project-N.campy` paths and one Main module), and deleted from the
     workspace. The shell is not reloaded when switching: projects/modules/controls
     are models and scalars. The workspace and all project edits are auto-saved;
