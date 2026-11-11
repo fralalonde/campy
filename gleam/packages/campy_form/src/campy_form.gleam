@@ -20,6 +20,7 @@ pub type Kind {
   Panel
   GroupBox
   Picture
+  Menu
 }
 
 // How the form arranges its controls. Free is absolute (the classic designer);
@@ -66,11 +67,12 @@ pub type Form {
     controls: List(Control),
     parents: List(#(String, String)),
     aligns: List(#(String, Align)),
+    layouts: List(#(String, Layout)),
   )
 }
 
 pub fn new_form() -> Form {
-  Form("campy.form", "Campy Form", 640, 420, Free, [], [], [])
+  Form("campy.form", "Campy Form", 640, 420, Free, [], [], [], [])
 }
 
 // Starting project so the IDE opens with something to play with.
@@ -110,6 +112,7 @@ pub fn demo_form() -> Form {
     ],
     [],
     [],
+    [],
   )
 }
 
@@ -135,6 +138,7 @@ pub fn kind_key(kind: Kind) -> String {
     Panel -> "panel"
     GroupBox -> "group"
     Picture -> "picture"
+    Menu -> "menu"
   }
 }
 
@@ -153,6 +157,7 @@ pub fn kind_from_key(key: String) -> Option(Kind) {
     "panel" -> Some(Panel)
     "group" -> Some(GroupBox)
     "picture" -> Some(Picture)
+    "menu" -> Some(Menu)
     _ -> None
   }
 }
@@ -162,6 +167,31 @@ pub fn layout_key(layout: Layout) -> String {
     Free -> "free"
     Column -> "column"
     Row -> "row"
+  }
+}
+
+pub fn layout_of(form: Form, parent_id: String) -> Layout {
+  case parent_id {
+    "" -> form.layout
+    _ ->
+      case list.find(form.layouts, fn(entry) { entry.0 == parent_id }) {
+        Ok(entry) -> entry.1
+        Error(_) -> Free
+      }
+  }
+}
+
+pub fn set_layout_for(form: Form, parent_id: String, layout: Layout) -> Form {
+  case parent_id {
+    "" -> Form(..form, layout: layout)
+    _ -> {
+      let rest = list.filter(form.layouts, fn(entry) { entry.0 != parent_id })
+      case layout {
+        Free -> Form(..form, layouts: rest)
+        Column | Row ->
+          Form(..form, layouts: list.append(rest, [#(parent_id, layout)]))
+      }
+    }
   }
 }
 
@@ -203,16 +233,67 @@ pub fn align_from_key(key: String) -> Align {
 // geometry is returned for editor-side hit testing only.
 pub fn bounds(form: Form, control: Control) -> #(Int, Int, Int, Int) {
   case form.layout {
-    Free ->
-      case align_of(form, control.id) {
-        NoAlign -> #(control.x, control.y, control.width, control.height)
-        Top -> #(0, 0, form.width, control.height)
-        Bottom -> #(0, form.height - control.height, form.width, control.height)
-        Left -> #(0, 0, control.width, form.height)
-        Right -> #(form.width - control.width, 0, control.width, form.height)
-        Client -> #(0, 0, form.width, form.height)
+    Free -> {
+      let parent_id = parent_of(form, control.id)
+      let #(px, py, pw, ph) = parent_bounds(form, control)
+      case layout_of(form, parent_id) {
+        Free ->
+          case align_of(form, control.id) {
+            NoAlign -> #(control.x, control.y, control.width, control.height)
+            Top -> #(px, py, pw, control.height)
+            Bottom -> #(px, py + ph - control.height, pw, control.height)
+            Left -> #(px, py, control.width, ph)
+            Right -> #(px + pw - control.width, py, control.width, ph)
+            Client -> #(px, py, pw, ph)
+          }
+        Column -> arranged_column(form, control, parent_id, px, py, pw)
+        Row -> arranged_row(form, control, parent_id, px, py, ph)
       }
+    }
     Column | Row -> #(control.x, control.y, control.width, control.height)
+  }
+}
+
+fn arranged_column(
+  form: Form,
+  control: Control,
+  parent_id: String,
+  px: Int,
+  py: Int,
+  pw: Int,
+) -> #(Int, Int, Int, Int) {
+  let before =
+    children_of(form, parent_id)
+    |> list.take_while(fn(sibling) { sibling.id != control.id })
+  let offset =
+    list.fold(before, 8, fn(total, sibling) { total + sibling.height + 6 })
+  #(px + 8, py + offset, int.max(8, pw - 16), control.height)
+}
+
+fn arranged_row(
+  form: Form,
+  control: Control,
+  parent_id: String,
+  px: Int,
+  py: Int,
+  ph: Int,
+) -> #(Int, Int, Int, Int) {
+  let before =
+    children_of(form, parent_id)
+    |> list.take_while(fn(sibling) { sibling.id != control.id })
+  let offset =
+    list.fold(before, 8, fn(total, sibling) { total + sibling.width + 6 })
+  #(px + offset, py + 8, control.width, int.max(8, ph - 16))
+}
+
+fn parent_bounds(form: Form, control: Control) -> #(Int, Int, Int, Int) {
+  case parent_of(form, control.id) {
+    "" -> #(0, 0, form.width, form.height)
+    parent_id ->
+      case find_control(form, parent_id) {
+        Some(parent) -> bounds(form, parent)
+        None -> #(0, 0, form.width, form.height)
+      }
   }
 }
 

@@ -639,16 +639,26 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "cut-component" -> state.cut_selected(model)
     "paste-component" -> state.paste(model)
     "toggle-view" -> state.toggle_view(model)
-    "show-ui" -> state.set_console_tab(state.set_slint_tab(model, False), False)
-    "show-slint" ->
-      state.set_console_tab(state.set_slint_tab(model, True), False)
-    "show-console" ->
-      state.set_console_tab(state.set_slint_tab(model, False), True)
+    "show-ui" -> state.set_slint_tab(model, False)
+    "show-slint" -> state.set_slint_tab(model, True)
     "console-input" -> state.console_input(model, payload)
     "clear-console" -> state.clear_console(model)
     "browse-picture" -> pick_picture(model)
     "open-settings" ->
       state.set_agent_open(state.set_settings_open(model, True), False)
+    "context-menu" -> state.open_context_menu(model, payload)
+    "close-context-menu" -> state.close_context_menu(model)
+    "context-copy" -> state.close_context_menu(state.copy_selected(model))
+    "context-cut" -> state.close_context_menu(state.cut_selected(model))
+    "context-paste" -> state.close_context_menu(state.paste(model))
+    "context-delete" -> state.close_context_menu(state.delete_selected(model))
+    "open-project-dialog" -> state.set_project_dialog_open(model, True)
+    "close-project-dialog" -> state.set_project_dialog_open(model, False)
+    "dialog-new-project" ->
+      state.set_project_dialog_open(state.create_project(model), False)
+    "dialog-open-project" ->
+      state.set_project_dialog_open(open_with_dialog(model), False)
+    "field-project-title" -> state.commit_project_field(model, "title", payload)
     "open-agent" ->
       state.set_agent_open(state.set_settings_open(model, False), True)
     "close-agent" -> state.set_agent_open(model, False)
@@ -669,6 +679,8 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "resize-bottom" -> state.resize_bottom(model, delta(payload))
     "set-align" -> state.set_align(model, state.align_from_name(payload))
     "set-layout" -> state.set_layout(model, state.layout_from_name(payload))
+    "set-container-layout" ->
+      state.set_container_layout(model, state.layout_from_name(payload))
     "set-layout-free" -> state.set_layout(model, campy_form.Free)
     "set-layout-column" -> state.set_layout(model, campy_form.Column)
     "set-layout-row" -> state.set_layout(model, campy_form.Row)

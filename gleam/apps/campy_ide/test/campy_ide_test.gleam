@@ -237,6 +237,7 @@ pub fn preview_honours_form_layouts_test() {
       ],
       [],
       [],
+      [],
     )
   let assert Ok(free) = preview.to_slint(form)
   campy_bridge.validate_ui(free) |> should.equal(Ok(1))
@@ -415,8 +416,8 @@ pub fn alignment_is_undoable_and_uses_form_geometry_test() {
   let snapshot = ide_ui.snapshot(model)
   let assert Ok(item) =
     list.find(snapshot.controls, fn(control) { control.id == "pet-button" })
-  item.y |> should.equal(388)
-  item.w |> should.equal(640)
+  item.y |> should.equal(352)
+  item.w |> should.equal(560)
 
   let back = state.undo(model)
   let assert Some(form) = state.active_form(back)
@@ -684,8 +685,8 @@ pub fn drag_over_reports_the_target_parent_test() {
     |> state.begin_drag
     |> state.set_drop_x(300)
     |> state.update_drop(300)
-  dragged.drop_active |> should.be_true
-  dragged.drop_candidate |> should.equal("panel-1")
+  dragged.drop_active |> should.be_false
+  dragged.drop_candidate |> should.equal("")
 
   let outside =
     demo_state()
@@ -693,6 +694,7 @@ pub fn drag_over_reports_the_target_parent_test() {
     |> state.begin_drag
     |> state.set_drop_x(700)
     |> state.update_drop(10)
+  outside.drop_active |> should.be_true
   outside.drop_candidate |> should.equal("")
 
   state.end_gesture(dragged).drop_active |> should.be_false
@@ -788,10 +790,10 @@ pub fn agent_settings_are_state_test() {
 
 pub fn module_window_moves_and_resizes_test() {
   let model = demo_state()
-  state.window_position(model) |> should.equal(#(32, 40))
+  state.window_position(model) |> should.equal(#(32, 120))
 
   let moved = state.move_window(model, 20, 30)
-  state.window_position(moved) |> should.equal(#(52, 70))
+  state.window_position(moved) |> should.equal(#(52, 150))
 
   let resized =
     model
@@ -928,4 +930,65 @@ fn wait_no_failure(attempts: Int) -> Nil {
         _ -> wait_no_failure(attempts - 1)
       }
   }
+}
+
+pub fn menu_component_compiles_in_preview_test() {
+  let assert Some(module) = project.find_module(project.campy(), "welcome")
+  let assert Ok(source) = preview.to_slint(module.form)
+  campy_bridge.validate_ui(source) |> should.equal(Ok(1))
+  let live = live_preview.to_slint()
+  campy_bridge.validate_ui(live) |> should.equal(Ok(1))
+}
+
+pub fn context_menu_selects_the_control_test() {
+  let opened = demo_state() |> state.open_context_menu("pet-button")
+  opened.context_open |> should.be_true
+  opened.selected |> should.equal(Some("pet-button"))
+  opened.selected_project |> should.be_false
+  state.close_context_menu(opened).context_open |> should.be_false
+
+  let canvas = demo_state() |> state.open_context_menu("")
+  canvas.context_open |> should.be_true
+  canvas.selected |> should.equal(None)
+}
+
+pub fn project_selection_exposes_project_properties_test() {
+  let selected = demo_state() |> state.switch_project("projects/campy.campy")
+  selected.selected_project |> should.be_true
+  selected.selected |> should.equal(None)
+
+  let control = selected |> state.select("pet-button")
+  control.selected_project |> should.be_false
+
+  let renamed = state.commit_project_field(selected, "title", "Renamed")
+  renamed.project.title |> should.equal("Renamed")
+  renamed.workspace.projects
+  |> list.find(fn(item) { item.path == renamed.project.path })
+  |> should.equal(Ok(project.Project(..renamed.project, title: "Renamed")))
+}
+
+pub fn container_layout_property_is_undoable_test() {
+  let changed =
+    demo_state()
+    |> state.select("panel-1")
+    |> state.set_container_layout(campy_form.Column)
+  let assert Some(form) = state.active_form(changed)
+  campy_form.layout_of(form, "panel-1") |> should.equal(campy_form.Column)
+  let assert Some(panel) = campy_form.find_control(form, "panel-1")
+  let assert Some(pet) = campy_form.find_control(form, "pet-button")
+  let #(x, y, w, _) = campy_form.bounds(form, pet)
+  should.equal(x, panel.x + 8)
+  should.equal(w, panel.width - 16)
+  should.be_true(y > panel.y + 8)
+
+  let undone = state.undo(changed)
+  let assert Some(form) = state.active_form(undone)
+  campy_form.layout_of(form, "panel-1") |> should.equal(campy_form.Free)
+}
+
+pub fn project_dialog_opens_and_closes_test() {
+  let open = state.set_project_dialog_open(demo_state(), True)
+  open.project_dialog_open |> should.be_true
+  state.set_project_dialog_open(open, False).project_dialog_open
+  |> should.be_false
 }

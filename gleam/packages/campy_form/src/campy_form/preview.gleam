@@ -1,6 +1,6 @@
 import campy_form.{
   type Control, type Form, Button, CheckBox, ComboBox, EditBox, GroupBox, Label,
-  ListBox, Memo, Panel, Picture, Progress, RadioButton, Slider,
+  ListBox, Memo, Menu, Panel, Picture, Progress, RadioButton, Slider,
 }
 import gleam/int
 import gleam/list
@@ -82,7 +82,7 @@ fn callback(control: Control) -> Result(String, Nil) {
         Some(handler) -> Ok("  callback " <> handler <> "(string);\n")
         None -> Error(Nil)
       }
-    Memo | Button | CheckBox | RadioButton | ComboBox | Slider ->
+    Memo | Button | CheckBox | RadioButton | ComboBox | Slider | Menu ->
       case campy_form.handler_name(control) {
         Some(handler) -> Ok("  callback " <> handler <> "();\n")
         None -> Error(Nil)
@@ -92,45 +92,19 @@ fn callback(control: Control) -> Result(String, Nil) {
 
 fn control_element(form: Form, control: Control, free: Bool) -> String {
   let geometry = case free {
-    True ->
-      case campy_form.align_of(form, control.id) {
-        campy_form.NoAlign ->
-          "x: "
-          <> px(control.x)
-          <> "; y: "
-          <> px(control.y)
-          <> "; width: "
-          <> px(control.width)
-          <> "; height: "
-          <> px(control.height)
-          <> "; clip: true;"
-        campy_form.Top ->
-          "x: 0; y: 0; width: parent.width; height: "
-          <> px(control.height)
-          <> "; clip: true;"
-        campy_form.Bottom ->
-          "x: 0; y: parent.height - "
-          <> px(control.height)
-          <> "; width: parent.width; height: "
-          <> px(control.height)
-          <> "; clip: true;"
-        campy_form.Left ->
-          "x: 0; y: 0; width: "
-          <> px(control.width)
-          <> "; height: parent.height; clip: true;"
-        campy_form.Right ->
-          "x: parent.width - "
-          <> px(control.width)
-          <> "; y: 0; width: "
-          <> px(control.width)
-          <> "; height: parent.height; clip: true;"
-        campy_form.Client ->
-          "x: 0; y: 0; width: parent.width; height: parent.height; clip: true;"
-      }
-    False ->
-      case control.kind {
-        _ -> "width: 100%; height: " <> px(control.height) <> "; clip: true;"
-      }
+    True -> {
+      let #(x, y, width, height) = campy_form.bounds(form, control)
+      "x: "
+      <> px(x)
+      <> "; y: "
+      <> px(y)
+      <> "; width: "
+      <> px(width)
+      <> "; height: "
+      <> px(height)
+      <> "; clip: true;"
+    }
+    False -> "width: 100%; height: " <> px(control.height) <> "; clip: true;"
   }
   case control.kind {
     Panel | GroupBox ->
@@ -229,7 +203,38 @@ fn outer_inner(control: Control) -> String {
       "      ProgressIndicator { x: 0; y: (parent.height - 6px) / 2; width: parent.width; height: 6px; progress: "
       <> int.to_string(value_of(control))
       <> ".0 / 100.0; }\n"
+    Menu -> {
+      let area = menu_area(control.id)
+      "      "
+      <> area
+      <> " := ContextMenuArea {\n"
+      <> "        Button { x: 0; y: 0; width: parent.width; height: parent.height; text: "
+      <> quote(control.text)
+      <> " + \"  ▾\"; enabled: "
+      <> bool(control.enabled)
+      <> "; clicked => { "
+      <> area
+      <> ".show({ x: 0px, y: self.height }); } }\n"
+      <> "        Menu {\n"
+      <> "          MenuItem { title: \"Item 1\"; activated => { root."
+      <> handler_or(control, "selected")
+      <> "(); } }\n"
+      <> "          MenuItem { title: \"Item 2\"; activated => { root."
+      <> handler_or(control, "selected")
+      <> "(); } }\n"
+      <> "        }\n"
+      <> "      }\n"
+    }
     Panel | GroupBox -> ""
+  }
+}
+
+fn menu_area(id: String) -> String {
+  "context_menu_"
+  <> {
+    id
+    |> string.replace("-", "_")
+    |> string.replace(".", "_")
   }
 }
 

@@ -53,6 +53,7 @@ pub type ControlItem {
     primary: Bool,
     picture: String,
     value: Int,
+    arranged: Bool,
   )
 }
 
@@ -200,7 +201,7 @@ fn scalars(model: State) -> List(Update) {
       ),
       IntUpdate(
         "surface-h",
-        int.max(window_y(model) + form_height(form) + 80, 700),
+        int.max(window_y(model) + form_height(form) + 28 + 80, 700),
       ),
       BoolUpdate("code-editing", is_editing_code(model)),
       BoolUpdate("has-handler", is_some(model.active_handler)),
@@ -212,7 +213,6 @@ fn scalars(model: State) -> List(Update) {
       IntUpdate("code-height", code_height(model)),
       TextUpdate("slint-source", slint_source),
       TextUpdate("console-text", state.console_text(model)),
-      BoolUpdate("console-tab", model.console_tab),
       TextUpdate("popup-path", model.project.path),
       TextUpdate("popup-title", popup_title(model.popup)),
       TextUpdate("popup-action", popup_action(model.popup)),
@@ -226,6 +226,14 @@ fn scalars(model: State) -> List(Update) {
       ),
       BoolUpdate("show-hints", model.hints),
       BoolUpdate("agent-open", model.agent_open),
+      BoolUpdate("project-selected", model.selected_project),
+      BoolUpdate("project-dialog-open", model.project_dialog_open),
+      TextUpdate("project-title", model.project.title),
+      TextUpdate("project-path", model.project.path),
+      TextUpdate("project-module-count", module_count_text(model)),
+      BoolUpdate("context-open", model.context_open),
+      IntUpdate("context-x", model.context_x),
+      IntUpdate("context-y", model.context_y),
       BoolUpdate("mcp-enabled", model.mcp_enabled),
       TextUpdate("mcp-port-text", int.to_string(model.mcp_port)),
       TextUpdate("mcp-status", model.mcp_status),
@@ -234,6 +242,7 @@ fn scalars(model: State) -> List(Update) {
       TextUpdate("drop-candidate", model.drop_candidate),
       ScalarIntUpdate("selection-count", list.length(model.selection)),
       ScalarIntUpdate("layout-index", layout_index(form)),
+      ScalarIntUpdate("container-layout-index", container_layout_index(model)),
       BoolUpdate("dark-mode", is_dark_scheme(model.scheme)),
       TextUpdate("editor-font", model.font),
       IntUpdate("editor-font-size", model.font_size),
@@ -278,29 +287,7 @@ fn controls(model: State) -> List(ControlItem) {
     None -> []
     Some(form) ->
       list.map(campy_form.render_controls(form), fn(control) {
-        let #(x, y, w, h) = case campy_form.align_of(form, control.id) {
-          campy_form.NoAlign -> #(
-            control.x,
-            control.y,
-            control.width,
-            control.height,
-          )
-          campy_form.Top -> #(0, 0, form.width, control.height)
-          campy_form.Bottom -> #(
-            0,
-            form.height - control.height,
-            form.width,
-            control.height,
-          )
-          campy_form.Left -> #(0, 0, control.width, form.height)
-          campy_form.Right -> #(
-            form.width - control.width,
-            0,
-            control.width,
-            form.height,
-          )
-          campy_form.Client -> #(0, 0, form.width, form.height)
-        }
+        let #(x, y, w, h) = campy_form.bounds(form, control)
         ControlItem(
           control.id,
           campy_form.kind_key(control.kind),
@@ -318,6 +305,8 @@ fn controls(model: State) -> List(ControlItem) {
             _ -> ""
           },
           control_value(control),
+          campy_form.layout_of(form, campy_form.parent_of(form, control.id))
+            != campy_form.Free,
         )
       })
   }
@@ -363,6 +352,8 @@ fn theme_colors(scheme: Scheme) -> List(Update) {
       #("theme-accent", "#0067c0"),
       #("theme-tint", "#dce9f7"),
       #("theme-surface", "#ffffff"),
+      #("theme-canvas", "#e6e6e6"),
+      #("theme-grid", "#c6c6c6"),
       #("code-bg", "#ffffff"),
       #("code-comment", "#6a737d"),
       #("code-keyword", "#a626a4"),
@@ -379,6 +370,8 @@ fn theme_colors(scheme: Scheme) -> List(Update) {
       #("theme-accent", "#268bd2"),
       #("theme-tint", "#073642"),
       #("theme-surface", "#073642"),
+      #("theme-canvas", "#001f27"),
+      #("theme-grid", "#0a3a46"),
       #("code-bg", "#002b36"),
       #("code-comment", "#586e75"),
       #("code-keyword", "#859900"),
@@ -395,6 +388,8 @@ fn theme_colors(scheme: Scheme) -> List(Update) {
       #("theme-accent", "#0078d4"),
       #("theme-tint", "#1f3a5f"),
       #("theme-surface", "#20242c"),
+      #("theme-canvas", "#14161a"),
+      #("theme-grid", "#2f3540"),
       #("code-bg", "#282c34"),
       #("code-comment", "#7f848e"),
       #("code-keyword", "#c678dd"),
@@ -458,6 +453,7 @@ pub fn controls_wire(items: List(ControlItem)) -> List(bridge.WireValue) {
       #("primary", bridge.WireBool(item.primary)),
       #("picture", bridge.WireImage(item.picture)),
       #("value", bridge.WireInt(item.value)),
+      #("arranged", bridge.WireBool(item.arranged)),
     ])
   })
 }
@@ -540,6 +536,7 @@ pub fn to_slint(model: State) -> Result(String, String) {
     <> "  in-out property <[PaletteItem]> palette-items: "
     <> palette_literal()
     <> ";\n"
+    <> "  in-out property <bool> frame-tool: false;\n"
     <> "  in-out property <bool> shift-down: false;\n"
     <> "  in-out property <bool> ctrl-down: false;\n"
     <> "  in-out property <bool> marquee-active: false;\n"
@@ -579,13 +576,13 @@ pub fn to_slint(model: State) -> Result(String, String) {
     <> "    Rectangle { width: 100%; height: 100%; background: root.theme-bg; }\n"
     <> "    VerticalLayout { width: 100%; height: 100%; spacing: 0px;\n"
     <> menu_bar()
-    <> palette_bar()
     <> main_area()
     <> "      Rectangle { height: 1px; background: theme-border; }\n"
     <> status_bar()
     <> "\n    }\n"
     <> settings_overlay()
     <> agent_overlay()
+    <> project_dialog_overlay()
     <> popup_overlay()
     <> "  }\n"
     <> "}\n",
@@ -596,7 +593,7 @@ fn structs() -> String {
   "struct ProjectItem { id: string, title: string, active: bool }\n"
   <> "struct ModuleItem { id: string, name: string, active: bool }\n"
   <> "struct TabItem { id: string, name: string, active: bool }\n"
-  <> "struct ControlItem { id: string, kind: string, text: string, x: length, y: length, w: length, h: length, enabled: bool, visible: bool, selected: bool, primary: bool, picture: image, value: float }\n"
+  <> "struct ControlItem { id: string, kind: string, text: string, x: length, y: length, w: length, h: length, enabled: bool, visible: bool, selected: bool, primary: bool, picture: image, value: float, arranged: bool }\n"
   <> "struct TokenItem { text: string, kind: string }\n"
   <> "struct LineItem { tokens: [TokenItem] }\n"
   <> "struct PaletteItem { kind: string, icon: string, label: string }\n"
@@ -663,6 +660,7 @@ fn components() -> String {
   <> "  callback resize-bottom(int);\n"
   <> "  callback gesture-start();\n"
   <> "  callback gesture-end();\n"
+  <> "  callback context-menu(string);\n"
   <> "  property <length> drag-x: 0px;\n"
   <> "  property <length> drag-y: 0px;\n"
   <> "  property <string> resize-mode: \"\";\n"
@@ -702,11 +700,16 @@ fn components() -> String {
   <> "    if data.kind == \"progress\": ProgressIndicator { x: 0; y: (parent.height - 6px) / 2; width: parent.width; height: 6px; progress: data.value / 100.0; }\n"
   <> "    if data.kind == \"picture\": Image { x: 0; y: 0; width: parent.width; height: parent.height; source: data.picture; image-fit: contain; }\n"
   <> "    if data.kind == \"panel\" || data.kind == \"group\": Text { x: 8px; y: 6px; text: data.text; color: theme-fg; font-weight: 600; }\n"
+  <> "    if data.kind == \"menu\": Rectangle { x: 0; y: 0; width: parent.width; height: parent.height; background: theme-surface; border-width: 1px; border-color: theme-border; border-radius: 3px;\n"
+  <> "      Text { x: 10px; y: 0; height: parent.height; text: data.text; color: theme-fg; vertical-alignment: center; }\n"
+  <> "      Text { x: parent.width - 20px; y: 0; height: parent.height; text: \"▾\"; color: theme-fg; vertical-alignment: center; }\n"
+  <> "    }\n"
   <> "  }\n"
   <> "  if designing && free-layout: TouchArea {\n"
   <> "    pointer-event(event) => {\n"
-  <> "      if (event.kind == PointerEventKind.down) { root.gesture-start(); root.drag-start(); if (root.additive) { root.toggle-select(data.id); } else { root.select(data.id); } }\n"
-  <> "      if (event.kind == PointerEventKind.up) {\n"
+  <> "      if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) { root.gesture-start(); root.drag-start(); if (root.additive) { root.toggle-select(data.id); } else { root.select(data.id); } }\n"
+  <> "      if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) { root.context-menu(data.id); }\n"
+  <> "      if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {\n"
   <> "        if (drag-x != 0px || drag-y != 0px) {\n"
   <> "          root.move-x(round(drag-x / 1px));\n"
   <> "          root.move-y(round(drag-y / 1px));\n"
@@ -724,7 +727,7 @@ fn components() -> String {
   <> "      }\n"
   <> "    }\n"
   <> "  }\n"
-  <> "  if designing && !free-layout: TouchArea { clicked => { root.select(data.id); } }\n"
+  <> "  if designing && !free-layout: TouchArea { clicked => { root.select(data.id); } pointer-event(event) => { if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) { root.context-menu(data.id); } } }\n"
   <> "  if designing && free-layout && resizing: Rectangle {\n"
   <> "    x: west ? resize-dw : 0px;\n"
   <> "    y: north ? resize-dh : 0px;\n"
@@ -844,7 +847,6 @@ fn callbacks() -> String {
   <> "  callback view-code();\n"
   <> "  callback show-ui();\n"
   <> "  callback show-slint();\n"
-  <> "  callback show-console();\n"
   <> "  callback console-input(string);\n"
   <> "  callback clear-console();\n"
   <> "  callback window-move-x(int);\n"
@@ -886,6 +888,17 @@ fn callbacks() -> String {
   <> "  callback cancel-place();\n"
   <> "  callback toggle-hints(bool);\n"
   <> "  callback open-agent();\n"
+  <> "  callback open-project-dialog();\n"
+  <> "  callback close-project-dialog();\n"
+  <> "  callback dialog-new-project();\n"
+  <> "  callback dialog-open-project();\n"
+  <> "  callback field-project-title(string);\n"
+  <> "  callback context-menu(string);\n"
+  <> "  callback close-context-menu();\n"
+  <> "  callback context-copy();\n"
+  <> "  callback context-cut();\n"
+  <> "  callback context-paste();\n"
+  <> "  callback context-delete();\n"
   <> "  callback close-agent();\n"
   <> "  callback toggle-mcp(bool);\n"
   <> "  callback mcp-port(string);\n"
@@ -938,10 +951,10 @@ fn keybindings() -> String {
 
 fn menu_bar() -> String {
   "    HorizontalLayout {\n"
-  <> "      height: 44px; padding: 8px; spacing: 6px;\n"
-  <> "      file-menu := ContextMenuArea { width: 78px; height: 32px;\n"
-  <> "        Button { text: \"☰ File\"; clicked => { file-menu.show({ x: 0px, y: 32px }); } "
-  <> hint("Open the File menu (new, open, save)")
+  <> "      height: 46px; padding: 8px; spacing: 6px;\n"
+  <> "      file-menu := ContextMenuArea { width: 58px; height: 32px;\n"
+  <> "        Button { text: \"File\"; clicked => { file-menu.show({ x: 0px, y: 32px }); } "
+  <> hint("File menu: new, open, save")
   <> " }\n"
   <> "        Menu {\n"
   <> "          MenuItem { title: \"New project    Ctrl+N\"; activated => { root.file-new(); } }\n"
@@ -955,7 +968,7 @@ fn menu_bar() -> String {
   <> "        }\n"
   <> "      }\n"
   <> "      edit-menu := ContextMenuArea { width: 58px; height: 32px;\n"
-  <> "        Button { text: \"✂ Edit\"; clicked => { edit-menu.show({ x: 0px, y: 32px }); } "
+  <> "        Button { text: \"Edit\"; clicked => { edit-menu.show({ x: 0px, y: 32px }); } "
   <> hint("Edit menu: undo/redo, clipboard, delete")
   <> " }\n"
   <> "        Menu {\n"
@@ -967,48 +980,23 @@ fn menu_bar() -> String {
   <> "          MenuItem { title: \"Paste component    Ctrl+V\"; activated => { root.paste-component(); } }\n"
   <> "          MenuSeparator { }\n"
   <> "          MenuItem { title: \"Delete component    Del\"; activated => { root.delete-selected(); } }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "      Button { text: \"↶\"; width: 34px; enabled: root.can-undo; clicked => { root.undo(); } "
-  <> hint("Undo (Ctrl+Z)")
-  <> " }\n"
-  <> "      Button { text: \"↷\"; width: 34px; enabled: root.can-redo; clicked => { root.redo(); } "
-  <> hint("Redo (Ctrl+Shift+Z)")
-  <> " }\n"
-  <> "      Button { text: \"↻\"; width: 34px; clicked => { root.reload-code(); } "
-  <> hint("Reload Campy code (F6)")
-  <> " }\n"
-  <> "      run-menu := ContextMenuArea { width: 78px; height: 32px;\n"
-  <> "        Button { text: \"▶ Run\"; clicked => { run-menu.show({ x: 0px, y: 32px }); } "
-  <> hint("Run menu: run, update, reload, stop")
-  <> " }\n"
-  <> "        Menu {\n"
-  <> "          MenuItem { title: \"Run active module    F5\"; activated => { root.run-app(); } }\n"
+  <> "          MenuSeparator { }\n"
   <> "          MenuItem { title: \"Update running app    F7\"; activated => { root.update-app(); } }\n"
   <> "          MenuItem { title: \"Reload Campy code    F6\"; activated => { root.reload-code(); } }\n"
-  <> "          MenuItem { title: \"Stop    Shift+F5\"; activated => { root.stop-app(); } }\n"
   <> "        }\n"
   <> "      }\n"
-  <> "      settings-menu := ContextMenuArea { width: 82px; height: 32px;\n"
-  <> "        Button { text: \"⚙ Settings\"; clicked => { settings-menu.show({ x: 0px, y: 32px }); } "
-  <> hint("Settings: editor font, color scheme and UI hints")
+  <> "      settings-menu := ContextMenuArea { width: 90px; height: 32px;\n"
+  <> "        Button { text: \"Settings\"; clicked => { settings-menu.show({ x: 0px, y: 32px }); } "
+  <> hint("Settings: editor and agent")
   <> " }\n"
-  <> "        Menu { MenuItem { title: \"Editor…\"; activated => { root.open-settings(); } } }\n"
+  <> "        Menu {\n"
+  <> "          MenuItem { title: \"Editor…\"; activated => { root.open-settings(); } }\n"
+  <> "          MenuItem { title: \"Agent…\"; activated => { root.open-agent(); } }\n"
+  <> "        }\n"
   <> "      }\n"
-  <> "      Button { text: \"▶ Run\"; primary: true; enabled: !root.running; clicked => { root.run-app(); } "
-  <> hint("Run the active module (F5)")
+  <> "      Button { text: root.frame-tool ? \"▭\" : \"↖\"; width: 40px; height: 32px; primary: root.frame-tool; clicked => { root.frame-tool = !root.frame-tool; } "
+  <> hint("Component selector: arrow selects, box draws a selection frame")
   <> " }\n"
-  <> "      Button { text: \"■ Stop\"; enabled: root.running; clicked => { root.stop-app(); } "
-  <> hint("Stop the running app (Shift+F5)")
-  <> " }\n"
-  <> "      Rectangle { horizontal-stretch: 1; }\n"
-  <> "      Text { text: root.path-text; color: root.theme-fg; vertical-alignment: center; }\n"
-  <> "    }\n"
-}
-
-fn palette_bar() -> String {
-  "    HorizontalLayout { height: 46px; padding-left: 8px; padding-right: 8px; spacing: 4px;\n"
-  <> "      Text { text: \"Components\"; color: root.theme-fg; vertical-alignment: center; font-weight: 600; }\n"
   <> "      ScrollView { horizontal-stretch: 1; height: 42px;\n"
   <> "        HorizontalLayout { spacing: 4px; padding: 3px;\n"
   <> "          for item in root.palette-items: Rectangle {\n"
@@ -1020,6 +1008,12 @@ fn palette_bar() -> String {
   <> "          }\n"
   <> "        }\n"
   <> "      }\n"
+  <> "      Button { text: \"▶ Run\"; primary: true; enabled: !root.running; clicked => { root.run-app(); } "
+  <> hint("Run the active module (F5)")
+  <> " }\n"
+  <> "      Button { text: \"■ Stop\"; enabled: root.running; clicked => { root.stop-app(); } "
+  <> hint("Stop the running app (Shift+F5)")
+  <> " }\n"
   <> "    }\n"
   <> "    Rectangle { height: 1px; background: root.theme-border; }\n"
 }
@@ -1037,27 +1031,12 @@ fn main_area() -> String {
 fn navigator() -> String {
   "      VerticalLayout { width: 190px; spacing: 4px; padding: 8px;\n"
   <> "        HorizontalLayout { height: 28px; spacing: 4px;\n"
-  <> "          Text { text: \"Workspace\"; font-weight: 600; color: root.theme-fg; vertical-alignment: center; }\n"
+  <> "          Text { text: \"Projects\"; font-weight: 600; color: root.theme-fg; vertical-alignment: center; }\n"
   <> "          Rectangle { horizontal-stretch: 1; }\n"
-  <> "        }\n"
-  <> "        ListView { height: 104px;\n"
-  <> "          for project in root.project-items: Rectangle {\n"
-  <> "            height: 30px;\n"
-  <> "            background: project.active ? root.theme-tint : transparent;\n"
-  <> "            HorizontalLayout { padding-left: 8px; padding-right: 8px;\n"
-  <> "              Text { text: (project.active ? \"● \" : \"\") + project.title; vertical-alignment: center; color: root.theme-fg; overflow: elide; }\n"
-  <> "            }\n"
-  <> "            TouchArea { clicked => { root.switch-project(project.id); } }\n"
-  <> "            "
-  <> hint("Switch to this project")
-  <> "\n"
-  <> "          }\n"
-  <> "        }\n"
-  <> "        HorizontalLayout { height: 30px; spacing: 4px;\n"
-  <> "          Button { text: \"+ Project\"; height: 26px; horizontal-stretch: 1; clicked => { root.new-project(); } "
-  <> hint("Create a new project in the workspace")
+  <> "          Button { text: \"+\"; width: 26px; height: 24px; clicked => { root.open-project-dialog(); } "
+  <> hint("Add a project (new or existing)")
   <> " }\n"
-  <> "          Rectangle { width: 30px; height: 26px; border-width: 1px; border-color: root.theme-border; border-radius: 4px; background: ws-trash.has-hover && root.can-delete-project ? root.theme-tint : transparent; opacity: root.can-delete-project ? 1 : 0.4;\n"
+  <> "          Rectangle { width: 26px; height: 24px; border-width: 1px; border-color: root.theme-border; border-radius: 4px; background: ws-trash.has-hover && root.can-delete-project ? root.theme-tint : transparent; opacity: root.can-delete-project ? 1 : 0.4;\n"
   <> "            ws-trash := TouchArea { enabled: root.can-delete-project; clicked => { root.delete-project(); } }\n"
   <> "            Path { x: (parent.width - 12px) / 2; y: (parent.height - 14px) / 2; width: 12px; height: 14px; stroke: root.theme-fg; stroke-width: 1.1px; fill: transparent;\n"
   <> "              commands: \"M 1 3 L 11 3 M 4 3 L 4 1 L 8 1 L 8 3 M 2 3 L 3 13 L 9 13 L 10 3 M 4.5 6 L 4.5 10 M 7.5 6 L 7.5 10\";\n"
@@ -1065,6 +1044,25 @@ fn navigator() -> String {
   <> "            "
   <> hint("Delete the active project from the workspace")
   <> "\n"
+  <> "          }\n"
+  <> "        }\n"
+  <> "        ListView { height: 110px;\n"
+  <> "          for project in root.project-items: ContextMenuArea { width: 100%; height: 30px;\n"
+  <> "            Rectangle { height: 30px;\n"
+  <> "              background: project.active ? root.theme-tint : transparent;\n"
+  <> "              HorizontalLayout { padding-left: 8px; padding-right: 8px;\n"
+  <> "                Text { text: (project.active ? \"● \" : \"\") + project.title; vertical-alignment: center; color: root.theme-fg; overflow: elide; }\n"
+  <> "              }\n"
+  <> "              TouchArea { clicked => { root.switch-project(project.id); } }\n"
+  <> "              "
+  <> hint("Switch to this project; right-click for project actions")
+  <> "\n"
+  <> "            }\n"
+  <> "            Menu {\n"
+  <> "              MenuItem { title: \"Select project\"; activated => { root.switch-project(project.id); } }\n"
+  <> "              MenuItem { title: \"New / open project…\"; activated => { root.open-project-dialog(); } }\n"
+  <> "              MenuItem { title: \"Delete from workspace\"; enabled: project.active && root.can-delete-project; activated => { root.delete-project(); } }\n"
+  <> "            }\n"
   <> "          }\n"
   <> "        }\n"
   <> "        Rectangle { height: 1px; background: root.theme-border; }\n"
@@ -1076,16 +1074,21 @@ fn navigator() -> String {
   <> " }\n"
   <> "        }\n"
   <> "        ListView { vertical-stretch: 1;\n"
-  <> "          for module in root.module-items: Rectangle {\n"
-  <> "            height: 32px;\n"
-  <> "            background: module.active ? root.theme-tint : transparent;\n"
-  <> "            HorizontalLayout { padding-left: 8px; padding-right: 8px;\n"
-  <> "              Text { text: (module.active ? \"● \" : \"\") + module.name; vertical-alignment: center; color: root.theme-fg; overflow: elide; }\n"
-  <> "            }\n"
-  <> "            TouchArea { clicked => { root.open-module(module.id); } }\n"
-  <> "            "
-  <> hint("Open this module")
+  <> "          for module in root.module-items: ContextMenuArea { width: 100%; height: 32px;\n"
+  <> "            Rectangle { height: 32px;\n"
+  <> "              background: module.active ? root.theme-tint : transparent;\n"
+  <> "              HorizontalLayout { padding-left: 8px; padding-right: 8px;\n"
+  <> "                Text { text: (module.active ? \"● \" : \"\") + module.name; vertical-alignment: center; color: root.theme-fg; overflow: elide; }\n"
+  <> "              }\n"
+  <> "              TouchArea { clicked => { root.open-module(module.id); } }\n"
+  <> "              "
+  <> hint("Open this module; right-click for module actions")
   <> "\n"
+  <> "            }\n"
+  <> "            Menu {\n"
+  <> "              MenuItem { title: \"Open module\"; activated => { root.open-module(module.id); } }\n"
+  <> "              MenuItem { title: \"Close tab\"; activated => { root.close-module(module.id); } }\n"
+  <> "            }\n"
   <> "          }\n"
   <> "        }\n"
   <> "        Text { text: root.module-count; color: root.theme-fg; }\n"
@@ -1117,7 +1120,31 @@ fn centre() -> String {
   <> code_view()
   <> editor_view()
   <> "        }\n"
+  <> "        Rectangle { height: 1px; background: root.theme-border; }\n"
+  <> console_pane()
   <> "      }\n"
+}
+
+fn console_pane() -> String {
+  "        Rectangle { height: 170px; background: root.code-bg;\n"
+  <> "          VerticalLayout { spacing: 0px;\n"
+  <> "            HorizontalLayout { height: 28px; padding-left: 10px; padding-right: 8px; spacing: 6px;\n"
+  <> "              Text { text: \"Console\"; color: root.code-name; font-weight: 600; vertical-alignment: center; }\n"
+  <> "              Text { text: root.running ? \"running\" : \"stopped\"; color: root.code-comment; vertical-alignment: center; }\n"
+  <> "              Rectangle { horizontal-stretch: 1; }\n"
+  <> "              Button { text: \"Clear\"; clicked => { root.clear-console(); } "
+  <> hint("Clear the console output")
+  <> " }\n"
+  <> "            }\n"
+  <> "            TextEdit { text: root.console-text; read-only: true; vertical-stretch: 1; font-family: root.editor-font; font-size: root.editor-font-size; }\n"
+  <> "            HorizontalLayout { height: 36px; padding: 4px; spacing: 6px;\n"
+  <> "              console-entry := LineEdit { placeholder-text: \"Send input to the running app…\"; horizontal-stretch: 1; accepted(text) => { root.console-input(text); console-entry.text = \"\"; } }\n"
+  <> "              Button { text: \"Send\"; primary: true; clicked => { root.console-input(console-entry.text); console-entry.text = \"\"; } "
+  <> hint("Send this line to the running app")
+  <> " }\n"
+  <> "            }\n"
+  <> "          }\n"
+  <> "        }\n"
 }
 
 // The form editor: bottom tabs switch between the actual design and the
@@ -1129,44 +1156,18 @@ fn form_editor() -> String {
   <> column_canvas()
   <> row_canvas()
   <> slint_source_view()
-  <> console_view()
   <> "            }\n"
   <> "            Rectangle { height: 1px; background: root.theme-border; }\n"
   <> "            HorizontalLayout { height: 34px; spacing: 4px; padding-left: 4px;\n"
-  <> "              Button { text: \"▦ UI (actual)\"; primary: !root.slint-tab && !root.console-tab; height: 30px; clicked => { root.show-ui(); } "
+  <> "              Button { text: \"▦ UI (actual)\"; primary: !root.slint-tab; height: 30px; clicked => { root.show-ui(); } "
   <> hint("Designer canvas")
   <> " }\n"
   <> "              Button { text: \"⌨ Code (Slint file)\"; primary: root.slint-tab; height: 30px; clicked => { root.show-slint(); } "
   <> hint("Generated Slint source")
   <> " }\n"
-  <> "              Button { text: \"▤ Console\"; primary: root.console-tab; height: 30px; clicked => { root.show-console(); } "
-  <> hint("Application output and stdin")
-  <> " }\n"
   <> "              Rectangle { horizontal-stretch: 1; }\n"
   <> "            }\n"
   <> "          }\n"
-}
-
-fn console_view() -> String {
-  "            if root.console-tab: Rectangle { width: 100%; height: 100%; background: root.code-bg;\n"
-  <> "              VerticalLayout { spacing: 0px;\n"
-  <> "                HorizontalLayout { height: 32px; padding-left: 10px; padding-right: 8px; spacing: 6px;\n"
-  <> "                  Text { text: \"Console\"; color: root.code-name; font-weight: 600; vertical-alignment: center; }\n"
-  <> "                  Text { text: root.running ? \"running\" : \"stopped\"; color: root.code-comment; vertical-alignment: center; }\n"
-  <> "                  Rectangle { horizontal-stretch: 1; }\n"
-  <> "                  Button { text: \"Clear\"; clicked => { root.clear-console(); }"
-  <> hint("Clear the console output")
-  <> " }\n"
-  <> "                }\n"
-  <> "                TextEdit { text: root.console-text; read-only: true; vertical-stretch: 1; font-family: root.editor-font; font-size: root.editor-font-size; }\n"
-  <> "                HorizontalLayout { height: 36px; padding: 4px; spacing: 6px;\n"
-  <> "                  console-entry := LineEdit { placeholder-text: \"Send input to the running app…\"; horizontal-stretch: 1; accepted(text) => { root.console-input(text); console-entry.text = \"\"; } }\n"
-  <> "                  Button { text: \"Send\"; primary: true; clicked => { root.console-input(console-entry.text); console-entry.text = \"\"; }"
-  <> hint("Send this line to the running app")
-  <> " }\n"
-  <> "                }\n"
-  <> "              }\n"
-  <> "            }\n"
 }
 
 fn slint_source_view() -> String {
@@ -1182,13 +1183,14 @@ fn slint_source_view() -> String {
 }
 
 fn free_canvas() -> String {
-  "            if !root.slint-tab && !root.console-tab && root.layout-free: ScrollView { width: 100%; height: 100%;\n"
-  <> "              Rectangle { width: root.surface-w; height: root.surface-h; background: root.theme-bg;\n"
+  "            if !root.slint-tab && root.layout-free: Rectangle { x: 0; y: 0; width: 100%; height: 100%; clip: true; background: root.theme-canvas;\n"
+  <> "              Rectangle { x: 0; y: 0; width: root.surface-w; height: root.surface-h; background: root.theme-canvas;\n"
+  <> grid_lines()
   <> "                Rectangle {\n"
-  <> "                  x: root.window-x + root.win-drag-x;\n"
-  <> "                  y: root.window-y + root.win-drag-y - 28px;\n"
-  <> "                  width: root.canvas-w + root.win-resize-dw;\n"
-  <> "                  height: root.canvas-h + 28px + root.win-resize-dh;\n"
+  <> "                  x: root.window-x;\n"
+  <> "                  y: root.window-y;\n"
+  <> "                  width: root.canvas-w;\n"
+  <> "                  height: root.canvas-h + 28px;\n"
   <> "                  Rectangle { x: 0; y: 0; width: parent.width; height: 28px; background: root.theme-surface; border-width: 1px; border-color: root.theme-border; border-radius: 4px;\n"
   <> "                    Text { x: 10px; y: 0; height: parent.height; text: root.form-title; color: root.theme-fg; font-weight: 600; vertical-alignment: center; }\n"
   <> "                    Text { x: parent.width - 90px; y: 0; height: parent.height; text: \"module window\"; color: root.theme-fg; font-size: 11px; vertical-alignment: center; opacity: 0.6; }\n"
@@ -1206,7 +1208,9 @@ fn free_canvas() -> String {
   <> "                      }\n"
   <> "                    }\n"
   <> "                    "
-  <> hint("Drag to move the module window; click to select it")
+  <> hint(
+    "Drag to move the module window (outline preview); click to select it",
+  )
   <> "\n"
   <> "                  }\n"
   <> "                  Rectangle { x: 0; y: 28px; width: parent.width; height: parent.height - 28px; background: root.theme-bg;\n"
@@ -1214,9 +1218,13 @@ fn free_canvas() -> String {
   <> "                    border-color: !root.has-selection ? root.theme-accent : root.drop-active && root.drop-candidate == \"\" ? #f0c040 : root.theme-border;\n"
   <> "                    TouchArea {\n"
   <> "                      pointer-event(event) => {\n"
-  <> "                        if (event.kind == PointerEventKind.down) {\n"
+  <> "                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {\n"
   <> "                          key-handler.focus();\n"
-  <> "                          if (root.shift-down) {\n"
+  <> "                          root.context-menu(\"\");\n"
+  <> "                        }\n"
+  <> "                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {\n"
+  <> "                          key-handler.focus();\n"
+  <> "                          if (root.shift-down || root.frame-tool) {\n"
   <> "                            root.marquee-active = true;\n"
   <> "                            root.marquee-x = self.mouse-x;\n"
   <> "                            root.marquee-y = self.mouse-y;\n"
@@ -1241,7 +1249,7 @@ fn free_canvas() -> String {
   <> "                      }\n"
   <> "                    }\n"
   <> "                    for control in root.control-items: ControlView {\n"
-  <> "                      data: control; designing: true; free-layout: true;\n"
+  <> "                      data: control; designing: true; free-layout: !control.arranged;\n"
   <> "                      additive: root.ctrl-down; drop-candidate: root.drop-candidate;\n"
   <> "                      theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface;\n"
   <> "                      x: control.x; y: control.y; width: control.w; height: control.h;\n"
@@ -1258,8 +1266,9 @@ fn free_canvas() -> String {
   <> "                      resize-bottom(dy) => { root.resize-bottom(dy); }\n"
   <> "                      gesture-start() => { root.gesture-start(); }\n"
   <> "                      gesture-end() => { root.gesture-end(); }\n"
+  <> "                      context-menu(id) => { root.context-menu(id); }\n"
   <> "                    }\n"
-  <> "                    if root.shift-down && !root.marquee-active: DottedFrame {\n"
+  <> "                    if (root.shift-down || root.frame-tool) && !root.marquee-active: DottedFrame {\n"
   <> "                      x: 1px; y: 1px; width: parent.width - 2px; height: parent.height - 2px; dot-color: #e5c07b;\n"
   <> "                    }\n"
   <> "                    if root.marquee-active: DottedFrame {\n"
@@ -1321,16 +1330,66 @@ fn free_canvas() -> String {
   <> "                      }\n"
   <> "                    }\n"
   <> "                    "
-  <> hint("Resize the module window")
+  <> hint("Resize the module window (outline preview)")
   <> "\n"
   <> "                  }\n"
+  <> "                }\n"
+  <> "                if root.context-open: Rectangle { x: 0; y: 0; width: 100%; height: 100%; background: transparent;\n"
+  <> "                  TouchArea { clicked => { root.close-context-menu(); } }\n"
+  <> "                  Rectangle { x: max(0px, min(root.window-x + root.context-x, root.surface-w - 158px)); y: max(0px, min(root.window-y + 28px + root.context-y, root.surface-h - 132px)); width: 150px; height: 124px;\n"
+  <> "                    background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 4px;\n"
+  <> "                    VerticalLayout { padding: 4px; spacing: 1px;\n"
+  <> "                      Button { text: \"Copy\"; height: 26px; enabled: root.has-selection; clicked => { root.context-copy(); } }\n"
+  <> "                      Button { text: \"Cut\"; height: 26px; enabled: root.has-selection; clicked => { root.context-cut(); } }\n"
+  <> "                      Button { text: \"Paste\"; height: 26px; clicked => { root.context-paste(); } }\n"
+  <> "                      Button { text: \"Delete\"; height: 26px; enabled: root.has-selection; clicked => { root.context-delete(); } }\n"
+  <> "                    }\n"
+  <> "                  }\n"
+  <> "                }\n"
+  <> "                if root.win-moving || root.win-resizing: Rectangle {\n"
+  <> "                  x: root.window-x + root.win-drag-x;\n"
+  <> "                  y: root.window-y + root.win-drag-y;\n"
+  <> "                  width: max(120px, root.canvas-w + root.win-resize-dw);\n"
+  <> "                  height: max(80px, root.canvas-h + root.win-resize-dh) + 28px;\n"
+  <> "                  border-width: 2px; border-color: root.theme-accent; border-radius: 4px; background: transparent;\n"
   <> "                }\n"
   <> "              }\n"
   <> "            }\n"
 }
 
+fn up_to(limit: Int) -> List(Int) {
+  up_to_acc(limit, 0, [])
+}
+
+fn up_to_acc(limit: Int, i: Int, acc: List(Int)) -> List(Int) {
+  case i >= limit {
+    True -> list.reverse(acc)
+    False -> up_to_acc(limit, i + 1, [i, ..acc])
+  }
+}
+
+fn grid_lines() -> String {
+  let vertical =
+    up_to(60)
+    |> list.map(fn(i) {
+      "                Rectangle { x: "
+      <> int.to_string(i * 24)
+      <> "px; y: 0; width: 1px; height: 100%; background: root.theme-grid; }\n"
+    })
+    |> string.concat
+  let horizontal =
+    up_to(40)
+    |> list.map(fn(i) {
+      "                Rectangle { x: 0; y: "
+      <> int.to_string(i * 24)
+      <> "px; width: 100%; height: 1px; background: root.theme-grid; }\n"
+    })
+    |> string.concat
+  vertical <> horizontal
+}
+
 fn column_canvas() -> String {
-  "            if !root.slint-tab && !root.console-tab && root.layout-column: ScrollView { width: 100%; height: 100%;\n"
+  "            if !root.slint-tab && root.layout-column: ScrollView { width: 100%; height: 100%;\n"
   <> "              VerticalLayout { padding: 16px; spacing: 8px;\n"
   <> "                for control in root.control-items: ControlView {\n"
   <> "                  data: control; designing: true; free-layout: false; height: control.h;\n"
@@ -1342,7 +1401,7 @@ fn column_canvas() -> String {
 }
 
 fn row_canvas() -> String {
-  "            if !root.slint-tab && !root.console-tab && root.layout-row: ScrollView { width: 100%; height: 100%;\n"
+  "            if !root.slint-tab && root.layout-row: ScrollView { width: 100%; height: 100%;\n"
   <> "              HorizontalLayout { padding: 16px; spacing: 8px; height: 100%;\n"
   <> "                for control in root.control-items: ControlView {\n"
   <> "                  data: control; designing: true; free-layout: false; width: control.w; height: 100%;\n"
@@ -1456,7 +1515,15 @@ fn right_pane() -> String {
   <> check_row("Visible", "insp-visible", "toggle-visible")
   <> "          Rectangle { vertical-stretch: 1; }\n"
   <> "        }\n"
-  <> "        if !root.has-selection: VerticalLayout { spacing: 6px;\n"
+  <> "        if root.project-selected: VerticalLayout { spacing: 6px;\n"
+  <> field("Title", "project-title", "field-project-title")
+  <> "          Text { text: \"Path\"; color: root.theme-fg; }\n"
+  <> "          Text { text: root.project-path; color: root.theme-fg; overflow: elide; }\n"
+  <> "          Text { text: root.project-module-count; color: root.theme-fg; }\n"
+  <> "          Text { text: \"Project properties are edited like component properties.\"; color: root.theme-fg; height: 32px; wrap: word-wrap; }\n"
+  <> "          Rectangle { vertical-stretch: 1; }\n"
+  <> "        }\n"
+  <> "        if !root.has-selection && !root.project-selected: VerticalLayout { spacing: 6px;\n"
   <> field("Title", "form-title", "field-title")
   <> field("Width", "form-width", "field-width")
   <> field("Height", "form-height", "field-height")
@@ -1464,7 +1531,6 @@ fn right_pane() -> String {
   <> "            Text { text: \"Layout\"; width: 64px; vertical-alignment: center; color: root.theme-fg; }\n"
   <> "            ComboBox { model: [\"Free\", \"Column\", \"Row\"]; current-index: root.layout-index; selected => { root.set-layout(self.current-value); } }\n"
   <> "          }\n"
-  <> "          Text { text: \"Select a control on the canvas.\"; color: root.theme-fg; }\n"
   <> "        }\n"
   <> "        if root.has-selection && root.events-tab: VerticalLayout { spacing: 6px;\n"
   <> "          if root.has-events: HorizontalLayout { spacing: 6px; height: 32px;\n"
@@ -1551,6 +1617,33 @@ fn settings_overlay() -> String {
   <> "        HorizontalLayout { spacing: 8px;\n"
   <> "          Button { text: \"Close\"; primary: true; height: 32px; clicked => { root.close-settings(); }"
   <> hint("Close the settings dialog")
+  <> " }\n"
+  <> "          Rectangle { horizontal-stretch: 1; }\n"
+  <> "        }\n"
+  <> "      }\n"
+  <> "    }\n"
+  <> "  }\n"
+}
+
+fn project_dialog_overlay() -> String {
+  "  if root.project-dialog-open: Rectangle {\n"
+  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
+  <> "    TouchArea { clicked => { root.close-project-dialog(); } }\n"
+  <> "    Rectangle { x: (root.width - self.width) / 2; y: 160px; width: 460px; height: 240px;\n"
+  <> "      background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 6px;\n"
+  <> "      VerticalLayout { padding: 18px; spacing: 12px;\n"
+  <> "        Text { text: \"Projects\"; font-size: 18px; font-weight: 600; color: root.theme-fg; }\n"
+  <> "        Text { text: \"Create a new project or open an existing project into this workspace.\"; color: root.theme-fg; height: 32px; wrap: word-wrap; }\n"
+  <> "        Button { text: \"Create new project\"; primary: true; height: 32px; clicked => { root.dialog-new-project(); }"
+  <> hint("Create a new project in the workspace")
+  <> " }\n"
+  <> "        Button { text: \"Open existing project…\"; height: 32px; clicked => { root.dialog-open-project(); }"
+  <> hint("Open a project file into the workspace")
+  <> " }\n"
+  <> "        Rectangle { vertical-stretch: 1; }\n"
+  <> "        HorizontalLayout {\n"
+  <> "          Button { text: \"Cancel\"; clicked => { root.close-project-dialog(); }"
+  <> hint("Cancel")
   <> " }\n"
   <> "          Rectangle { horizontal-stretch: 1; }\n"
   <> "        }\n"
@@ -1810,6 +1903,22 @@ fn window_x(model: State) -> Int {
 
 fn window_y(model: State) -> Int {
   state.window_position(model).1
+}
+
+fn container_layout_index(model: State) -> Int {
+  case selected_control(model), active_form(model) {
+    Some(control), Some(form) ->
+      case campy_form.accepts_children(control.kind) {
+        True ->
+          case campy_form.layout_of(form, control.id) {
+            campy_form.Free -> 0
+            campy_form.Column -> 1
+            campy_form.Row -> 2
+          }
+        False -> -1
+      }
+    _, _ -> -1
+  }
 }
 
 fn layout_index(form: Option(Form)) -> Int {

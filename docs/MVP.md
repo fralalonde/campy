@@ -72,34 +72,43 @@ Delivered:
 
 1. Tool palette: Run opens the **active module's** form in a second native
    window; Stop closes it.
-2. Workspace navigator (left): a project list with switch/create/delete, and a
+2. Projects pane (left): a project list with switch/open/create/delete, and a
    `ListView` of the active project's modules; click to open or activate a
-   module, `+` to add one.
+   module, `+` to add one. The header `+` opens a New/Open project dialog.
+   Selecting a project row exposes its title, path, and module count in the
+   inspector.
 3. Tabbed module editor (centre): one tab per opened module (closable). A single
    top-right button switches between the **form editor** and the module's
    **handler code**. The form editor's bottom tabs are **UI (actual)** and
    **Code (Slint file)**; the latter shows the generated, read-only Slint source.
-4. Components + inspector: the **CCL** palette is a horizontal pictogram bar
-   above the workspace (Label, Edit, Memo, Button, Check box, Radio button,
-   Combo box, List, Slider, Progress, Panel, Group box, Picture), with type
-   tooltips; clicking arms click-drag placement on the form. The right pane is
-   the Properties/Events inspector.
+4. Components + inspector: the **CCL** palette is a horizontal pictogram bar on
+   the same row as Run/Stop, with an arrow/box component selector (Label, Edit,
+   Memo, Button, Menu, Check box, Radio button, Combo box, List, Slider,
+   Progress, Panel, Group box, Picture), with type tooltips; clicking arms
+   click-drag placement on the form. The right pane is the Properties/Events
+   inspector.
 5. File menu: New project / New module / Open… / Save / Save As… / Quit.
-   Projects are versioned, compressed Erlang terms (`projects/*.campy`, v5),
-   validated on load; v1–v4 files are upgraded, including form layout, the
-   adoption parent map, and alignment. Workspaces are versioned compressed terms
+   Projects are versioned, compressed Erlang terms (`projects/*.campy`, v6),
+   validated on load; v1–v5 files (and v5 projects embedded in a workspace) are
+   upgraded, including form layout, the adoption parent map, alignment, and
+   per-container layouts. Workspaces are versioned compressed terms
    (`projects/workspace.campy`, v1) holding full project snapshots and the active
    project path.
 6. Form editor: the form is a movable/resizable **module window** (title bar,
    per-module position, corner resize) on a larger design canvas. Controls use
    cursor drag to move and eight resize handles (corners and sides) with
    directional cursors and a live outline (committed once on release); the same
-   form model drives the run window. Layout is chosen from a Properties
-   dropdown. Clicking the empty canvas selects the
-   **window** itself. A form can use Free, Column, or Row layout; Column/Row
-   delegate placement to Slint layouts and need no geometry messages.
-7. CCL components: Label, Edit, Memo, Button, Check box, Radio button, Combo
-   box, List (sample rows), Slider, Progress, Panel, Group box, and Picture.
+   form model drives the run window. Moving or resizing the module window shows
+   an outline preview and commits on release, so the gesture stays smooth. The
+   canvas has a contrasting surface and a light grid. Layout is chosen from a
+   Properties dropdown. Clicking the empty canvas selects the **window** itself.
+   A form can use Free, Column, or Row layout; Column/Row delegate placement to
+   Slint layouts and need no geometry messages. Panels and group boxes also
+   have their own Free/Column/Row Layout property for their children.
+7. CCL components: Label, Edit, Memo, Button, Menu, Check box, Radio button,
+   Combo box, List (sample rows), Slider, Progress, Panel, Group box, and
+   Picture. Menu renders as a menu title and opens sample items in the run
+   window; the Welcome demo uses it.
    Picture stores a path in its text field (editable in the inspector or via the
    **Choose picture…** path dialog) and renders in the designer and run window.
    The `campy_ccl` package is the single catalog used for keys, labels, default
@@ -107,10 +116,11 @@ Delivered:
 8. Containers: panels and group boxes accept children from the palette, paste,
    or a drag; dropping over a container reparents, dropping outside returns the
    control to the window, and rendering order draws containers before their
-   children. Alignment: Free-layout controls can use LCL-style Top, Bottom,
-   Left, Right, or Client alignment. The preview binds aligned geometry to Slint's parent
-   width/height; the designer computes the same geometry. Column/Row layouts
-   ignore alignment. (LCL's dock ordering and anchors are intentionally not
+   children. Only a target that would change the parent is highlighted.
+   Alignment: Free-layout controls can use LCL-style Top, Bottom, Left, Right,
+   or Client alignment, relative to their parent container (or the window at
+   the root). The preview and designer compute the same geometry. Container
+   Column/Row layouts arrange direct children and ignore alignment. (LCL's dock ordering and anchors are intentionally not
    reproduced yet; Slint's layout model is authoritative.)
 9. Adoption and clipboard: panels/group boxes (and the window root) accept
    children. New and
@@ -149,14 +159,14 @@ Delivered:
     or app directory); otherwise the in-window path dialog is the fallback.
 17. Global undo/redo: one snapshot history covers form edits, inspector changes,
     layout changes, paste/cut, module creation, stub creation, and handler
-    Apply. Undo/Redo live in the Edit menu and toolbar; Ctrl+Z,
+    Apply. Undo/Redo live in the Edit menu; Ctrl+Z,
     Ctrl+Shift+Z/Ctrl+Y.
 18. Keyboard shortcuts (Ctrl+N/O/S/Shift+S/Q, Ctrl+C/X/V, Delete, F5, F6, F7,
     Shift+F5, Escape) are bound through a root `FocusScope`/`KeyBinding`; text
     fields keep their local clipboard/delete behavior. The selected component is
     deleted with the Delete key or the small trashcan in the inspector.
-19. Console: the form editor's Console tab shows app lifecycle/events and an
-    input line. The current preview does not execute handler source, so stdin
+19. Console: a separate pane below the editor canvas shows app lifecycle/events
+    and an input line. The current preview does not execute handler source, so stdin
     is logged/reserved rather than consumed by app code.
 20. MCP: an optional localhost MCP server (streamable HTTP JSON-RPC), disabled
     by default and enabled from Settings → Agent. It exposes status, modules,

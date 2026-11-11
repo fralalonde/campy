@@ -9,22 +9,27 @@ same component packages, BEAM runtime, and in-process Rust/Slint bridge.
 interpreted Slint runtime and the same **CCL** component catalog as the apps it
 designs. Campy opens **its own workspace** (`projects/workspace.campy`, created
 on first run) containing its own project (`projects/campy.campy`), whose modules
-are the **Cat Café** and **CCL Widgets** demos.
+are the **Cat Café**, **CCL Widgets**, **Welcome**, and **Search box** demos.
 
 Layout:
 
-- **Left — workspace navigator**: a workspace manager (switch, create, and delete
+- **Left — Projects**: a project manager (switch, create, open, and delete
   projects) above a `ListView` of the active project's modules; click a module
-  to open or activate it, `+` to add one.
+  to open or activate it. The header `+` opens the New/Open project dialog; the
+  small trash removes the active project from the workspace. Clicking a project
+  row selects the project and shows its properties in the inspector.
 - **Centre — tabbed module editor**: one tab per opened module (with a close
   button). The single top-right button switches between the **form editor** and
   the module's **handler code**. The form editor has bottom **UI (actual)** and
   **Code (Slint file)** tabs; the latter shows the generated, read-only Slint
   source for the form.
-- **Right — components + inspector**: the component palette is a `ListView` of
-  the CCL catalog (Label, Edit, Memo, Button, Check box, Radio button, Combo
-  box, List, Slider, Progress, Panel, Group box, Picture), and the object
-  inspector shares the pane.
+- **Top — palette + run controls**: File, Edit, and Settings menus sit on the
+  same row as the component selector (arrow/box), the horizontal CCL palette,
+  ▶ Run, and ■ Stop. The palette contains Label, Edit, Memo, Button, Menu,
+  Check box, Radio button, Combo box, List, Slider, Progress, Panel, Group box,
+  and Picture.
+- **Right — inspector**: the properties/events inspector for the selected
+  component, the window, or the selected project.
 - **Form canvas**: drag a control to move it and use any of the **eight resize
   handles** (four corners and four sides) to resize it. The UI tracks the gesture
   locally and commits once on release; corners/edges resize both geometry and
@@ -32,24 +37,31 @@ Layout:
   the **window** itself. The form can use **Free**, **Column**, or **Row**
   layout; Column/Row use Slint layouts, so resizing the window reflows the
   controls without sending any geometry messages. In the Free designer the
-  form is a **module window** with a title bar: drag the bar to move it and the
-  corner handle to resize the form. Window positions are kept per module. Free controls can also use
-  LCL-style **alignment** (Top, Bottom, Left, Right, Client), which binds their
-  geometry to the form's Slint layout.
+  form is a **module window** with a title bar: dragging the bar or the corner
+  handle shows an outline preview and commits once on release, keeping the
+  gesture smooth. Window positions are kept per module. The canvas has a
+  contrasting surface and a light grid. Free controls can also use LCL-style
+  **alignment** (Top, Bottom, Left, Right, Client), which follows the control's
+  parent container (or the window at the root), not always the window. Panels
+  and group boxes have their own **Layout** property (Free, Column, Row) that
+  arranges their direct children.
 - **Adoption and clipboard**: panels and group boxes accept children. New and
   pasted controls are adopted by the selected container, its first accepting
   ancestor, or the window; **dragging a control onto a panel reparents it**, and
-  dragging it out returns it to the window. Nested panels work, children draw
-  above their container, and moving a panel moves its children with it. Edit →
-  Copy / Cut / Paste works on whole subtrees.
+  dragging it out returns it to the window. Only a target that would change the
+  control's parent is highlighted. Nested panels work, children draw above
+  their container, and moving a panel moves its children with it. Edit → Copy /
+  Cut / Paste works on whole subtrees, and right-clicking a control or empty
+  canvas opens a context menu with the same actions.
 - **Workspace**: several independent projects can be open at once. Switching,
   creating, and deleting projects is done in the left manager. The workspace and
   every project edit are persisted automatically in
   `projects/workspace.campy`; deleting a project only removes it from the
-  workspace, not its file.
+  workspace, not its file. Selecting a project row exposes its title, path, and
+  module count in the inspector.
 - **Undo/Redo**: every form, inspector, module-creation, and handler edit is
-  recorded in one global history. Use Edit → Undo/Redo, the ↶ / ↷ toolbar
-  buttons, or Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y.
+  recorded in one global history. Use Edit → Undo/Redo or Ctrl+Z /
+  Ctrl+Shift+Z / Ctrl+Y.
 - **Delete**: the small trashcan next to the selected component's name, the Edit
   menu, or the Delete key removes the control (and its subtree).
 - **System dialogs**: Open, Save As, and the Picture picker use the desktop file
@@ -70,15 +82,16 @@ Layout:
   Shift+F5, and Escape. Text
   fields keep their own editing shortcuts; otherwise the bindings act on the
   designer.
-- **Console**: the form editor's **Console** tab shows the running app's
+- **Console**: a separate pane below the editor canvas shows the running app's
   lifecycle/events and accepts stdin lines. The current preview logs input but
   does not execute handler code yet, so stdin is reserved for the app runtime.
-- **Settings — Editor… / Agent…**: the Editor page sets font family, font size,
-  color scheme and UI hints. The Agent page enables the optional **MCP server**
-  (disabled by default), edits its localhost port, and shows the endpoint
-  (`http://127.0.0.1:<port>/mcp`).
-- **Top — menus**: File, Edit (undo/redo and copy/cut/paste/delete), Run, and
-  Settings, plus ↶ / ↷, ▶ Run, and ■ Stop.
+- **Settings menu — Editor… / Agent…**: the Editor page sets font family, font
+  size, color scheme and UI hints. The Agent page enables the optional **MCP
+  server** (disabled by default), edits its localhost port, and shows the
+  endpoint (`http://127.0.0.1:<port>/mcp`). Settings is a menu, not a toolbar
+  button.
+- **Menus**: File and Edit (undo/redo, clipboard, delete, Update running app,
+  Reload Campy code) and Settings. There is one Run button and one Stop button.
 
 The window is resizable and maximizable (preferred size, not a fixed size), and
 primary actions use the accent color with pictograms. Labels are drawn without a
@@ -88,10 +101,11 @@ The inspector edits the canonical form model (name, text, x, y, w, h, enabled,
 visible), and the Events tab (`OnClick`, `OnTextChanged`) opens the handler in
 the central Code view, generating a typed Gleam stub when one does not exist.
 The Code view is syntax-highlighted and has a focused editor for the selected
-handler with Apply/Cancel. Files are versioned Erlang-term projects (v5);
-v1–v4 files are upgraded on load. The Cat Café demo demonstrates a panel with
+handler with Apply/Cancel. Files are versioned Erlang-term projects (v6);
+v1–v5 files (and v5 projects embedded in a workspace) are upgraded on load. The Cat Café demo demonstrates a panel with
 adopted children, a picture, a list, and handler stubs; the Widgets module
-showcases the CCL controls and top/bottom aligned labels.
+showcases the CCL controls and top/bottom aligned labels; the Welcome module
+uses the new **Menu** component.
 
 The **CCL** catalog lives in its own dependency-free `campy_ccl` package and is
 the shared source of component keys, labels, default sizes, events, and
@@ -160,7 +174,8 @@ Café form), `ide-widgets.png` (the CCL Widgets module), `ide-code.png`
 `app-updated.png` (the live app before/after an F7-style update in the same
 window), `ide-updated.png` (selection applied through properties only),
 `ide-multiselect.png`, `ide-drop-target.png`, `ide-place.png`,
-`ide-select-mode.png`, `ide-console.png`, `ide-agent.png`, and
+`ide-select-mode.png`, `ide-console.png`, `ide-context.png`,
+`ide-project-dialog.png`, `ide-welcome.png`, `ide-agent.png`, and
 `ide-workspace.png` for visual review. `just generate` writes the derived
 `generated/search_box.slint` fixture; do not edit it. `just fmt` formats both
 languages. `just check` runs the display-free test suite, including real NIF

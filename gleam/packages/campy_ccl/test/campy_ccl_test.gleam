@@ -10,7 +10,7 @@ pub fn main() {
 
 pub fn catalog_has_unique_keys_test() {
   let keys = list.map(campy_ccl.all(), fn(component) { component.key })
-  list.length(keys) |> should.equal(13)
+  list.length(keys) |> should.equal(14)
   list.length(keys) |> should.equal(list.length(list.unique(keys)))
 }
 

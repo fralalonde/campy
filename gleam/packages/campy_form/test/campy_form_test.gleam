@@ -61,6 +61,7 @@ pub fn rejects_duplicate_and_invalid_names_test() {
       ],
       [],
       [],
+      [],
     )
   campy_form.validate(duplicate) |> should.be_error
   let invalid =
@@ -84,6 +85,7 @@ pub fn rejects_duplicate_and_invalid_names_test() {
           True,
         ),
       ],
+      [],
       [],
       [],
     )
@@ -239,6 +241,7 @@ pub fn preview_emits_window_controls_and_callbacks_test() {
       ],
       [],
       [],
+      [],
     )
   let assert Ok(source) = preview.to_slint(form)
   string.contains(source, "export component CampyPreview inherits Window")
@@ -301,6 +304,7 @@ pub fn render_order_puts_containers_before_children_test() {
       ],
       [#("button-1", "panel-1")],
       [],
+      [],
     )
   campy_form.render_controls(form)
   |> list.map(fn(control) { control.id })
@@ -343,6 +347,7 @@ pub fn set_parent_refuses_cycles_and_missing_parents_test() {
       ],
       [#("panel-2", "panel-1")],
       [],
+      [],
     )
   let next = campy_form.set_parent(form, "panel-1", "panel-2")
   campy_form.parent_of(next, "panel-1") |> should.equal("")
@@ -376,10 +381,11 @@ pub fn aligned_controls_follow_the_window_test() {
       ],
       [],
       [#("button-1", campy_form.Bottom)],
+      [],
     )
   let assert Ok(source) = preview.to_slint(form)
-  string.contains(source, "y: parent.height - 30px") |> should.be_true
-  string.contains(source, "width: parent.width") |> should.be_true
+  string.contains(source, "x: 0px; y: 270px; width: 400px; height: 30px")
+  |> should.be_true
 }
 
 pub fn project_roundtrip_preserves_modules_test() {
@@ -388,7 +394,7 @@ pub fn project_roundtrip_preserves_modules_test() {
   let assert Ok(saved) = project.save(original, path)
   saved.path |> should.equal(path)
   let assert Ok(loaded) = project.load(path)
-  loaded.version |> should.equal(5)
+  loaded.version |> should.equal(6)
   loaded.title |> should.equal("Campy")
   loaded.modules
   |> list.map(fn(module) { module.name })
@@ -444,4 +450,116 @@ pub fn form_defaults_are_sane_test() {
   form.width |> should.equal(640)
   int.to_string(form.height) |> should.equal("420")
   form.controls |> should.equal([])
+}
+
+pub fn container_layout_arranges_children_test() {
+  let form =
+    campy_form.Form(
+      "campy.form",
+      "Panels",
+      400,
+      300,
+      campy_form.Free,
+      [
+        campy_form.Control(
+          "panel-1",
+          "panel1",
+          campy_form.Panel,
+          20,
+          20,
+          300,
+          200,
+          "P",
+          True,
+          True,
+        ),
+        campy_form.Control(
+          "a",
+          "a",
+          campy_form.Button,
+          0,
+          0,
+          50,
+          20,
+          "A",
+          True,
+          True,
+        ),
+        campy_form.Control(
+          "b",
+          "b",
+          campy_form.Button,
+          0,
+          0,
+          60,
+          30,
+          "B",
+          True,
+          True,
+        ),
+      ],
+      [#("a", "panel-1"), #("b", "panel-1")],
+      [],
+      [#("panel-1", campy_form.Column)],
+    )
+  let #(ax, ay, aw, ah) =
+    campy_form.bounds(
+      form,
+      campy_form.Control(
+        "a",
+        "a",
+        campy_form.Button,
+        0,
+        0,
+        50,
+        20,
+        "A",
+        True,
+        True,
+      ),
+    )
+  ax |> should.equal(28)
+  ay |> should.equal(28)
+  aw |> should.equal(284)
+  ah |> should.equal(20)
+  let #(bx, by, bw, bh) =
+    campy_form.bounds(
+      form,
+      campy_form.Control(
+        "b",
+        "b",
+        campy_form.Button,
+        0,
+        0,
+        60,
+        30,
+        "B",
+        True,
+        True,
+      ),
+    )
+  bx |> should.equal(28)
+  by |> should.equal(54)
+  bw |> should.equal(284)
+  bh |> should.equal(30)
+  let row = campy_form.set_layout_for(form, "panel-1", campy_form.Row)
+  let #(bx2, _, bw2, bh2) =
+    campy_form.bounds(
+      row,
+      campy_form.Control(
+        "b",
+        "b",
+        campy_form.Button,
+        0,
+        0,
+        60,
+        30,
+        "B",
+        True,
+        True,
+      ),
+    )
+  bx2 |> should.equal(84)
+  bw2 |> should.equal(60)
+  bh2 |> should.equal(184)
 }

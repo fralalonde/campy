@@ -95,6 +95,12 @@ pub type State {
     font_size: Int,
     scheme: Scheme,
     settings_open: Bool,
+    selected_project: Bool,
+    project_dialog_open: Bool,
+    context_open: Bool,
+    context_target: String,
+    context_x: Int,
+    context_y: Int,
     agent_open: Bool,
     mcp_enabled: Bool,
     mcp_port: Int,
@@ -106,7 +112,6 @@ pub type State {
     drop_x: Int,
     rect: #(Int, Int, Int, Int),
     console: List(String),
-    console_tab: Bool,
     window_positions: List(#(String, #(Int, Int))),
     status: String,
   )
@@ -153,6 +158,12 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     font_size: 13,
     scheme: Dark,
     settings_open: False,
+    selected_project: False,
+    project_dialog_open: False,
+    context_open: False,
+    context_target: "",
+    context_x: 0,
+    context_y: 0,
     agent_open: False,
     mcp_enabled: False,
     mcp_port: 7817,
@@ -164,7 +175,6 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     drop_x: 0,
     rect: #(0, 0, 0, 0),
     console: [],
-    console_tab: False,
     window_positions: [],
     status: "Ready",
   )
@@ -273,14 +283,25 @@ fn with_project(state: State, workspace: Workspace, project: Project) -> State {
     scheme: state.scheme,
     clipboard: state.clipboard,
     preview: state.preview,
-    status: "Switched to " <> project.title,
+    selected_project: True,
+    status: "Project · " <> project.title,
   )
 }
 
 pub fn switch_project(state: State, path: String) -> State {
   case workspace.find(state.workspace, path) {
     None -> status(state, "Project not found in the workspace")
-    Some(target) if target.path == state.project.path -> state
+    Some(target) if target.path == state.project.path ->
+      State(
+        ..state,
+        selected: None,
+        selection: [],
+        selected_project: True,
+        active_handler: None,
+        highlight: None,
+        editing: None,
+        status: "Project · " <> target.title,
+      )
     Some(target) -> {
       let ws = workspace.update_active(state.workspace, state.project)
       with_project(state, ws, target)
@@ -375,6 +396,7 @@ pub fn open_module(state: State, id: String) -> State {
         view: FormView,
         selected: None,
         selection: [],
+        selected_project: False,
         active_handler: None,
         highlight: None,
         editing: None,
@@ -395,6 +417,7 @@ pub fn activate_module(state: State, id: String) -> State {
         opened: list.unique([id, ..state.opened]),
         selected: None,
         selection: [],
+        selected_project: False,
         active_handler: None,
         highlight: None,
         editing: None,
@@ -489,6 +512,7 @@ pub fn add(state: State, kind: Kind) -> State {
           ..next,
           selected: Some(control.id),
           selection: [control.id],
+          selected_project: False,
           tab: Properties,
           status: "Added " <> campy_form.kind_label(kind),
         ),
@@ -532,6 +556,7 @@ pub fn select(state: State, id: String) -> State {
         ..state,
         selected: None,
         selection: [],
+        selected_project: False,
         active_handler: None,
         highlight: None,
         editing: None,
@@ -545,6 +570,7 @@ pub fn select(state: State, id: String) -> State {
                 ..state,
                 selected: Some(id),
                 selection: [id],
+                selected_project: False,
                 tab: Properties,
                 active_handler: None,
                 highlight: None,
@@ -589,6 +615,7 @@ pub fn toggle_select(state: State, id: String) -> State {
                 ..state,
                 selected: Some(id),
                 selection: list.append(state.selection, [id]),
+                selected_project: False,
                 tab: Properties,
                 active_handler: None,
                 highlight: None,
@@ -1050,6 +1077,23 @@ pub fn set_layout(state: State, layout: campy_form.Layout) -> State {
   }
 }
 
+pub fn set_container_layout(state: State, layout: campy_form.Layout) -> State {
+  case selected_control(state), active_form(state) {
+    Some(control), Some(_) ->
+      case campy_form.accepts_children(control.kind) {
+        True ->
+          commit(
+            state,
+            update_active_form(state, fn(form) {
+              campy_form.set_layout_for(form, control.id, layout)
+            }),
+          )
+        False -> state
+      }
+    _, _ -> state
+  }
+}
+
 pub fn set_align(state: State, align: campy_form.Align) -> State {
   case state.selected, active_form(state) {
     Some(id), Some(form) ->
@@ -1183,6 +1227,60 @@ pub fn set_settings_open(state: State, open: Bool) -> State {
   State(..state, settings_open: open)
 }
 
+pub fn open_context_menu(state: State, id: String) -> State {
+  let picked = case id {
+    "" -> select(state, "")
+    _ -> select(state, id)
+  }
+  let #(x, y) = case id, active_form(state) {
+    "", _ -> #(8, 8)
+    _, Some(form) ->
+      case campy_form.find_control(form, id) {
+        Some(control) -> {
+          let #(cx, cy, _, _) = campy_form.bounds(form, control)
+          #(cx + 8, cy + 8)
+        }
+        None -> #(8, 8)
+      }
+    _, None -> #(8, 8)
+  }
+  State(
+    ..picked,
+    context_open: True,
+    context_target: id,
+    context_x: x,
+    context_y: y,
+  )
+}
+
+pub fn close_context_menu(state: State) -> State {
+  State(..state, context_open: False, context_target: "")
+}
+
+pub fn set_project_dialog_open(state: State, open: Bool) -> State {
+  State(..state, project_dialog_open: open)
+}
+
+pub fn commit_project_field(
+  state: State,
+  field: String,
+  value: String,
+) -> State {
+  case field {
+    "title" -> {
+      let updated =
+        State(
+          ..state,
+          project: project.Project(..state.project, title: value),
+          status: "Project title updated",
+        )
+      let ws = workspace.update_active(updated.workspace, updated.project)
+      commit(state, State(..updated, workspace: ws))
+    }
+    _ -> state
+  }
+}
+
 pub fn set_agent_open(state: State, open: Bool) -> State {
   State(..state, agent_open: open)
 }
@@ -1197,13 +1295,13 @@ pub fn set_mcp(state: State, enabled: Bool, status: String) -> State {
 
 pub fn window_position(state: State) -> #(Int, Int) {
   case active_module(state) {
-    None -> #(32, 40)
+    None -> #(32, 120)
     Some(module) ->
       case
         list.find(state.window_positions, fn(entry) { entry.0 == module.id })
       {
         Ok(entry) -> entry.1
-        Error(_) -> #(32, 40)
+        Error(_) -> #(32, 120)
       }
   }
 }
@@ -1406,10 +1504,6 @@ pub fn clear_console(state: State) -> State {
   State(..state, console: [])
 }
 
-pub fn set_console_tab(state: State, open: Bool) -> State {
-  State(..state, console_tab: open)
-}
-
 pub fn console_input(state: State, text: String) -> State {
   let next = log_console(state, "> " <> text)
   let next = case state.preview {
@@ -1504,6 +1598,7 @@ pub fn select_frame(state: State) -> State {
         ..state,
         selected: primary,
         selection: picked,
+        selected_project: False,
         active_handler: None,
         highlight: None,
         editing: None,
@@ -1553,6 +1648,7 @@ pub fn place_component(state: State) -> State {
           ..next,
           selected: Some(control.id),
           selection: [control.id],
+          selected_project: False,
           tab: Properties,
           pending_kind: None,
           drop_active: False,
@@ -1574,12 +1670,14 @@ pub fn set_drop_x(state: State, value: Int) -> State {
 
 pub fn update_drop(state: State, y: Int) -> State {
   case selected_control(state), active_form(state) {
-    Some(control), Some(form) ->
-      State(
-        ..state,
-        drop_active: True,
-        drop_candidate: drop_target_at(form, control, state.drop_x, y),
-      )
+    Some(control), Some(form) -> {
+      let target = drop_target_at(form, control, state.drop_x, y)
+      let changed = target != campy_form.parent_of(form, control.id)
+      State(..state, drop_active: changed, drop_candidate: case changed {
+        True -> target
+        False -> ""
+      })
+    }
     _, _ -> state
   }
 }
@@ -1592,21 +1690,25 @@ pub fn selected_control(state: State) -> Option(Control) {
 }
 
 pub fn selection_label(state: State) -> String {
-  case selected_control(state) {
-    Some(control) ->
-      case list.length(state.selection) {
-        1 -> campy_form.kind_label(control.kind) <> " · " <> control.name
-        count ->
-          int.to_string(count)
-          <> " selected · "
-          <> campy_form.kind_label(control.kind)
-          <> " · "
-          <> control.name
-      }
-    None ->
-      case active_form(state) {
-        Some(form) -> "Window · " <> form.title
-        None -> "Window"
+  case state.selected_project {
+    True -> "Project · " <> state.project.title
+    False ->
+      case selected_control(state) {
+        Some(control) ->
+          case list.length(state.selection) {
+            1 -> campy_form.kind_label(control.kind) <> " · " <> control.name
+            count ->
+              int.to_string(count)
+              <> " selected · "
+              <> campy_form.kind_label(control.kind)
+              <> " · "
+              <> control.name
+          }
+        None ->
+          case active_form(state) {
+            Some(form) -> "Window · " <> form.title
+            None -> "Window"
+          }
       }
   }
 }

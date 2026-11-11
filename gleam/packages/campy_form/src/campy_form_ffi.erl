@@ -23,7 +23,11 @@ load_workspace(Path) ->
         {ok, Binary} ->
             try binary_to_term(Binary, [safe]) of
                 {workspace, 1, Projects, Active, WPath} when is_list(Projects) ->
-                    {ok, {workspace, 1, Projects, Active, WPath}};
+                    Upgraded = [case upgrade(Project) of
+                                    {ok, Next} -> Next;
+                                    error -> Project
+                                end || Project <- Projects],
+                    {ok, {workspace, 1, Upgraded, Active, WPath}};
                 _ ->
                     {error, <<"Unsupported workspace format">>}
             catch
@@ -53,17 +57,20 @@ load_project(Path) ->
     end.
 
 %% v1: single form/source. v2: modules. v3: form layout. v4: parent map for
-%% container adoption. v5: per-control alignment. Older files upgrade to v5.
+%% container adoption. v5: per-control alignment. v6: per-container layouts.
+%% Older files upgrade to v6.
 upgrade({project, 1, Form, Source, Path}) ->
-    {ok, {project, 5, <<"Campy">>,
+    {ok, {project, 6, <<"Campy">>,
           [{module, <<"main">>, <<"Main">>, upgrade_v1_form(Form), Source}], Path}};
 upgrade({project, 2, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 5, Title, [upgrade_module(Module, v2) || Module <- Modules], Path}};
+    {ok, {project, 6, Title, [upgrade_module(Module, v2) || Module <- Modules], Path}};
 upgrade({project, 3, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 5, Title, [upgrade_module(Module, v3) || Module <- Modules], Path}};
+    {ok, {project, 6, Title, [upgrade_module(Module, v3) || Module <- Modules], Path}};
 upgrade({project, 4, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 5, Title, [upgrade_module(Module, v4) || Module <- Modules], Path}};
-upgrade({project, 5, _Title, Modules, _Path} = Project) when is_list(Modules) ->
+    {ok, {project, 6, Title, [upgrade_module(Module, v4) || Module <- Modules], Path}};
+upgrade({project, 5, Title, Modules, Path}) when is_list(Modules) ->
+    {ok, {project, 6, Title, [upgrade_module(Module, v5) || Module <- Modules], Path}};
+upgrade({project, 6, _Title, Modules, _Path} = Project) when is_list(Modules) ->
     {ok, Project};
 upgrade(_) ->
     error.
@@ -75,12 +82,14 @@ upgrade_v1_form(Form) ->
     upgrade_form(Form, v2).
 
 upgrade_form({form, Id, Title, Width, Height, Controls}, v2) ->
-    {form, Id, Title, Width, Height, 'free', Controls, [], []};
+    {form, Id, Title, Width, Height, 'free', Controls, [], [], []};
 upgrade_form({form, Id, Title, Width, Height, Layout, Controls}, v3) ->
-    {form, Id, Title, Width, Height, Layout, Controls, [], []};
+    {form, Id, Title, Width, Height, Layout, Controls, [], [], []};
 upgrade_form({form, Id, Title, Width, Height, Layout, Controls, Parents}, v4) ->
-    {form, Id, Title, Width, Height, Layout, Controls, Parents, []};
-upgrade_form({form, _, _, _, _, _, _, _, _} = Form, _Version) ->
+    {form, Id, Title, Width, Height, Layout, Controls, Parents, [], []};
+upgrade_form({form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns}, v5) ->
+    {form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, []};
+upgrade_form({form, _, _, _, _, _, _, _, _, _} = Form, _Version) ->
     Form.
 
 resolve(Path) ->

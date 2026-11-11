@@ -96,22 +96,23 @@ and the form metadata derive from this catalog; rendering targets Slint's
 widget model where one exists (LCL properties are mapped to Slint semantics).
 
 `campy_form` owns the designer model (a flat list of absolutely positioned
-controls plus a parent map for adoption and an alignment map), handler-name
-derivation and stub generation, the versioned project codec (v5), the workspace
-codec (v1), and the standalone form-window emitter. Panels and the window root accept children; new/pasted controls are
+controls plus a parent map for adoption, an alignment map, and per-container
+layouts), handler-name derivation and stub generation, the versioned project
+codec (v6), the workspace codec (v1), and the standalone form-window emitter. Panels and the window root accept children; new/pasted controls are
 adopted by the selected accepting component, its first accepting ancestor, or the
 window. Copy/cut/paste snapshots a whole subtree and re-keys it on paste. A
 project is a set of modules, each with one form and its handler source; Campy
 opens its own project file (whose first module is the Cat Café demo) and creates
 it on first run.
 
-`campy_ide/ide_ui` renders the whole IDE shell — menu bar, component-palette
-ListView, workspace/project navigator, module navigator, tabbed module editor,
-object inspector, code view, generated-Slint view, and settings dialog — as one
-interpreted Slint component per structure. A single top-right button switches the editor between the form and
-the handler code; the form editor's bottom tabs switch between the actual design,
-the generated Slint source, and the **Console**. The component palette is a
-horizontal pictogram bar above the workspace. The window uses a preferred (not fixed) size, so
+`campy_ide/ide_ui` renders the whole IDE shell — one-row menus/palette/Run
+controls, Projects navigator, module navigator, tabbed module editor, object
+inspector, code view, generated-Slint view, console pane, and settings/project
+dialogs — as one interpreted Slint component per structure. A single top-right
+button switches the editor between the form and the handler code; the form
+editor's bottom tabs switch between the actual design and the generated Slint
+source. The CCL palette shares the top row with Run/Stop and the arrow/box
+component selector. A separate console pane sits below the editor canvas. The window uses a preferred (not fixed) size, so
 the window manager can resize and maximize it. Every panel is data-driven and
 every interaction returns through the generic callback channel, so the IDE uses
 exactly the same bridge as a designed app. Choosing the window (clicking the
@@ -183,21 +184,24 @@ text. It is disabled by default and started/stopped from Settings → Agent.
 Layout is part of the form: **Free** uses absolute geometry (drag moves and any
 of the eight corner/side handles resize; the UI tracks the gesture locally and
 sends the deltas once on release), while **Column**/**Row** wrap the control
-model in Slint `VerticalLayout`/`HorizontalLayout`. A move drop re-parents the
-control to the smallest accepting panel under its center (or to the window when
-dropped outside); `render_controls` sorts containers before their children so
-adopted controls draw above their panel. Free controls may also declare an
-LCL-style **alignment** (Top/Bottom/Left/Right/Client); the preview emits Slint
-bindings to the parent's width/height, while the designer resolves the same
-geometry from the form size. Column/Row layouts take precedence over alignment. In layout modes the host sends no geometry
-at all, so resizing the window reflows controls entirely in-process.
+model in Slint `VerticalLayout`/`HorizontalLayout`. Panels and group boxes can
+also choose Free/Column/Row for their direct children; the host resolves those
+bounds. A move drop re-parents the control to the smallest accepting panel under
+its center (or to the window when dropped outside), and only highlights when
+the parent would change; `render_controls` sorts containers before their
+children so adopted controls draw above their panel. Free controls may also
+declare an LCL-style **alignment** (Top/Bottom/Left/Right/Client), relative to
+the parent container (or the window at the root); designer and preview resolve
+the same geometry. Container layouts take precedence over alignment. The Free
+canvas uses a contrasting background and light grid, and module-window moves and
+resizes show an outline preview before committing on release.
 
 The inspector edits the active module's form; events create or open a handler
 stub in that module's source, and the code view displays the highlighted source
 or edits one handler at a time. The Settings → Editor dialog changes the code
 font family/size and the color scheme. Project files are compressed, versioned
-Erlang terms validated on load; v1 (single form), v2 (modules), and v3 (layout)
-files upgrade to v5 (parent and alignment maps). Cargo builds use
+Erlang terms validated on load; v1 (single form), v2 (modules), v3 (layout),
+v4 (parent map), and v5 (alignment) files upgrade to v6 (per-container layouts). Cargo builds use
 `scripts/cargo.sh`, which selects the compatible glibc toolchain when installed
 and avoids producing a NIF that requires a newer glibc than the runtime. The selected component can be
 removed with the inspector trashcan or the Delete key; both go through the

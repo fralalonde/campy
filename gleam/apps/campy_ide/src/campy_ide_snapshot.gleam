@@ -6,6 +6,7 @@ import campy_form/project
 import campy_ide/ide_ui
 import campy_ide/live_preview_ui
 import campy_ide/state
+import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{Some}
@@ -20,6 +21,7 @@ fn generated_path(name: String) -> String
 pub fn main() {
   let model = state.initial(project.campy())
   let assert Ok(shell) = ide_ui.to_slint(model)
+
   let assert Ok(session) = bridge.open_session()
   let assert Ok(_) = bridge.submit(session, bridge.LoadUi(1, shell))
   wait_for(1, "ui-loaded", "shell")
@@ -100,8 +102,8 @@ pub fn main() {
     model
     |> state.select("pet-button")
     |> state.begin_drag
-    |> state.set_drop_x(300)
-    |> state.update_drop(300)
+    |> state.set_drop_x(700)
+    |> state.update_drop(10)
   let last = apply(session, ide_ui.snapshot(dropping), last)
   snapshot(session, "ide-drop-target.png")
 
@@ -119,12 +121,23 @@ pub fn main() {
 
   let console =
     model
-    |> state.set_console_tab(True)
     |> state.log_console("$ campy demo")
     |> state.log_console("App ready")
     |> state.log_console("Event: pet_button_clicked")
   let last = apply(session, ide_ui.snapshot(console), last)
   snapshot(session, "ide-console.png")
+
+  let context = state.open_context_menu(model, "pet-button")
+  let last = apply(session, ide_ui.snapshot(context), last)
+  snapshot(session, "ide-context.png")
+
+  let project_dialog = state.set_project_dialog_open(model, True)
+  let last = apply(session, ide_ui.snapshot(project_dialog), last)
+  snapshot(session, "ide-project-dialog.png")
+
+  let welcome = state.open_module(model, "welcome")
+  let last = apply(session, ide_ui.snapshot(welcome), last)
+  snapshot(session, "ide-welcome.png")
 
   let agent = state.set_agent_open(model, True)
   let last = apply(session, ide_ui.snapshot(agent), last)

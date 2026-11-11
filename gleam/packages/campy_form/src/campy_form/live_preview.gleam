@@ -1,4 +1,4 @@
-import campy_form.{type Form, type Layout, Free, NoAlign}
+import campy_form.{type Form, type Layout, Free}
 import gleam/int
 import gleam/list
 
@@ -40,25 +40,7 @@ pub fn snapshot(form: Form) -> Snapshot {
     form.layout,
     list.map(campy_form.render_controls(form), fn(control) {
       let #(x, y, w, h) = case form.layout {
-        Free ->
-          case campy_form.align_of(form, control.id) {
-            NoAlign -> #(control.x, control.y, control.width, control.height)
-            campy_form.Top -> #(0, 0, form.width, control.height)
-            campy_form.Bottom -> #(
-              0,
-              form.height - control.height,
-              form.width,
-              control.height,
-            )
-            campy_form.Left -> #(0, 0, control.width, form.height)
-            campy_form.Right -> #(
-              form.width - control.width,
-              0,
-              control.width,
-              form.height,
-            )
-            campy_form.Client -> #(0, 0, form.width, form.height)
-          }
+        Free -> campy_form.bounds(form, control)
         campy_form.Column | campy_form.Row -> #(
           control.x,
           control.y,
@@ -172,6 +154,13 @@ fn component() -> String {
   <> "  if data.kind == \"progress\": ProgressIndicator { x: 0; y: (parent.height - 6px) / 2; width: parent.width; height: 6px; progress: data.value / 100.0; }\n"
   <> "  if data.kind == \"panel\" || data.kind == \"group\": Text { x: 8px; y: 6px; text: data.text; color: Palette.foreground; font-weight: 600; }\n"
   <> "  if data.kind == \"picture\": Image { x: 0; y: 0; width: parent.width; height: parent.height; source: data.picture; image-fit: contain; }\n"
+  <> "  if data.kind == \"menu\": menu-area := ContextMenuArea {\n"
+  <> "    Button { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text + \"  ▾\"; enabled: data.enabled; clicked => { menu-area.show({ x: 0px, y: self.height }); } }\n"
+  <> "    Menu {\n"
+  <> "      MenuItem { title: \"Item 1\"; activated => { root.event(data.id + \":selected\"); } }\n"
+  <> "      MenuItem { title: \"Item 2\"; activated => { root.event(data.id + \":selected\"); } }\n"
+  <> "    }\n"
+  <> "  }\n"
   <> "}\n\n"
 }
 

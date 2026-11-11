@@ -63,6 +63,17 @@ pub fn all() -> List(Component) {
       Some(Event("clicked", "OnClick")),
     ),
     Component(
+      "menu",
+      "Menu",
+      "☰",
+      "Common",
+      200,
+      28,
+      "File",
+      False,
+      Some(Event("selected", "OnSelect")),
+    ),
+    Component(
       "checkbox",
       "Check box",
       "☑",

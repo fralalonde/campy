@@ -1,6 +1,6 @@
 import campy_form.{
-  type Form, Button, CheckBox, ComboBox, EditBox, Label, ListBox, Memo, Panel,
-  Picture, Progress, RadioButton, Slider,
+  type Form, Button, CheckBox, ComboBox, EditBox, Label, ListBox, Memo, Menu,
+  Panel, Picture, Progress, RadioButton, Slider,
 }
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -16,7 +16,7 @@ pub type Project {
   Project(version: Int, title: String, modules: List(Module), path: String)
 }
 
-pub const version = 5
+pub const version = 6
 
 pub const default_path = "projects/campy.campy"
 
@@ -152,6 +152,7 @@ fn cat_cafe_form() -> Form {
       #("pet-button", "panel-1"),
       #("feed-button", "panel-1"),
     ],
+    [],
     [],
   )
 }
@@ -321,6 +322,7 @@ fn widgets_form() -> Form {
       #("button-1", "panel-1"),
     ],
     [#("header", campy_form.Top), #("footer", campy_form.Bottom)],
+    [],
   )
 }
 
@@ -341,11 +343,23 @@ fn welcome_form() -> Form {
     campy_form.Free,
     [
       campy_form.Control(
+        "menu-1",
+        "menu1",
+        Menu,
+        24,
+        16,
+        180,
+        28,
+        "File",
+        True,
+        True,
+      ),
+      campy_form.Control(
         "label-1",
         "label1",
         Label,
         24,
-        24,
+        60,
         300,
         24,
         "Welcome to Campy",
@@ -357,7 +371,7 @@ fn welcome_form() -> Form {
         "edit1",
         EditBox,
         24,
-        64,
+        100,
         240,
         32,
         "",
@@ -369,7 +383,7 @@ fn welcome_form() -> Form {
         "button1",
         Button,
         24,
-        112,
+        148,
         110,
         32,
         "Start",
@@ -379,11 +393,12 @@ fn welcome_form() -> Form {
     ],
     [],
     [],
+    [],
   )
 }
 
 fn welcome_source() -> String {
-  "// Campy event handlers for \"Welcome\".\n\npub fn button1_clicked() -> Nil {\n  // TODO: implement the welcome action.\n  Nil\n}\n"
+  "// Campy event handlers for \"Welcome\".\n\npub fn menu1_selected() -> Nil {\n  // TODO: implement the menu action.\n  Nil\n}\n\npub fn button1_clicked() -> Nil {\n  // TODO: implement the welcome action.\n  Nil\n}\n"
 }
 
 fn search_form() -> Form {
@@ -431,6 +446,7 @@ fn search_form() -> Form {
         True,
       ),
     ],
+    [],
     [],
     [],
   )
