@@ -1,0 +1,1382 @@
+import campy_bridge as bridge
+import campy_ccl
+import campy_form.{type Form}
+import campy_form/preview.{quote}
+import campy_form/project
+import campy_form/syntax
+import campy_ide/state.{
+  type Popup, type Scheme, type State, CodeView, Dark, Edit, Editing, FormView,
+  Light, NoPopup, OpenFile, PickPicture, SaveAs, Solarized, View, active_form,
+  active_module, active_name, can_redo, can_undo, is_events_tab, selected_align,
+  selected_control, selection_label,
+}
+import gleam/int
+import gleam/list
+import gleam/option.{type Option, None, Some}
+import gleam/string
+
+// The IDE shell is emitted once. Scalar state and theme colors are root
+// properties; modules, tabs, canvas controls, palette rows, and code lines are
+// Slint models. Nothing reloads the window after startup.
+pub type Update {
+  TextUpdate(name: String, value: String)
+  BoolUpdate(name: String, value: Bool)
+  IntUpdate(name: String, value: Int)
+  ScalarIntUpdate(name: String, value: Int)
+  ColorUpdate(name: String, value: String)
+}
+
+pub type ProjectItem {
+  ProjectItem(id: String, title: String, active: Bool)
+}
+
+pub type ModuleItem {
+  ModuleItem(id: String, name: String, active: Bool)
+}
+
+pub type TabItem {
+  TabItem(id: String, name: String, active: Bool)
+}
+
+pub type ControlItem {
+  ControlItem(
+    id: String,
+    kind: String,
+    text: String,
+    x: Int,
+    y: Int,
+    w: Int,
+    h: Int,
+    enabled: Bool,
+    visible: Bool,
+    selected: Bool,
+    picture: String,
+    value: Int,
+  )
+}
+
+pub type TokenItem {
+  TokenItem(text: String, kind: String)
+}
+
+pub type LineItem {
+  LineItem(tokens: List(TokenItem))
+}
+
+pub type Snapshot {
+  Snapshot(
+    scalars: List(Update),
+    projects: List(ProjectItem),
+    modules: List(ModuleItem),
+    tabs: List(TabItem),
+    controls: List(ControlItem),
+    code: List(LineItem),
+  )
+}
+
+pub fn snapshot(model: State) -> Snapshot {
+  Snapshot(
+    scalars: scalars(model),
+    projects: list.map(model.workspace.projects, fn(project) {
+      ProjectItem(
+        project.path,
+        project.title,
+        project.path == model.project.path,
+      )
+    }),
+    modules: list.map(model.project.modules, fn(module) {
+      ModuleItem(module.id, module.name, module.id == model.active)
+    }),
+    tabs: tabs(model),
+    controls: controls(model),
+    code: code(model),
+  )
+}
+
+// After the initial LoadUi the shell already has the scalar defaults; only the
+// models need to be pushed.
+pub fn without_models(snapshot: Snapshot) -> Snapshot {
+  Snapshot(
+    ..snapshot,
+    projects: [],
+    modules: [],
+    tabs: [],
+    controls: [],
+    code: [],
+  )
+}
+
+// Force the next sync to send every scalar and model (used after a UI reload).
+pub fn empty_snapshot() -> Snapshot {
+  Snapshot(
+    scalars: [],
+    projects: [],
+    modules: [],
+    tabs: [],
+    controls: [],
+    code: [],
+  )
+}
+
+const fonts = [
+  "monospace", "DejaVu Sans Mono", "Liberation Mono", "Courier New",
+  "Noto Sans Mono",
+]
+
+const sizes = ["11", "12", "13", "14", "16", "18", "20"]
+
+// ---------------------------------------------------------------------------
+// Values
+// ---------------------------------------------------------------------------
+
+fn scalars(model: State) -> List(Update) {
+  let form = active_form(model)
+  let selected = selected_control(model)
+  let #(name, text, x, y, w, h, enabled, visible) = case selected {
+    Some(control) -> #(
+      control.name,
+      control.text,
+      int.to_string(control.x),
+      int.to_string(control.y),
+      int.to_string(control.width),
+      int.to_string(control.height),
+      control.enabled,
+      control.visible,
+    )
+    None -> #("", "", "", "", "", "", False, False)
+  }
+  let #(title, form_w, form_h) = case form {
+    Some(value) -> #(
+      value.title,
+      int.to_string(value.width),
+      int.to_string(value.height),
+    )
+    None -> #("", "", "")
+  }
+  let #(event_label, event_handler, has_events) = case selected {
+    Some(control) ->
+      case campy_form.handler_name(control) {
+        Some(handler) -> #(campy_form.event_label(control.kind), handler, True)
+        None -> #("", "", False)
+      }
+    None -> #("", "", False)
+  }
+  let selected_kind = case selected {
+    Some(control) -> campy_form.kind_key(control.kind)
+    None -> ""
+  }
+  let slint_source = case form {
+    Some(value) ->
+      case preview.to_slint(value) {
+        Ok(source) -> source
+        Error(error) -> "// Generated Slint unavailable: " <> error
+      }
+    None -> "// No module"
+  }
+  list.append(
+    [
+      TextUpdate("status", model.status),
+      TextUpdate("path-text", model.project.path),
+      BoolUpdate("running", is_running(model)),
+      BoolUpdate("code-view", is_code_view(model)),
+      BoolUpdate("events-tab", is_events_tab(model)),
+      BoolUpdate("slint-tab", is_slint_tab(model)),
+      BoolUpdate("layout-free", layout_is(form, campy_form.Free)),
+      BoolUpdate("layout-column", layout_is(form, campy_form.Column)),
+      BoolUpdate("layout-row", layout_is(form, campy_form.Row)),
+      BoolUpdate("has-selection", is_some(selected)),
+      TextUpdate("insp-selection", selection_label(model)),
+      TextUpdate("selected-kind", selected_kind),
+      TextUpdate("canvas-label", canvas_label(form)),
+      TextUpdate("module-count", module_count_text(model)),
+      IntUpdate("canvas-w", form_width(form)),
+      IntUpdate("canvas-h", form_height(form)),
+      BoolUpdate("code-editing", is_editing_code(model)),
+      BoolUpdate("has-handler", is_some(model.active_handler)),
+      TextUpdate("code-handler", code_handler_label(model)),
+      TextUpdate("code-text", code_text(model)),
+      IntUpdate("code-scroll", highlight_scroll(model)),
+      IntUpdate("hl-top", highlight_top(model)),
+      IntUpdate("hl-height", highlight_height(model)),
+      IntUpdate("code-height", code_height(model)),
+      TextUpdate("slint-source", slint_source),
+      TextUpdate("popup-path", model.project.path),
+      TextUpdate("popup-title", popup_title(model.popup)),
+      TextUpdate("popup-action", popup_action(model.popup)),
+      BoolUpdate("popup-open", popup_open(model.popup)),
+      BoolUpdate("settings-open", model.settings_open),
+      BoolUpdate("can-undo", can_undo(model)),
+      BoolUpdate("can-redo", can_redo(model)),
+      BoolUpdate(
+        "can-delete-project",
+        list.length(model.workspace.projects) > 1,
+      ),
+      BoolUpdate("dark-mode", is_dark_scheme(model.scheme)),
+      TextUpdate("editor-font", model.font),
+      IntUpdate("editor-font-size", model.font_size),
+      ScalarIntUpdate("font-index", index_of(fonts, model.font)),
+      ScalarIntUpdate(
+        "size-index",
+        index_of(sizes, int.to_string(model.font_size)),
+      ),
+      ScalarIntUpdate("scheme-index", scheme_index(model.scheme)),
+      ScalarIntUpdate("align-index", align_index(selected_align(model))),
+      TextUpdate("insp-name", name),
+      TextUpdate("insp-text", text),
+      TextUpdate("insp-x", x),
+      TextUpdate("insp-y", y),
+      TextUpdate("insp-w", w),
+      TextUpdate("insp-h", h),
+      BoolUpdate("insp-enabled", enabled),
+      BoolUpdate("insp-visible", visible),
+      TextUpdate("form-title", title),
+      TextUpdate("form-width", form_w),
+      TextUpdate("form-height", form_h),
+      TextUpdate("event-label", event_label),
+      TextUpdate("event-handler", event_handler),
+      BoolUpdate("has-events", has_events),
+    ],
+    theme_colors(model.scheme),
+  )
+}
+
+fn tabs(model: State) -> List(TabItem) {
+  list.filter_map(model.opened, fn(id) {
+    case project.find_module(model.project, id) {
+      Some(module) ->
+        Ok(TabItem(module.id, module.name, module.id == model.active))
+      None -> Error(Nil)
+    }
+  })
+}
+
+fn controls(model: State) -> List(ControlItem) {
+  case active_form(model) {
+    None -> []
+    Some(form) ->
+      list.map(form.controls, fn(control) {
+        let #(x, y, w, h) = case campy_form.align_of(form, control.id) {
+          campy_form.NoAlign -> #(
+            control.x,
+            control.y,
+            control.width,
+            control.height,
+          )
+          campy_form.Top -> #(0, 0, form.width, control.height)
+          campy_form.Bottom -> #(
+            0,
+            form.height - control.height,
+            form.width,
+            control.height,
+          )
+          campy_form.Left -> #(0, 0, control.width, form.height)
+          campy_form.Right -> #(
+            form.width - control.width,
+            0,
+            control.width,
+            form.height,
+          )
+          campy_form.Client -> #(0, 0, form.width, form.height)
+        }
+        ControlItem(
+          control.id,
+          campy_form.kind_key(control.kind),
+          control.text,
+          x,
+          y,
+          w,
+          h,
+          control.enabled,
+          control.visible,
+          model.selected == Some(control.id),
+          case control.kind {
+            campy_form.Picture -> control.text
+            _ -> ""
+          },
+          control_value(control),
+        )
+      })
+  }
+}
+
+fn code(model: State) -> List(LineItem) {
+  case active_module(model) {
+    None -> []
+    Some(module) ->
+      module.source
+      |> string.split("\n")
+      |> list.map(fn(line) {
+        LineItem(
+          list.map(syntax.tokenize(line), fn(token) {
+            case token {
+              syntax.Token(kind, text) -> TokenItem(text, token_kind(kind))
+            }
+          }),
+        )
+      })
+  }
+}
+
+fn token_kind(kind: syntax.Kind) -> String {
+  case kind {
+    syntax.Space -> "space"
+    syntax.Comment -> "comment"
+    syntax.Keyword -> "keyword"
+    syntax.Str -> "string"
+    syntax.Number -> "number"
+    syntax.TypeName -> "type"
+    syntax.Name -> "name"
+    syntax.Punct -> "punct"
+  }
+}
+
+fn theme_colors(scheme: Scheme) -> List(Update) {
+  let colors = case scheme {
+    Light -> [
+      #("theme-bg", "#f5f5f5"),
+      #("theme-fg", "#202020"),
+      #("theme-border", "#c8c8c8"),
+      #("theme-accent", "#0067c0"),
+      #("theme-tint", "#dce9f7"),
+      #("theme-surface", "#ffffff"),
+      #("code-bg", "#ffffff"),
+      #("code-comment", "#6a737d"),
+      #("code-keyword", "#a626a4"),
+      #("code-string", "#50a14f"),
+      #("code-number", "#986801"),
+      #("code-type", "#c18401"),
+      #("code-punct", "#0184bc"),
+      #("code-name", "#202020"),
+    ]
+    Solarized -> [
+      #("theme-bg", "#002b36"),
+      #("theme-fg", "#93a1a1"),
+      #("theme-border", "#073642"),
+      #("theme-accent", "#268bd2"),
+      #("theme-tint", "#073642"),
+      #("theme-surface", "#073642"),
+      #("code-bg", "#002b36"),
+      #("code-comment", "#586e75"),
+      #("code-keyword", "#859900"),
+      #("code-string", "#2aa198"),
+      #("code-number", "#d33682"),
+      #("code-type", "#b58900"),
+      #("code-punct", "#6c71c4"),
+      #("code-name", "#93a1a1"),
+    ]
+    Dark -> [
+      #("theme-bg", "#1e1e1e"),
+      #("theme-fg", "#e6e6e6"),
+      #("theme-border", "#3a3a3a"),
+      #("theme-accent", "#0078d4"),
+      #("theme-tint", "#1f3a5f"),
+      #("theme-surface", "#20242c"),
+      #("code-bg", "#282c34"),
+      #("code-comment", "#7f848e"),
+      #("code-keyword", "#c678dd"),
+      #("code-string", "#98c379"),
+      #("code-number", "#d19a66"),
+      #("code-type", "#e5c07b"),
+      #("code-punct", "#56b6c2"),
+      #("code-name", "#abb2bf"),
+    ]
+  }
+  list.map(colors, fn(entry) { ColorUpdate(entry.0, entry.1) })
+}
+
+// ---------------------------------------------------------------------------
+// Wire format
+// ---------------------------------------------------------------------------
+
+pub fn projects_wire(items: List(ProjectItem)) -> List(bridge.WireValue) {
+  list.map(items, fn(item) {
+    bridge.WireStruct([
+      #("id", bridge.WireText(item.id)),
+      #("title", bridge.WireText(item.title)),
+      #("active", bridge.WireBool(item.active)),
+    ])
+  })
+}
+
+pub fn modules_wire(items: List(ModuleItem)) -> List(bridge.WireValue) {
+  list.map(items, fn(item) {
+    bridge.WireStruct([
+      #("id", bridge.WireText(item.id)),
+      #("name", bridge.WireText(item.name)),
+      #("active", bridge.WireBool(item.active)),
+    ])
+  })
+}
+
+pub fn tabs_wire(items: List(TabItem)) -> List(bridge.WireValue) {
+  list.map(items, fn(item) {
+    bridge.WireStruct([
+      #("id", bridge.WireText(item.id)),
+      #("name", bridge.WireText(item.name)),
+      #("active", bridge.WireBool(item.active)),
+    ])
+  })
+}
+
+pub fn controls_wire(items: List(ControlItem)) -> List(bridge.WireValue) {
+  list.map(items, fn(item) {
+    bridge.WireStruct([
+      #("id", bridge.WireText(item.id)),
+      #("kind", bridge.WireText(item.kind)),
+      #("text", bridge.WireText(item.text)),
+      #("x", bridge.WireInt(item.x)),
+      #("y", bridge.WireInt(item.y)),
+      #("w", bridge.WireInt(item.w)),
+      #("h", bridge.WireInt(item.h)),
+      #("enabled", bridge.WireBool(item.enabled)),
+      #("visible", bridge.WireBool(item.visible)),
+      #("selected", bridge.WireBool(item.selected)),
+      #("picture", bridge.WireImage(item.picture)),
+      #("value", bridge.WireInt(item.value)),
+    ])
+  })
+}
+
+pub fn code_wire(items: List(LineItem)) -> List(bridge.WireValue) {
+  list.map(items, fn(item) {
+    bridge.WireStruct([
+      #(
+        "tokens",
+        bridge.WireList(
+          list.map(item.tokens, fn(token) {
+            bridge.WireStruct([
+              #("text", bridge.WireText(token.text)),
+              #("kind", bridge.WireText(token.kind)),
+            ])
+          }),
+        ),
+      ),
+    ])
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Scalar diffing
+// ---------------------------------------------------------------------------
+
+pub fn diff(previous: List(Update), next: List(Update)) -> List(Update) {
+  list.filter(next, fn(update) {
+    case
+      list.find(previous, fn(old) { update_name(old) == update_name(update) })
+    {
+      Ok(old) -> update_value(old) != update_value(update)
+      Error(_) -> True
+    }
+  })
+}
+
+pub fn update_name(update: Update) -> String {
+  case update {
+    TextUpdate(name, _) -> name
+    BoolUpdate(name, _) -> name
+    IntUpdate(name, _) -> name
+    ScalarIntUpdate(name, _) -> name
+    ColorUpdate(name, _) -> name
+  }
+}
+
+fn update_value(update: Update) -> String {
+  case update {
+    TextUpdate(_, value) -> "t" <> value
+    BoolUpdate(_, value) -> "b" <> bool(value)
+    IntUpdate(_, value) -> "i" <> int.to_string(value)
+    ScalarIntUpdate(_, value) -> "i" <> int.to_string(value)
+    ColorUpdate(_, value) -> "c" <> value
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Static shell
+// ---------------------------------------------------------------------------
+
+pub fn to_slint(model: State) -> Result(String, String) {
+  Ok(
+    "import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, ScrollView, Slider, TextEdit } from \"std-widgets.slint\";\n"
+    <> structs()
+    <> components()
+    <> "export component CampyPreview inherits Window {\n"
+    <> "  title: "
+    <> quote("Campy IDE — " <> model.project.title)
+    <> ";\n"
+    <> "  preferred-width: 1280px;\n"
+    <> "  preferred-height: 860px;\n"
+    <> "  min-width: 960px;\n"
+    <> "  min-height: 640px;\n"
+    <> "  in-out property <[ProjectItem]> project-items: [];\n"
+    <> "  in-out property <[ModuleItem]> module-items: [];\n"
+    <> "  in-out property <[TabItem]> tab-items: [];\n"
+    <> "  in-out property <[ControlItem]> control-items: [];\n"
+    <> "  in-out property <[LineItem]> code-lines: [];\n"
+    <> "  in-out property <[PaletteItem]> palette-items: "
+    <> palette_literal()
+    <> ";\n"
+    <> declarations(scalars(model))
+    <> "  init => { Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light; }\n"
+    <> "  changed dark-mode => { Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light; }\n"
+    <> callbacks()
+    <> "  forward-focus: key-handler;\n"
+    <> "  key-handler := FocusScope {\n"
+    <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
+    <> keybindings()
+    <> "    Rectangle { width: 100%; height: 100%; background: root.theme-bg; }\n"
+    <> "    VerticalLayout { width: 100%; height: 100%; spacing: 0px;\n"
+    <> menu_bar()
+    <> main_area()
+    <> "      Rectangle { height: 1px; background: theme-border; }\n"
+    <> status_bar()
+    <> "\n    }\n"
+    <> settings_overlay()
+    <> popup_overlay()
+    <> "  }\n"
+    <> "}\n",
+  )
+}
+
+fn structs() -> String {
+  "struct ProjectItem { id: string, title: string, active: bool }\n"
+  <> "struct ModuleItem { id: string, name: string, active: bool }\n"
+  <> "struct TabItem { id: string, name: string, active: bool }\n"
+  <> "struct ControlItem { id: string, kind: string, text: string, x: length, y: length, w: length, h: length, enabled: bool, visible: bool, selected: bool, picture: image, value: float }\n"
+  <> "struct TokenItem { text: string, kind: string }\n"
+  <> "struct LineItem { tokens: [TokenItem] }\n"
+  <> "struct PaletteItem { kind: string, label: string }\n"
+}
+
+fn components() -> String {
+  "component ControlView inherits Rectangle {\n"
+  <> "  in property <ControlItem> data;\n"
+  <> "  in property <bool> designing: false;\n"
+  <> "  in property <bool> free-layout: false;\n"
+  <> "  in property <color> theme-fg;\n"
+  <> "  in property <color> theme-accent;\n"
+  <> "  in property <color> theme-border;\n"
+  <> "  in property <color> theme-surface;\n"
+  <> "  callback select(string);\n"
+  <> "  callback move-x(int);\n"
+  <> "  callback move-y(int);\n"
+  <> "  callback resize-w(int);\n"
+  <> "  callback resize-h(int);\n"
+  <> "  property <length> drag-x: 0px;\n"
+  <> "  property <length> drag-y: 0px;\n"
+  <> "  property <length> resize-dw: 0px;\n"
+  <> "  property <length> resize-dh: 0px;\n"
+  <> "  property <bool> resizing: false;\n"
+  <> "  content := Rectangle {\n"
+  <> "    clip: true;\n"
+  <> "    x: free-layout ? drag-x : 0px;\n"
+  <> "    y: free-layout ? drag-y : 0px;\n"
+  <> "    width: free-layout ? data.w : parent.width;\n"
+  <> "    height: free-layout ? data.h : parent.height;\n"
+  <> "    border-width: data.selected ? 2px : (data.kind == \"label\" || data.kind == \"picture\" || data.kind == \"checkbox\" || data.kind == \"radio\" ? 0px : 1px);\n"
+  <> "    border-color: data.selected ? theme-accent : (data.kind == \"panel\" ? theme-border : #6a6a6a);\n"
+  <> "    background: data.kind == \"panel\" || data.kind == \"group\" ? theme-surface : transparent;\n"
+  <> "    border-radius: data.kind == \"panel\" ? 4px : 0px;\n"
+  <> "    opacity: data.visible ? 1 : 0.35;\n"
+  <> "    if data.kind == \"label\": Text { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; color: theme-fg; vertical-alignment: center; }\n"
+  <> "    if data.kind == \"edit\": LineEdit { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; enabled: data.enabled; }\n"
+  <> "    if data.kind == \"button\": Button { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; enabled: data.enabled; }\n"
+  <> "    if data.kind == \"list\": ListView { x: 0; y: 0; width: parent.width; height: parent.height;\n"
+  <> "      for item in [\"First item\", \"Second item\", \"Third item\", \"Fourth item\", \"Fifth item\"]: Rectangle { height: 26px;\n"
+  <> "        Text { x: 8px; y: 0; height: parent.height; text: item; color: theme-fg; vertical-alignment: center; }\n"
+  <> "      }\n"
+  <> "    }\n"
+  <> "    if data.kind == \"picture\": Image { x: 0; y: 0; width: parent.width; height: parent.height; source: data.picture; image-fit: contain; }\n
+    if data.kind == \"memo\": TextEdit { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; read-only: true; }\n
+    if data.kind == \"checkbox\": CheckBox { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; enabled: data.enabled; }\n
+    if data.kind == \"radio\": Rectangle { x: 0; y: (parent.height - 18px) / 2; width: 18px; height: 18px; border-radius: 9px; border-width: 1px; border-color: theme-fg; background: transparent; }\n
+    if data.kind == \"radio\": Rectangle { x: 5px; y: (parent.height - 8px) / 2; width: 8px; height: 8px; border-radius: 4px; background: theme-accent; }\n
+    if data.kind == \"radio\": Text { x: 26px; y: 0; height: parent.height; text: data.text; color: theme-fg; vertical-alignment: center; }\n
+    if data.kind == \"combo\": ComboBox { x: 0; y: 0; width: parent.width; height: parent.height; model: [\"First\", \"Second\", \"Third\"]; current-index: 0; enabled: data.enabled; }\n
+    if data.kind == \"slider\": Slider { x: 0; y: 0; width: parent.width; height: parent.height; minimum: 0.0; maximum: 100.0; value: data.value; enabled: data.enabled; }\n
+    if data.kind == \"progress\": ProgressIndicator { x: 0; y: (parent.height - 6px) / 2; width: parent.width; height: 6px; progress: data.value / 100.0; }\n"
+  <> "    if data.kind == \"panel\" || data.kind == \"group\": Text { x: 8px; y: 6px; text: data.text; color: theme-fg; font-weight: 600; }\n"
+  <> "  }\n"
+  <> "  if designing && free-layout: TouchArea {\n"
+  <> "    pointer-event(event) => {\n"
+  <> "      if (event.kind == PointerEventKind.down) { root.select(data.id); }\n"
+  <> "      if (event.kind == PointerEventKind.up) {\n"
+  <> "        if (drag-x != 0px || drag-y != 0px) {\n"
+  <> "          root.move-x(round(drag-x / 1px));\n"
+  <> "          root.move-y(round(drag-y / 1px));\n"
+  <> "        }\n"
+  <> "        drag-x = 0px; drag-y = 0px;\n"
+  <> "      }\n"
+  <> "    }\n"
+  <> "    moved => {\n"
+  <> "      if (self.pressed) {\n"
+  <> "        drag-x = self.mouse-x - self.pressed-x;\n"
+  <> "        drag-y = self.mouse-y - self.pressed-y;\n"
+  <> "      }\n"
+  <> "    }\n"
+  <> "  }\n"
+  <> "  if designing && !free-layout: TouchArea { clicked => { root.select(data.id); } }\n"
+  <> "  if designing && free-layout && data.selected: Rectangle {\n"
+  <> "    x: parent.width - 12px; y: parent.height - 12px; width: 12px; height: 12px;\n"
+  <> "    background: theme-accent; border-radius: 2px;\n"
+  <> "    TouchArea {\n"
+  <> "      pointer-event(event) => {\n"
+  <> "        if (event.kind == PointerEventKind.down) { resizing = true; }\n"
+  <> "        if (event.kind == PointerEventKind.up && resizing) {\n"
+  <> "          root.resize-w(round(resize-dw / 1px));\n"
+  <> "          root.resize-h(round(resize-dh / 1px));\n"
+  <> "          resizing = false; resize-dw = 0px; resize-dh = 0px;\n"
+  <> "        }\n"
+  <> "      }\n"
+  <> "      moved => {\n"
+  <> "        if (self.pressed) {\n"
+  <> "          resize-dw = self.mouse-x - self.pressed-x;\n"
+  <> "          resize-dh = self.mouse-y - self.pressed-y;\n"
+  <> "        }\n"
+  <> "      }\n"
+  <> "    }\n"
+  <> "  }\n"
+  <> "  if designing && free-layout && resizing: Rectangle {\n"
+  <> "    x: 0; y: 0; width: max(1px, data.w + resize-dw); height: max(1px, data.h + resize-dh);\n"
+  <> "    border-width: 1px; border-color: theme-accent; background: transparent;\n"
+  <> "  }\n"
+  <> "}\n"
+}
+
+fn palette_literal() -> String {
+  "["
+  <> string.join(
+    list.map(campy_ccl.all(), fn(component) {
+      "{ kind: "
+      <> quote(component.key)
+      <> ", label: "
+      <> quote(campy_ccl.palette_label(component))
+      <> " }"
+    }),
+    ", ",
+  )
+  <> "]"
+}
+
+fn declarations(values: List(Update)) -> String {
+  values |> list.map(declaration) |> string.concat
+}
+
+fn declaration(update: Update) -> String {
+  case update {
+    TextUpdate(name, value) ->
+      "  in-out property <string> " <> name <> ": " <> quote(value) <> ";\n"
+    BoolUpdate(name, value) ->
+      "  in-out property <bool> " <> name <> ": " <> bool(value) <> ";\n"
+    IntUpdate(name, value) ->
+      "  in-out property <length> "
+      <> name
+      <> ": "
+      <> int.to_string(value)
+      <> "px;\n"
+    ScalarIntUpdate(name, value) ->
+      "  in-out property <int> "
+      <> name
+      <> ": "
+      <> int.to_string(value)
+      <> ";\n"
+    ColorUpdate(name, value) ->
+      "  in-out property <color> " <> name <> ": " <> value <> ";\n"
+  }
+}
+
+fn callbacks() -> String {
+  "  callback file-new();\n"
+  <> "  callback file-new-module();\n"
+  <> "  callback file-open();\n"
+  <> "  callback file-save();\n"
+  <> "  callback file-save-as();\n"
+  <> "  callback file-quit();\n"
+  <> "  callback run-app();\n"
+  <> "  callback update-app();\n"
+  <> "  callback reload-code();\n"
+  <> "  callback stop-app();\n"
+  <> "  callback open-module(string);\n"
+  <> "  callback tab-module(string);\n"
+  <> "  callback close-module(string);\n"
+  <> "  callback new-module();\n"
+  <> "  callback switch-project(string);\n"
+  <> "  callback new-project();\n"
+  <> "  callback delete-project();\n"
+  <> "  callback toggle-view();\n"
+  <> "  callback view-form();\n"
+  <> "  callback view-code();\n"
+  <> "  callback show-ui();\n"
+  <> "  callback show-slint();\n"
+  <> "  callback add-component(string);\n"
+  <> "  callback copy-component();\n"
+  <> "  callback cut-component();\n"
+  <> "  callback paste-component();\n"
+  <> "  callback undo();\n"
+  <> "  callback redo();\n"
+  <> "  callback select(string);\n"
+  <> "  callback field-name(string);\n"
+  <> "  callback field-text(string);\n"
+  <> "  callback field-x(string);\n"
+  <> "  callback field-y(string);\n"
+  <> "  callback field-w(string);\n"
+  <> "  callback field-h(string);\n"
+  <> "  callback toggle-enabled(bool);\n"
+  <> "  callback toggle-visible(bool);\n"
+  <> "  callback field-title(string);\n"
+  <> "  callback field-width(string);\n"
+  <> "  callback field-height(string);\n"
+  <> "  callback tab-properties();\n"
+  <> "  callback tab-events();\n"
+  <> "  callback edit-event(string);\n"
+  <> "  callback delete-selected();\n"
+  <> "  callback editor-view();\n"
+  <> "  callback editor-edit();\n"
+  <> "  callback code-apply(string);\n"
+  <> "  callback set-align(string);\n"
+  <> "  callback set-layout-free();\n"
+  <> "  callback set-layout-column();\n"
+  <> "  callback set-layout-row();\n"
+  <> "  callback move-x(int);\n"
+  <> "  callback move-y(int);\n"
+  <> "  callback resize-w(int);\n"
+  <> "  callback resize-h(int);\n"
+  <> "  callback browse-picture();\n"
+  <> "  callback open-settings();\n"
+  <> "  callback close-settings();\n"
+  <> "  callback font-selected(string);\n"
+  <> "  callback font-size-selected(string);\n"
+  <> "  callback scheme-selected(string);\n"
+  <> "  callback popup-accept(string);\n"
+  <> "  callback file-cancel();\n"
+}
+
+fn keybindings() -> String {
+  "    KeyBinding { keys: @keys(Control + Z); activated => { root.undo(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + Shift + Z); activated => { root.redo(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + Y); activated => { root.redo(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + C); activated => { root.copy-component(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + X); activated => { root.cut-component(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + V); activated => { root.paste-component(); } }\n"
+  <> "    KeyBinding { keys: @keys(Delete); enabled: root.has-selection; activated => { root.delete-selected(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + N); activated => { root.file-new(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + Shift + N); activated => { root.file-new-module(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + O); activated => { root.file-open(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + S); activated => { root.file-save(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + Shift + S); activated => { root.file-save-as(); } }\n"
+  <> "    KeyBinding { keys: @keys(Control + Q); activated => { root.file-quit(); } }\n"
+  <> "    KeyBinding { keys: @keys(F5); activated => { root.run-app(); } }\n"
+  <> "    KeyBinding { keys: @keys(F6); activated => { root.reload-code(); } }\n"
+  <> "    KeyBinding { keys: @keys(F7); activated => { root.update-app(); } }\n"
+  <> "    KeyBinding { keys: @keys(Shift + F5); activated => { root.stop-app(); } }\n"
+  <> "    KeyBinding { keys: @keys(Escape); activated => { root.close-settings(); root.file-cancel(); } }\n"
+}
+
+fn menu_bar() -> String {
+  "    HorizontalLayout {\n"
+  <> "      height: 44px; padding: 8px; spacing: 6px;\n"
+  <> "      file-menu := ContextMenuArea { width: 78px; height: 32px;\n"
+  <> "        Button { text: \"☰ File\"; clicked => { file-menu.show({ x: 0px, y: 32px }); } }\n"
+  <> "        Menu {\n"
+  <> "          MenuItem { title: \"New project    Ctrl+N\"; activated => { root.file-new(); } }\n"
+  <> "          MenuItem { title: \"New module    Ctrl+Shift+N\"; activated => { root.file-new-module(); } }\n"
+  <> "          MenuSeparator { }\n"
+  <> "          MenuItem { title: \"Open…    Ctrl+O\"; activated => { root.file-open(); } }\n"
+  <> "          MenuItem { title: \"Save    Ctrl+S\"; activated => { root.file-save(); } }\n"
+  <> "          MenuItem { title: \"Save As…    Ctrl+Shift+S\"; activated => { root.file-save-as(); } }\n"
+  <> "          MenuSeparator { }\n"
+  <> "          MenuItem { title: \"Quit    Ctrl+Q\"; activated => { root.file-quit(); } }\n"
+  <> "        }\n"
+  <> "      }\n"
+  <> "      edit-menu := ContextMenuArea { width: 58px; height: 32px;\n"
+  <> "        Button { text: \"✂ Edit\"; clicked => { edit-menu.show({ x: 0px, y: 32px }); } }\n"
+  <> "        Menu {\n"
+  <> "          MenuItem { title: \"Undo    Ctrl+Z\"; enabled: root.can-undo; activated => { root.undo(); } }\n"
+  <> "          MenuItem { title: \"Redo    Ctrl+Shift+Z\"; enabled: root.can-redo; activated => { root.redo(); } }\n"
+  <> "          MenuSeparator { }\n"
+  <> "          MenuItem { title: \"Copy component    Ctrl+C\"; activated => { root.copy-component(); } }\n"
+  <> "          MenuItem { title: \"Cut component    Ctrl+X\"; activated => { root.cut-component(); } }\n"
+  <> "          MenuItem { title: \"Paste component    Ctrl+V\"; activated => { root.paste-component(); } }\n"
+  <> "          MenuSeparator { }\n"
+  <> "          MenuItem { title: \"Delete component    Del\"; activated => { root.delete-selected(); } }\n"
+  <> "        }\n"
+  <> "      }\n"
+  <> "      Button { text: \"↶\"; width: 34px; enabled: root.can-undo; clicked => { root.undo(); } }\n"
+  <> "      Button { text: \"↷\"; width: 34px; enabled: root.can-redo; clicked => { root.redo(); } }\n"
+  <> "      Button { text: \"↻\"; width: 34px; clicked => { root.reload-code(); } }\n"
+  <> "      run-menu := ContextMenuArea { width: 78px; height: 32px;\n"
+  <> "        Button { text: \"▶ Run\"; clicked => { run-menu.show({ x: 0px, y: 32px }); } }\n"
+  <> "        Menu {\n"
+  <> "          MenuItem { title: \"Run active module    F5\"; activated => { root.run-app(); } }\n"
+  <> "          MenuItem { title: \"Update running app    F7\"; activated => { root.update-app(); } }\n"
+  <> "          MenuItem { title: \"Reload Campy code    F6\"; activated => { root.reload-code(); } }\n"
+  <> "          MenuItem { title: \"Stop    Shift+F5\"; activated => { root.stop-app(); } }\n"
+  <> "        }\n"
+  <> "      }\n"
+  <> "      settings-menu := ContextMenuArea { width: 82px; height: 32px;\n"
+  <> "        Button { text: \"⚙ Settings\"; clicked => { settings-menu.show({ x: 0px, y: 32px }); } }\n"
+  <> "        Menu { MenuItem { title: \"Editor…\"; activated => { root.open-settings(); } } }\n"
+  <> "      }\n"
+  <> "      Button { text: \"▶ Run\"; primary: true; enabled: !root.running; clicked => { root.run-app(); } }\n"
+  <> "      Button { text: \"■ Stop\"; enabled: root.running; clicked => { root.stop-app(); } }\n"
+  <> "      Rectangle { horizontal-stretch: 1; }\n"
+  <> "      Text { text: root.path-text; color: root.theme-fg; vertical-alignment: center; }\n"
+  <> "    }\n"
+}
+
+fn main_area() -> String {
+  "    HorizontalLayout { spacing: 0px; vertical-stretch: 1;\n"
+  <> navigator()
+  <> "      Rectangle { width: 1px; background: root.theme-border; }\n"
+  <> centre()
+  <> "      Rectangle { width: 1px; background: root.theme-border; }\n"
+  <> right_pane()
+  <> "    }\n"
+}
+
+fn navigator() -> String {
+  "      VerticalLayout { width: 190px; spacing: 4px; padding: 8px;\n"
+  <> "        HorizontalLayout { height: 28px; spacing: 4px;\n"
+  <> "          Text { text: \"Workspace\"; font-weight: 600; color: root.theme-fg; vertical-alignment: center; }\n"
+  <> "          Rectangle { horizontal-stretch: 1; }\n"
+  <> "        }\n"
+  <> "        ListView { height: 104px;\n"
+  <> "          for project in root.project-items: Rectangle {\n"
+  <> "            height: 30px;\n"
+  <> "            background: project.active ? root.theme-tint : transparent;\n"
+  <> "            HorizontalLayout { padding-left: 8px; padding-right: 8px;\n"
+  <> "              Text { text: (project.active ? \"● \" : \"\") + project.title; vertical-alignment: center; color: root.theme-fg; overflow: elide; }\n"
+  <> "            }\n"
+  <> "            TouchArea { clicked => { root.switch-project(project.id); } }\n"
+  <> "          }\n"
+  <> "        }\n"
+  <> "        HorizontalLayout { height: 30px; spacing: 4px;\n"
+  <> "          Button { text: \"+ Project\"; height: 26px; horizontal-stretch: 1; clicked => { root.new-project(); } }\n"
+  <> "          Rectangle { width: 30px; height: 26px; border-width: 1px; border-color: root.theme-border; border-radius: 4px; background: ws-trash.has-hover && root.can-delete-project ? root.theme-tint : transparent; opacity: root.can-delete-project ? 1 : 0.4;\n"
+  <> "            ws-trash := TouchArea { enabled: root.can-delete-project; clicked => { root.delete-project(); } }\n"
+  <> "            Path { x: (parent.width - 12px) / 2; y: (parent.height - 14px) / 2; width: 12px; height: 14px; stroke: root.theme-fg; stroke-width: 1.1px; fill: transparent;\n"
+  <> "              commands: \"M 1 3 L 11 3 M 4 3 L 4 1 L 8 1 L 8 3 M 2 3 L 3 13 L 9 13 L 10 3 M 4.5 6 L 4.5 10 M 7.5 6 L 7.5 10\";\n"
+  <> "            }\n"
+  <> "          }\n"
+  <> "        }\n"
+  <> "        Rectangle { height: 1px; background: root.theme-border; }\n"
+  <> "        HorizontalLayout { height: 28px; spacing: 4px;\n"
+  <> "          Text { text: \"Modules\"; font-weight: 600; color: root.theme-fg; vertical-alignment: center; }\n"
+  <> "          Rectangle { horizontal-stretch: 1; }\n"
+  <> "          Button { text: \"+\"; width: 30px; height: 26px; clicked => { root.new-module(); } }\n"
+  <> "        }\n"
+  <> "        ListView { vertical-stretch: 1;\n"
+  <> "          for module in root.module-items: Rectangle {\n"
+  <> "            height: 32px;\n"
+  <> "            background: module.active ? root.theme-tint : transparent;\n"
+  <> "            HorizontalLayout { padding-left: 8px; padding-right: 8px;\n"
+  <> "              Text { text: (module.active ? \"● \" : \"\") + module.name; vertical-alignment: center; color: root.theme-fg; overflow: elide; }\n"
+  <> "            }\n"
+  <> "            TouchArea { clicked => { root.open-module(module.id); } }\n"
+  <> "          }\n"
+  <> "        }\n"
+  <> "        Text { text: root.module-count; color: root.theme-fg; }\n"
+  <> "      }\n"
+}
+
+fn centre() -> String {
+  "      VerticalLayout { horizontal-stretch: 1; max-width: 4000px; spacing: 0px;\n"
+  <> "        HorizontalLayout { height: 36px; spacing: 2px; padding-left: 4px; padding-right: 4px;\n"
+  <> "          for tab in root.tab-items: VerticalLayout { width: 140px;\n"
+  <> "            HorizontalLayout { height: 32px; spacing: 0px;\n"
+  <> "              Button { text: tab.name; horizontal-stretch: 1; clicked => { root.tab-module(tab.id); } }\n"
+  <> "              Button { text: \"×\"; width: 26px; clicked => { root.close-module(tab.id); } }\n"
+  <> "            }\n"
+  <> "            Rectangle { height: 2px; background: tab.active ? root.theme-accent : transparent; }\n"
+  <> "          }\n"
+  <> "          Rectangle { horizontal-stretch: 1; }\n"
+  <> "          Button { text: root.code-view ? \"▦ Form editor\" : \"⌨ Handler code\"; primary: true; height: 32px; clicked => { root.toggle-view(); } }\n"
+  <> "        }\n"
+  <> "        Rectangle { height: 1px; background: root.theme-border; }\n"
+  <> "        Rectangle { horizontal-stretch: 1; vertical-stretch: 1;\n"
+  <> form_editor()
+  <> code_view()
+  <> editor_view()
+  <> "        }\n"
+  <> "      }\n"
+}
+
+// The form editor: bottom tabs switch between the actual design and the
+// generated Slint source.
+fn form_editor() -> String {
+  "          if !root.code-view: VerticalLayout { spacing: 0px;\n"
+  <> "            Rectangle { horizontal-stretch: 1; vertical-stretch: 1;\n"
+  <> free_canvas()
+  <> column_canvas()
+  <> row_canvas()
+  <> slint_source_view()
+  <> "            }\n"
+  <> "            Rectangle { height: 1px; background: root.theme-border; }\n"
+  <> "            HorizontalLayout { height: 34px; spacing: 4px; padding-left: 4px;\n"
+  <> "              Button { text: \"▦ UI (actual)\"; primary: !root.slint-tab; height: 30px; clicked => { root.show-ui(); } }\n"
+  <> "              Button { text: \"⌨ Code (Slint file)\"; primary: root.slint-tab; height: 30px; clicked => { root.show-slint(); } }\n"
+  <> "              Rectangle { horizontal-stretch: 1; }\n"
+  <> "            }\n"
+  <> "          }\n"
+}
+
+fn slint_source_view() -> String {
+  "            if root.slint-tab: Rectangle { width: 100%; height: 100%; background: root.code-bg;\n"
+  <> "              VerticalLayout { spacing: 0px;\n"
+  <> "                HorizontalLayout { height: 32px; padding-left: 10px; spacing: 6px;\n"
+  <> "                  Text { text: \"Generated Slint (read-only)\"; color: root.code-comment; vertical-alignment: center; }\n"
+  <> "                  Rectangle { horizontal-stretch: 1; }\n"
+  <> "                }\n"
+  <> "                TextEdit { text: root.slint-source; read-only: true; vertical-stretch: 1; font-family: root.editor-font; font-size: root.editor-font-size; }\n"
+  <> "              }\n"
+  <> "            }\n"
+}
+
+fn free_canvas() -> String {
+  "            if !root.slint-tab && root.layout-free: ScrollView { width: 100%; height: 100%;\n"
+  <> "              Rectangle { width: root.canvas-w; height: root.canvas-h; background: root.theme-bg;\n"
+  <> "                border-width: !root.has-selection ? 2px : 1px;\n"
+  <> "                border-color: !root.has-selection ? root.theme-accent : root.theme-border;\n"
+  <> "                TouchArea { clicked => { key-handler.focus(); root.select(\"\"); } }\n"
+  <> "                for control in root.control-items: ControlView {\n"
+  <> "                  data: control; designing: true; free-layout: true;\n"
+  <> "                  theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface;\n"
+  <> "                  x: control.x; y: control.y; width: control.w; height: control.h;\n"
+  <> "                  select(id) => { key-handler.focus(); root.select(id); }\n"
+  <> "                  move-x(dx) => { root.move-x(dx); }\n"
+  <> "                  move-y(dy) => { root.move-y(dy); }\n"
+  <> "                  resize-w(dw) => { root.resize-w(dw); }\n"
+  <> "                  resize-h(dh) => { root.resize-h(dh); }\n"
+  <> "                }\n"
+  <> "              }\n"
+  <> "            }\n"
+}
+
+fn column_canvas() -> String {
+  "            if !root.slint-tab && root.layout-column: ScrollView { width: 100%; height: 100%;\n"
+  <> "              VerticalLayout { padding: 16px; spacing: 8px;\n"
+  <> "                for control in root.control-items: ControlView {\n"
+  <> "                  data: control; designing: true; free-layout: false; height: control.h;\n"
+  <> "                  theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface;\n"
+  <> "                  select(id) => { key-handler.focus(); root.select(id); }\n"
+  <> "                }\n"
+  <> "              }\n"
+  <> "            }\n"
+}
+
+fn row_canvas() -> String {
+  "            if !root.slint-tab && root.layout-row: ScrollView { width: 100%; height: 100%;\n"
+  <> "              HorizontalLayout { padding: 16px; spacing: 8px; height: 100%;\n"
+  <> "                for control in root.control-items: ControlView {\n"
+  <> "                  data: control; designing: true; free-layout: false; width: control.w; height: 100%;\n"
+  <> "                  theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface;\n"
+  <> "                  select(id) => { key-handler.focus(); root.select(id); }\n"
+  <> "                }\n"
+  <> "              }\n"
+  <> "            }\n"
+}
+
+fn code_view() -> String {
+  "          if root.code-view && !root.code-editing: Rectangle { width: 100%; height: 100%; background: root.code-bg;\n"
+  <> "            VerticalLayout { spacing: 0px;\n"
+  <> "              HorizontalLayout { height: 32px; padding-left: 10px; padding-right: 8px; spacing: 6px;\n"
+  <> "                Text { text: \"Handler code\"; color: root.code-name; font-weight: 600; vertical-alignment: center; }\n"
+  <> "                Text { text: root.code-handler; color: root.code-string; vertical-alignment: center; }\n"
+  <> "                Rectangle { horizontal-stretch: 1; }\n"
+  <> "                Button { text: \"View\"; clicked => { root.editor-view(); } }\n"
+  <> "                Button { text: \"✎ Edit\"; enabled: root.has-handler; clicked => { root.editor-edit(); } }\n"
+  <> "              }\n"
+  <> "              ScrollView { vertical-stretch: 1; content-y: root.code-scroll;\n"
+  <> "                Rectangle { width: 100%; height: root.code-height;\n"
+  <> "                  Rectangle { x: 0; y: root.hl-top; width: 100%; height: root.hl-height; background: root.theme-tint; }\n"
+  <> "                  Rectangle { x: 0; y: 0; width: 100%; height: 100%;\n"
+  <> "                    VerticalLayout { spacing: 0px; padding-top: 4px; padding-bottom: 4px;\n"
+  <> "                      for line in root.code-lines: HorizontalLayout { height: 18px; alignment: start; padding-left: 10px; spacing: 0px;\n"
+  <> "                        for token in line.tokens: Text {\n"
+  <> "                          text: token.text;\n"
+  <> "                          font-family: root.editor-font; font-size: root.editor-font-size;\n"
+  <> "                          color: token.kind == \"comment\" ? root.code-comment : token.kind == \"keyword\" ? root.code-keyword : token.kind == \"string\" ? root.code-string : token.kind == \"number\" ? root.code-number : token.kind == \"type\" ? root.code-type : token.kind == \"punct\" ? root.code-punct : root.code-name;\n"
+  <> "                          wrap: TextWrap.no-wrap;\n"
+  <> "                        }\n"
+  <> "                      }\n"
+  <> "                    }\n"
+  <> "                  }\n"
+  <> "                }\n"
+  <> "              }\n"
+  <> "            }\n"
+  <> "          }\n"
+}
+
+fn editor_view() -> String {
+  "          if root.code-editing: Rectangle { width: 100%; height: 100%; background: root.code-bg;\n"
+  <> "            VerticalLayout { spacing: 0px;\n"
+  <> "              HorizontalLayout { height: 32px; padding-left: 10px; padding-right: 8px; spacing: 6px;\n"
+  <> "                Text { text: \"Handler code\"; color: root.code-name; font-weight: 600; vertical-alignment: center; }\n"
+  <> "                Text { text: root.code-handler; color: root.code-string; vertical-alignment: center; }\n"
+  <> "                Rectangle { horizontal-stretch: 1; }\n"
+  <> "              }\n"
+  <> "              VerticalLayout { vertical-stretch: 1; padding: 8px; spacing: 4px;\n"
+  <> "                code-input := TextEdit { text <=> root.code-text; vertical-stretch: 1; font-family: root.editor-font; font-size: root.editor-font-size; }\n"
+  <> "                HorizontalLayout { spacing: 6px;\n"
+  <> "                  Button { text: \"✓ Apply\"; primary: true; clicked => { root.code-apply(code-input.text); } }\n"
+  <> "                  Button { text: \"✕ Cancel\"; clicked => { root.editor-view(); } }\n"
+  <> "                  Rectangle { horizontal-stretch: 1; }\n"
+  <> "                }\n"
+  <> "              }\n"
+  <> "            }\n"
+  <> "          }\n"
+}
+
+fn right_pane() -> String {
+  "      VerticalLayout { width: 320px; spacing: 6px; padding: 8px;\n"
+  <> "        Text { text: \"Components\"; font-weight: 600; color: root.theme-fg; }\n"
+  <> "        ListView { vertical-stretch: 0; height: 220px;\n"
+  <> "          for item in root.palette-items: Rectangle {\n"
+  <> "            height: 32px;\n"
+  <> "            HorizontalLayout { padding-left: 8px; padding-right: 8px;\n"
+  <> "              Text { text: item.label; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "            }\n"
+  <> "            TouchArea { clicked => { key-handler.focus(); root.add-component(item.kind); } }\n"
+  <> "          }\n"
+  <> "        }\n"
+  <> "        Text { text: root.canvas-label; color: root.theme-fg; }\n"
+  <> "        Rectangle { height: 1px; background: root.theme-border; }\n"
+  <> "        Text { text: \"Inspector\"; font-weight: 600; color: root.theme-fg; }\n"
+  <> "        HorizontalLayout { spacing: 4px;\n"
+  <> "          Button { text: \"⚙ Properties\"; primary: !root.events-tab; height: 32px; clicked => { root.tab-properties(); } }\n"
+  <> "          Button { text: \"⚡ Events\"; primary: root.events-tab; height: 32px; clicked => { root.tab-events(); } }\n"
+  <> "        }\n"
+  <> "        HorizontalLayout { height: 32px; spacing: 6px;\n"
+  <> "          Text { text: root.insp-selection; font-weight: 600; color: root.theme-fg; horizontal-stretch: 1; vertical-alignment: center; }\n"
+  <> "          if root.has-selection: Rectangle { width: 38px; height: 28px; border-width: 1px; border-color: root.theme-border; border-radius: 4px; background: trash-hover.has-hover ? root.theme-tint : transparent;\n"
+  <> "            trash-hover := TouchArea { clicked => { root.delete-selected(); } }\n"
+  <> "            Path { x: (parent.width - 14px) / 2; y: (parent.height - 16px) / 2; width: 14px; height: 16px;\n"
+  <> "              stroke: root.theme-fg; stroke-width: 1.2px; fill: transparent;\n"
+  <> "              commands: \"M 1 4 L 13 4 M 5 4 L 5 1 L 9 1 L 9 4 M 2.5 4 L 3.5 15 L 10.5 15 L 11.5 4 M 5.5 7 L 5.5 12 M 8.5 7 L 8.5 12\";\n"
+  <> "            }\n"
+  <> "          }\n"
+  <> "        }\n"
+  <> "        if root.has-selection && !root.events-tab: VerticalLayout { spacing: 6px;\n"
+  <> field("Name", "insp-name", "field-name")
+  <> field("Text", "insp-text", "field-text")
+  <> "          if root.selected-kind == \"picture\": Button { text: \"▧ Choose picture…\"; clicked => { root.browse-picture(); } }\n"
+  <> field("X", "insp-x", "field-x")
+  <> field("Y", "insp-y", "field-y")
+  <> field("W", "insp-w", "field-w")
+  <> field("H", "insp-h", "field-h")
+  <> "          if root.layout-free: HorizontalLayout { height: 30px; spacing: 6px;\n"
+  <> "            Text { text: \"Align\"; width: 64px; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "            ComboBox { model: [\"None (free)\", \"Top\", \"Bottom\", \"Left\", \"Right\", \"Client\"]; current-index: root.align-index; selected => { root.set-align(self.current-value); } }\n"
+  <> "          }\n"
+  <> check_row("Enabled", "insp-enabled", "toggle-enabled")
+  <> check_row("Visible", "insp-visible", "toggle-visible")
+  <> "          Rectangle { vertical-stretch: 1; }\n"
+  <> "        }\n"
+  <> "        if !root.has-selection: VerticalLayout { spacing: 6px;\n"
+  <> field("Title", "form-title", "field-title")
+  <> field("Width", "form-width", "field-width")
+  <> field("Height", "form-height", "field-height")
+  <> "          Text { text: \"Layout\"; color: root.theme-fg; }\n"
+  <> "          HorizontalLayout { spacing: 4px;\n"
+  <> "            Button { text: \"Free\"; primary: root.layout-free; height: 30px; clicked => { root.set-layout-free(); } }\n"
+  <> "            Button { text: \"Column\"; primary: root.layout-column; height: 30px; clicked => { root.set-layout-column(); } }\n"
+  <> "            Button { text: \"Row\"; primary: root.layout-row; height: 30px; clicked => { root.set-layout-row(); } }\n"
+  <> "          }\n"
+  <> "          Text { text: \"Select a control on the canvas.\"; color: root.theme-fg; }\n"
+  <> "        }\n"
+  <> "        if root.has-selection && root.events-tab: VerticalLayout { spacing: 6px;\n"
+  <> "          if root.has-events: HorizontalLayout { spacing: 6px; height: 32px;\n"
+  <> "            Text { text: root.event-label; width: 116px; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "            Button { text: root.event-handler; horizontal-stretch: 1; clicked => { root.edit-event(\"clicked\"); } }\n"
+  <> "          }\n"
+  <> "          if !root.has-events: Text { text: \"No events\"; color: root.theme-fg; }\n"
+  <> "          if root.has-events: Text { text: \"Click the event to open its handler.\"; color: root.theme-fg; }\n"
+  <> "        }\n"
+  <> "      }\n"
+}
+
+fn field(label: String, property: String, callback: String) -> String {
+  "          HorizontalLayout { height: 30px; spacing: 6px;\n"
+  <> "            Text { text: "
+  <> quote(label)
+  <> "; width: 64px; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "            LineEdit { text <=> root."
+  <> property
+  <> "; horizontal-stretch: 1; accepted(text) => { root."
+  <> callback
+  <> "(text); } }\n"
+  <> "          }\n"
+}
+
+fn check_row(label: String, property: String, callback: String) -> String {
+  "          HorizontalLayout { height: 28px; spacing: 6px;\n"
+  <> "            Text { text: "
+  <> quote(label)
+  <> "; width: 64px; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "            CheckBox { checked <=> root."
+  <> property
+  <> "; toggled => { root."
+  <> callback
+  <> "(self.checked); } }\n"
+  <> "          }\n"
+}
+
+fn status_bar() -> String {
+  "    HorizontalLayout { height: 26px; padding-left: 10px; padding-right: 10px; spacing: 8px;\n"
+  <> "      Text { text: root.status; color: root.theme-fg; vertical-alignment: center; }\n"
+  <> "      Rectangle { horizontal-stretch: 1; }\n"
+  <> "      Text { text: root.path-text; color: root.theme-fg; vertical-alignment: center; }\n"
+  <> "    }\n"
+}
+
+fn settings_overlay() -> String {
+  "  if root.settings-open: Rectangle {\n"
+  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
+  <> "    TouchArea { clicked => { root.close-settings(); } }\n"
+  <> "    Rectangle { x: (root.width - self.width) / 2; y: 140px; width: 520px; height: 280px;\n"
+  <> "      background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 6px;\n"
+  <> "      VerticalLayout { padding: 18px; spacing: 12px;\n"
+  <> "        Text { text: \"Editor settings\"; font-size: 18px; font-weight: 600; color: root.theme-fg; }\n"
+  <> "        HorizontalLayout { height: 32px; spacing: 8px;\n"
+  <> "          Text { text: \"Font\"; width: 110px; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "          ComboBox { model: "
+  <> string_list(fonts)
+  <> "; current-index: root.font-index; selected => { root.font-selected(self.current-value); } }\n"
+  <> "        }\n"
+  <> "        HorizontalLayout { height: 32px; spacing: 8px;\n"
+  <> "          Text { text: \"Font size\"; width: 110px; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "          ComboBox { model: "
+  <> string_list(sizes)
+  <> "; current-index: root.size-index; selected => { root.font-size-selected(self.current-value); } }\n"
+  <> "        }\n"
+  <> "        HorizontalLayout { height: 32px; spacing: 8px;\n"
+  <> "          Text { text: \"Color scheme\"; width: 110px; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "          ComboBox { model: [\"Dark\", \"Light\", \"Solarized\"]; current-index: root.scheme-index; selected => { root.scheme-selected(self.current-value); } }\n"
+  <> "        }\n"
+  <> "        Rectangle { vertical-stretch: 1; }\n"
+  <> "        HorizontalLayout { spacing: 8px;\n"
+  <> "          Button { text: \"Close\"; primary: true; height: 32px; clicked => { root.close-settings(); } }\n"
+  <> "          Rectangle { horizontal-stretch: 1; }\n"
+  <> "        }\n"
+  <> "      }\n"
+  <> "    }\n"
+  <> "  }\n"
+}
+
+fn popup_overlay() -> String {
+  "  if root.popup-open: Rectangle {\n"
+  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
+  <> "    TouchArea { clicked => { root.file-cancel(); } }\n"
+  <> "    Rectangle { x: (root.width - self.width) / 2; y: 160px; width: 500px; height: 190px;\n"
+  <> "      background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 6px;\n"
+  <> "      VerticalLayout { padding: 16px; spacing: 10px;\n"
+  <> "        Text { text: root.popup-title; font-size: 18px; font-weight: 600; color: root.theme-fg; }\n"
+  <> "        Text { text: \"Relative to the project root, or an absolute path.\"; color: root.theme-fg; }\n"
+  <> "        path-field := LineEdit { text <=> root.popup-path; }\n"
+  <> "        HorizontalLayout { spacing: 8px;\n"
+  <> "          Button { text: root.popup-action; primary: true; clicked => { root.popup-accept(path-field.text); } }\n"
+  <> "          Button { text: \"Cancel\"; clicked => { root.file-cancel(); } }\n"
+  <> "          Rectangle { horizontal-stretch: 1; }\n"
+  <> "        }\n"
+  <> "      }\n"
+  <> "    }\n"
+  <> "  }\n"
+}
+
+// ---------------------------------------------------------------------------
+// Values used by both updates() and the baked defaults
+// ---------------------------------------------------------------------------
+
+fn module_count_text(model: State) -> String {
+  let count = list.length(model.project.modules)
+  case count {
+    1 -> "1 module"
+    _ -> int.to_string(count) <> " modules"
+  }
+}
+
+fn is_running(model: State) -> Bool {
+  case model.preview {
+    Some(_) -> True
+    None -> False
+  }
+}
+
+fn is_code_view(model: State) -> Bool {
+  case model.view {
+    CodeView -> True
+    FormView -> False
+  }
+}
+
+fn is_slint_tab(model: State) -> Bool {
+  model.slint_tab
+}
+
+fn is_editing_code(model: State) -> Bool {
+  case model.editor {
+    Edit -> True
+    View -> False
+  }
+}
+
+fn is_some(option: Option(a)) -> Bool {
+  case option {
+    Some(_) -> True
+    None -> False
+  }
+}
+
+fn layout_is(form: Option(Form), layout: campy_form.Layout) -> Bool {
+  case form {
+    Some(value) -> value.layout == layout
+    None -> False
+  }
+}
+
+fn form_width(form: Option(Form)) -> Int {
+  case form {
+    Some(value) -> value.width
+    None -> 0
+  }
+}
+
+fn form_height(form: Option(Form)) -> Int {
+  case form {
+    Some(value) -> value.height
+    None -> 0
+  }
+}
+
+fn canvas_label(form: Option(Form)) -> String {
+  case form {
+    Some(value) ->
+      "Canvas "
+      <> int.to_string(value.width)
+      <> " × "
+      <> int.to_string(value.height)
+    None -> ""
+  }
+}
+
+fn code_handler_label(model: State) -> String {
+  case model.active_handler {
+    Some(handler) -> handler
+    None -> active_name(model)
+  }
+}
+
+fn code_text(model: State) -> String {
+  case model.editing {
+    Some(Editing(text, _)) -> text
+    None -> ""
+  }
+}
+
+fn highlight_scroll(model: State) -> Int {
+  case model.highlight {
+    Some(#(start, _)) -> start * 18
+    None -> 0
+  }
+}
+
+fn highlight_top(model: State) -> Int {
+  case model.highlight {
+    Some(#(start, _)) -> 4 + start * 18
+    None -> 0
+  }
+}
+
+fn highlight_height(model: State) -> Int {
+  case model.highlight {
+    Some(#(start, end)) -> end * 18 - start * 18 + 18
+    None -> 0
+  }
+}
+
+fn code_height(model: State) -> Int {
+  case active_module(model) {
+    Some(module) -> list.length(string.split(module.source, "\n")) * 18 + 8
+    None -> 0
+  }
+}
+
+fn popup_open(popup: Popup) -> Bool {
+  case popup {
+    NoPopup -> False
+    _ -> True
+  }
+}
+
+fn popup_title(popup: Popup) -> String {
+  case popup {
+    NoPopup -> ""
+    OpenFile -> "Open project"
+    SaveAs -> "Save project as"
+    PickPicture -> "Choose picture"
+  }
+}
+
+fn popup_action(popup: Popup) -> String {
+  case popup {
+    NoPopup -> ""
+    OpenFile -> "Open"
+    SaveAs -> "Save"
+    PickPicture -> "Use picture"
+  }
+}
+
+fn control_value(control: campy_form.Control) -> Int {
+  case int.parse(control.text) {
+    Ok(value) -> int.max(0, int.min(100, value))
+    Error(_) -> 50
+  }
+}
+
+fn index_of(items: List(String), value: String) -> Int {
+  index_of_loop(items, value, 0)
+}
+
+fn index_of_loop(items: List(String), value: String, index: Int) -> Int {
+  case items {
+    [] -> 0
+    [first, ..rest] ->
+      case first == value {
+        True -> index
+        False -> index_of_loop(rest, value, index + 1)
+      }
+  }
+}
+
+fn is_dark_scheme(scheme: Scheme) -> Bool {
+  case scheme {
+    Light -> False
+    Dark -> True
+    Solarized -> True
+  }
+}
+
+fn align_index(align: campy_form.Align) -> Int {
+  index_of(
+    ["none", "top", "bottom", "left", "right", "client"],
+    campy_form.align_key(align),
+  )
+}
+
+fn scheme_index(scheme: Scheme) -> Int {
+  case scheme {
+    Dark -> 0
+    Light -> 1
+    Solarized -> 2
+  }
+}
+
+fn string_list(items: List(String)) -> String {
+  "[" <> string.join(list.map(items, quote), ", ") <> "]"
+}
+
+fn bool(value: Bool) -> String {
+  case value {
+    True -> "true"
+    False -> "false"
+  }
+}

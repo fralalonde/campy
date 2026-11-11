@@ -1,0 +1,18 @@
+[workspace]
+members = ["crates/campy-bridge", "crates/campy-renderer"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.92"
+version = "0.1.0"
+publish = false
+
+[workspace.dependencies]
+rustler = "=0.39.0"
+slint-interpreter = { version = "=1.18.1", default-features = false, features = ["compat-1-2", "backend-winit", "renderer-software"] }
+spin_on = "0.1"
+
+
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
+png = "0.18"

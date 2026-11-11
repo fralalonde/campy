@@ -1,0 +1,11 @@
+name = "campy_search_box"
+version = "0.1.0"
+target = "erlang"
+gleam = ">= 1.16.0 and < 2.0.0"
+
+[dependencies]
+gleam_stdlib = ">= 0.70.0 and < 1.0.0"
+campy_ui = { path = "../campy_ui" }
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"

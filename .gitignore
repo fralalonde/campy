@@ -1,0 +1,11 @@
+/rust/target/
+/gleam/**/build/
+/gleam/**/priv/native/*
+!/gleam/**/priv/native/.gitkeep
+/generated/*
+!/generated/.gitkeep
+/projects/*.campy
+!/projects/.gitkeep
+/.idea/
+erl_crash.dump
+__pycache__/

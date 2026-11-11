@@ -1,0 +1,20 @@
+[package]
+name = "campy-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "campy_bridge"
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+rustler.workspace = true
+campy-renderer = { path = "../campy-renderer" }
+
+
+[features]
+ui-testing = ["campy-renderer/ui-testing"]

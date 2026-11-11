@@ -1,0 +1,16 @@
+name = "campy_ide"
+version = "0.1.0"
+target = "erlang"
+gleam = ">= 1.16.0 and < 2.0.0"
+
+[dependencies]
+gleam_stdlib = ">= 0.70.0 and < 1.0.0"
+campy_ui = { path = "../../packages/campy_ui" }
+campy_bridge = { path = "../../packages/campy_bridge" }
+campy_runtime = { path = "../../packages/campy_runtime" }
+campy_search_box = { path = "../../packages/campy_search_box" }
+campy_form = { path = "../../packages/campy_form" }
+campy_ccl = { path = "../../packages/campy_ccl" }
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
