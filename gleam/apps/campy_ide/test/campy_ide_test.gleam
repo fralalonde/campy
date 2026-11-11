@@ -992,3 +992,13 @@ pub fn project_dialog_opens_and_closes_test() {
   state.set_project_dialog_open(open, False).project_dialog_open
   |> should.be_false
 }
+
+pub fn campy_has_a_tent_icon_test() {
+  project.campy().icon |> should.equal(project.camping_icon)
+  let changed = demo_state() |> state.set_project_icon("assets/cat.png")
+  changed.project.icon |> should.equal("assets/cat.png")
+  changed.workspace.projects
+  |> list.find(fn(item) { item.path == changed.project.path })
+  |> should.equal(Ok(project.Project(..changed.project, icon: "assets/cat.png")))
+  state.undo(changed).project.icon |> should.equal(project.camping_icon)
+}

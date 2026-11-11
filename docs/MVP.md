@@ -88,10 +88,10 @@ Delivered:
    click-drag placement on the form. The right pane is the Properties/Events
    inspector.
 5. File menu: New project / New module / Open… / Save / Save As… / Quit.
-   Projects are versioned, compressed Erlang terms (`projects/*.campy`, v6),
-   validated on load; v1–v5 files (and v5 projects embedded in a workspace) are
-   upgraded, including form layout, the adoption parent map, alignment, and
-   per-container layouts. Workspaces are versioned compressed terms
+   Projects are versioned, compressed Erlang terms (`projects/*.campy`, v7),
+   validated on load; v1–v6 files (and older projects embedded in a workspace) are
+   upgraded, including form layout, the adoption parent map, alignment,
+   per-container layouts, and project icons. Workspaces are versioned compressed terms
    (`projects/workspace.campy`, v1) holding full project snapshots and the active
    project path.
 6. Form editor: the form is a movable/resizable **module window** (title bar,

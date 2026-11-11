@@ -6,9 +6,9 @@ import campy_form/project
 import campy_form/syntax
 import campy_ide/state.{
   type Popup, type Scheme, type State, CodeView, Dark, Edit, Editing, FormView,
-  Light, NoPopup, OpenFile, PickPicture, SaveAs, Solarized, View, active_form,
-  active_module, active_name, can_redo, can_undo, is_events_tab, selected_align,
-  selected_control, selection_label,
+  Light, NoPopup, OpenFile, PickPicture, PickProjectIcon, SaveAs, Solarized,
+  View, active_form, active_module, active_name, can_redo, can_undo,
+  is_events_tab, selected_align, selected_control, selection_label,
 }
 import gleam/int
 import gleam/list
@@ -27,7 +27,13 @@ pub type Update {
 }
 
 pub type ProjectItem {
-  ProjectItem(id: String, title: String, active: Bool)
+  ProjectItem(
+    id: String,
+    title: String,
+    active: Bool,
+    icon: String,
+    has_icon: Bool,
+  )
 }
 
 pub type ModuleItem {
@@ -84,6 +90,8 @@ pub fn snapshot(model: State) -> Snapshot {
         project.path,
         project.title,
         project.path == model.project.path,
+        project.icon,
+        project.icon != "",
       )
     }),
     modules: list.map(model.project.modules, fn(module) {
@@ -413,6 +421,8 @@ pub fn projects_wire(items: List(ProjectItem)) -> List(bridge.WireValue) {
       #("id", bridge.WireText(item.id)),
       #("title", bridge.WireText(item.title)),
       #("active", bridge.WireBool(item.active)),
+      #("icon", bridge.WireImage(item.icon)),
+      #("has-icon", bridge.WireBool(item.has_icon)),
     ])
   })
 }
@@ -590,7 +600,7 @@ pub fn to_slint(model: State) -> Result(String, String) {
 }
 
 fn structs() -> String {
-  "struct ProjectItem { id: string, title: string, active: bool }\n"
+  "struct ProjectItem { id: string, title: string, active: bool, icon: image, has-icon: bool }\n"
   <> "struct ModuleItem { id: string, name: string, active: bool }\n"
   <> "struct TabItem { id: string, name: string, active: bool }\n"
   <> "struct ControlItem { id: string, kind: string, text: string, x: length, y: length, w: length, h: length, enabled: bool, visible: bool, selected: bool, primary: bool, picture: image, value: float, arranged: bool }\n"
@@ -919,6 +929,8 @@ fn callbacks() -> String {
   <> "  callback gesture-start();\n"
   <> "  callback gesture-end();\n"
   <> "  callback browse-picture();\n"
+  <> "  callback browse-project-icon();\n"
+  <> "  callback clear-project-icon();\n"
   <> "  callback open-settings();\n"
   <> "  callback close-settings();\n"
   <> "  callback font-selected(string);\n"
@@ -1050,7 +1062,9 @@ fn navigator() -> String {
   <> "          for project in root.project-items: ContextMenuArea { width: 100%; height: 30px;\n"
   <> "            Rectangle { height: 30px;\n"
   <> "              background: project.active ? root.theme-tint : transparent;\n"
-  <> "              HorizontalLayout { padding-left: 8px; padding-right: 8px;\n"
+  <> "              HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 6px;\n"
+  <> "                if project.has-icon: Image { width: 18px; height: 18px; source: project.icon; image-fit: contain; }\n"
+  <> "                if !project.has-icon: Text { text: \"▤\"; width: 18px; height: 18px; vertical-alignment: center; horizontal-alignment: center; color: root.theme-fg; }\n"
   <> "                Text { text: (project.active ? \"● \" : \"\") + project.title; vertical-alignment: center; color: root.theme-fg; overflow: elide; }\n"
   <> "              }\n"
   <> "              TouchArea { clicked => { root.switch-project(project.id); } }\n"
@@ -1516,6 +1530,21 @@ fn right_pane() -> String {
   <> "          Rectangle { vertical-stretch: 1; }\n"
   <> "        }\n"
   <> "        if root.project-selected: VerticalLayout { spacing: 6px;\n"
+  <> "          HorizontalLayout { height: 54px; spacing: 8px;\n"
+  <> "            for project in root.project-items: Rectangle { width: project.active ? 48px : 0px; height: project.active ? 48px : 0px; clip: true;\n"
+  <> "              border-width: project.active ? 1px : 0px; border-color: root.theme-border; border-radius: 4px; background: root.theme-surface;\n"
+  <> "              if project.active && project.has-icon: Image { x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px; source: project.icon; image-fit: contain; }\n"
+  <> "              if project.active && !project.has-icon: Text { x: 0; y: 0; width: 100%; height: 100%; text: \"▤\"; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "            }\n"
+  <> "            VerticalLayout { spacing: 4px;\n"
+  <> "              Button { text: \"Choose icon…\"; height: 26px; clicked => { root.browse-project-icon(); } "
+  <> hint("Choose an image for this project")
+  <> " }\n"
+  <> "              Button { text: \"Clear icon\"; height: 26px; clicked => { root.clear-project-icon(); } "
+  <> hint("Remove the project icon")
+  <> " }\n"
+  <> "            }\n"
+  <> "          }\n"
   <> field("Title", "project-title", "field-project-title")
   <> "          Text { text: \"Path\"; color: root.theme-fg; }\n"
   <> "          Text { text: root.project-path; color: root.theme-fg; overflow: elide; }\n"
@@ -1855,6 +1884,7 @@ fn popup_title(popup: Popup) -> String {
     OpenFile -> "Open project"
     SaveAs -> "Save project as"
     PickPicture -> "Choose picture"
+    PickProjectIcon -> "Choose project icon"
   }
 }
 
@@ -1864,6 +1894,7 @@ fn popup_action(popup: Popup) -> String {
     OpenFile -> "Open"
     SaveAs -> "Save"
     PickPicture -> "Use picture"
+    PickProjectIcon -> "Use icon"
   }
 }
 

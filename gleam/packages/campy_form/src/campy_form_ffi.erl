@@ -58,22 +58,37 @@ load_project(Path) ->
 
 %% v1: single form/source. v2: modules. v3: form layout. v4: parent map for
 %% container adoption. v5: per-control alignment. v6: per-container layouts.
-%% Older files upgrade to v6.
+%% v7: project icon. Older files upgrade to v7.
 upgrade({project, 1, Form, Source, Path}) ->
-    {ok, {project, 6, <<"Campy">>,
-          [{module, <<"main">>, <<"Main">>, upgrade_v1_form(Form), Source}], Path}};
+    {ok, {project, 7, <<"Campy">>,
+          [{module, <<"main">>, <<"Main">>, upgrade_v1_form(Form), Source}],
+          Path, icon_for(<<"Campy">>, Path)}};
 upgrade({project, 2, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 6, Title, [upgrade_module(Module, v2) || Module <- Modules], Path}};
+    {ok, {project, 7, Title, [upgrade_module(Module, v2) || Module <- Modules],
+          Path, icon_for(Title, Path)}};
 upgrade({project, 3, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 6, Title, [upgrade_module(Module, v3) || Module <- Modules], Path}};
+    {ok, {project, 7, Title, [upgrade_module(Module, v3) || Module <- Modules],
+          Path, icon_for(Title, Path)}};
 upgrade({project, 4, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 6, Title, [upgrade_module(Module, v4) || Module <- Modules], Path}};
+    {ok, {project, 7, Title, [upgrade_module(Module, v4) || Module <- Modules],
+          Path, icon_for(Title, Path)}};
 upgrade({project, 5, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 6, Title, [upgrade_module(Module, v5) || Module <- Modules], Path}};
-upgrade({project, 6, _Title, Modules, _Path} = Project) when is_list(Modules) ->
+    {ok, {project, 7, Title, [upgrade_module(Module, v5) || Module <- Modules],
+          Path, icon_for(Title, Path)}};
+upgrade({project, 6, Title, Modules, Path}) when is_list(Modules) ->
+    {ok, {project, 7, Title, [upgrade_module(Module, v5) || Module <- Modules],
+          Path, icon_for(Title, Path)}};
+upgrade({project, 7, _Title, Modules, _Path, _Icon} = Project) when is_list(Modules) ->
     {ok, Project};
 upgrade(_) ->
     error.
+
+icon_for(<<"Campy">>, _Path) -> <<"assets/camping-tent.png">>;
+icon_for(_Title, Path) ->
+    case filename:basename(Path) of
+        <<"campy.campy">> -> <<"assets/camping-tent.png">>;
+        _ -> <<>>
+    end.
 
 upgrade_module({module, Id, Name, Form, Source}, Version) ->
     {module, Id, Name, upgrade_form(Form, Version), Source}.

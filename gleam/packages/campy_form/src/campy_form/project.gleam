@@ -13,10 +13,18 @@ pub type Module {
 }
 
 pub type Project {
-  Project(version: Int, title: String, modules: List(Module), path: String)
+  Project(
+    version: Int,
+    title: String,
+    modules: List(Module),
+    path: String,
+    icon: String,
+  )
 }
 
-pub const version = 6
+pub const version = 7
+
+pub const camping_icon = "assets/camping-tent.png"
 
 pub const default_path = "projects/campy.campy"
 
@@ -39,6 +47,7 @@ pub fn campy() -> Project {
       Module("search-box", "Search box", search_form(), search_source()),
     ],
     default_path,
+    camping_icon,
   )
 }
 
@@ -48,6 +57,7 @@ pub fn new() -> Project {
     "Campy",
     [Module("main", "Main", campy_form.new_form(), campy_form.default_source())],
     default_path,
+    "",
   )
 }
 
@@ -463,6 +473,7 @@ pub fn new_project(title: String, path: String) -> Project {
     title,
     [Module("main", "Main", form, campy_form.default_source())],
     path,
+    "",
   )
 }
 

@@ -98,7 +98,7 @@ widget model where one exists (LCL properties are mapped to Slint semantics).
 `campy_form` owns the designer model (a flat list of absolutely positioned
 controls plus a parent map for adoption, an alignment map, and per-container
 layouts), handler-name derivation and stub generation, the versioned project
-codec (v6), the workspace codec (v1), and the standalone form-window emitter. Panels and the window root accept children; new/pasted controls are
+codec (v7), the workspace codec (v1), and the standalone form-window emitter. Panels and the window root accept children; new/pasted controls are
 adopted by the selected accepting component, its first accepting ancestor, or the
 window. Copy/cut/paste snapshots a whole subtree and re-keys it on paste. A
 project is a set of modules, each with one form and its handler source; Campy
@@ -201,7 +201,7 @@ stub in that module's source, and the code view displays the highlighted source
 or edits one handler at a time. The Settings → Editor dialog changes the code
 font family/size and the color scheme. Project files are compressed, versioned
 Erlang terms validated on load; v1 (single form), v2 (modules), v3 (layout),
-v4 (parent map), and v5 (alignment) files upgrade to v6 (per-container layouts). Cargo builds use
+v4 (parent map), and v5 (alignment) files upgrade to v7 (per-container layouts and project icons). Cargo builds use
 `scripts/cargo.sh`, which selects the compatible glibc toolchain when installed
 and avoids producing a NIF that requires a newer glibc than the runtime. The selected component can be
 removed with the inspector trashcan or the Delete key; both go through the

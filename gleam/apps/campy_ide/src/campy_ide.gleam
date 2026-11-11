@@ -8,8 +8,8 @@ import campy_ide/ide_ui
 import campy_ide/live_preview_ui
 import campy_ide/mcp
 import campy_ide/state.{
-  type State, Events, NoPopup, OpenFile, PickPicture, Preview, Properties,
-  SaveAs,
+  type State, Events, NoPopup, OpenFile, PickPicture, PickProjectIcon, Preview,
+  Properties, SaveAs,
 }
 import gleam/int
 import gleam/io
@@ -644,6 +644,8 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "console-input" -> state.console_input(model, payload)
     "clear-console" -> state.clear_console(model)
     "browse-picture" -> pick_picture(model)
+    "browse-project-icon" -> pick_project_icon(model)
+    "clear-project-icon" -> state.set_project_icon(model, "")
     "open-settings" ->
       state.set_agent_open(state.set_settings_open(model, True), False)
     "context-menu" -> state.open_context_menu(model, payload)
@@ -793,6 +795,16 @@ fn pick_picture(model: State) -> State {
   }
 }
 
+fn pick_project_icon(model: State) -> State {
+  case native_dialog("picture", model.project.icon) {
+    Ok(Some(path)) ->
+      state.set_project_icon(model, path)
+      |> state.set_status("Project icon set to " <> path)
+    Ok(None) -> state.set_status(model, "Project icon selection cancelled")
+    Error(_) -> state.set_popup(model, PickProjectIcon)
+  }
+}
+
 fn open_path(model: State, path: String) -> State {
   case project.load(path) {
     Ok(loaded) -> state.open_project(model, loaded)
@@ -831,6 +843,10 @@ fn popup_accept(model: State, path: String) -> State {
       state.commit_field(model, "text", path)
       |> state.set_popup(NoPopup)
       |> state.set_status("Picture set to " <> path)
+    PickProjectIcon ->
+      state.set_project_icon(model, path)
+      |> state.set_popup(NoPopup)
+      |> state.set_status("Project icon set to " <> path)
     NoPopup -> model
   }
 }

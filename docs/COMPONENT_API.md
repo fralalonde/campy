@@ -160,15 +160,15 @@ A workspace is a versioned compressed Erlang term
 active project path. Campy auto-saves it after document or project-list changes.
 Projects can be switched, created (`Project N` with a `Main` module and a unique
 `projects/project-N.campy` path), and deleted from the workspace; deleting keeps
-the project file. Each project is independently versioned (v6 now) and keeps its
-own modules, form, handler source, undo history, and path.
+the project file. Each project is independently versioned (v7 now) and keeps its
+own modules, form, handler source, undo history, path, and icon.
 
 ## Designer model (current IDE slice)
 
 `campy_form` provides the IDE's form model (the CCL kinds with absolute
 geometry), a form-level `Free | Column | Row` layout, per-container layouts, a
 parent map for container adoption, an alignment map, derived handler names and
-stub generation, subtree copy/paste, the versioned project codec (v6), the
+stub generation, subtree copy/paste, the versioned project codec (v7), the
 workspace codec, and the standalone form-window emitter. Panels and the window root
 accept children; adoption walks from the selected control to its first accepting
 ancestor and falls back to the window. Picture stores its path in the control's

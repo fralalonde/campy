@@ -394,7 +394,8 @@ pub fn project_roundtrip_preserves_modules_test() {
   let assert Ok(saved) = project.save(original, path)
   saved.path |> should.equal(path)
   let assert Ok(loaded) = project.load(path)
-  loaded.version |> should.equal(6)
+  loaded.version |> should.equal(7)
+  loaded.icon |> should.equal("assets/camping-tent.png")
   loaded.title |> should.equal("Campy")
   loaded.modules
   |> list.map(fn(module) { module.name })

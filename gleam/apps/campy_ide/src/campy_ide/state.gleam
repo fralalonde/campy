@@ -29,6 +29,7 @@ pub type Popup {
   OpenFile
   SaveAs
   PickPicture
+  PickProjectIcon
 }
 
 pub type Scheme {
@@ -1259,6 +1260,20 @@ pub fn close_context_menu(state: State) -> State {
 
 pub fn set_project_dialog_open(state: State, open: Bool) -> State {
   State(..state, project_dialog_open: open)
+}
+
+pub fn set_project_icon(state: State, icon: String) -> State {
+  let updated =
+    State(
+      ..state,
+      project: project.Project(..state.project, icon: icon),
+      status: case icon {
+        "" -> "Project icon cleared"
+        _ -> "Project icon set"
+      },
+    )
+  let ws = workspace.update_active(updated.workspace, updated.project)
+  commit(state, State(..updated, workspace: ws))
 }
 
 pub fn commit_project_field(

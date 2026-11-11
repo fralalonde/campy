@@ -57,8 +57,9 @@ Layout:
   creating, and deleting projects is done in the left manager. The workspace and
   every project edit are persisted automatically in
   `projects/workspace.campy`; deleting a project only removes it from the
-  workspace, not its file. Selecting a project row exposes its title, path, and
-  module count in the inspector.
+  workspace, not its file. Selecting a project row exposes its title, icon,
+  path, and module count in the inspector; use **Choose icon…** to pick an
+  image.
 - **Undo/Redo**: every form, inspector, module-creation, and handler edit is
   recorded in one global history. Use Edit → Undo/Redo or Ctrl+Z /
   Ctrl+Shift+Z / Ctrl+Y.
@@ -101,8 +102,9 @@ The inspector edits the canonical form model (name, text, x, y, w, h, enabled,
 visible), and the Events tab (`OnClick`, `OnTextChanged`) opens the handler in
 the central Code view, generating a typed Gleam stub when one does not exist.
 The Code view is syntax-highlighted and has a focused editor for the selected
-handler with Apply/Cancel. Files are versioned Erlang-term projects (v6);
-v1–v5 files (and v5 projects embedded in a workspace) are upgraded on load. The Cat Café demo demonstrates a panel with
+handler with Apply/Cancel. Files are versioned Erlang-term projects (v7);
+v1–v6 files (and older projects embedded in a workspace) are upgraded on load.
+Projects carry an icon; Campy's own project uses a little camping-tent icon. The Cat Café demo demonstrates a panel with
 adopted children, a picture, a list, and handler stubs; the Widgets module
 showcases the CCL controls and top/bottom aligned labels; the Welcome module
 uses the new **Menu** component.
