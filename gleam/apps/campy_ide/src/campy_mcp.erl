@@ -203,7 +203,7 @@ path_only(Path) ->
         [] -> Path
     end.
 
-read_headers(Socket, Acc) when byte_size(Acc) > 65536 ->
+read_headers(_Socket, Acc) when byte_size(Acc) > 65536 ->
     {error, headers_too_large};
 read_headers(Socket, Acc) ->
     case binary:split(Acc, <<"\r\n\r\n">>) of

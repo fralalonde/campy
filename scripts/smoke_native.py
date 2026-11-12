@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """Render real native windows; dispatch input through a test-only Slint adapter."""
 import os
 from pathlib import Path
@@ -13,11 +13,13 @@ from workspace import APP, environment
 
 
 def main():
-    if sys.platform != "linux":
-        raise SystemExit("Native sessions currently support Linux only")
+    if sys.platform not in ("linux", "win32"):
+        raise SystemExit("Native sessions currently support Linux and Windows only")
     backend = sys.argv[1] if len(sys.argv) > 1 else "auto"
     if backend not in ("auto", "x11"):
         raise SystemExit("Backend must be auto or x11")
+    if backend == "x11" and sys.platform != "linux":
+        raise SystemExit("The x11 backend is available on Linux only")
     env = environment()
     if backend == "x11":
         env.pop("WAYLAND_DISPLAY", None)
@@ -37,7 +39,10 @@ def main():
             print(f"Native smoke passed ({backend}); rendered snapshot: {snapshot}")
         finally:
             if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGTERM)
+                else:
+                    process.terminate()
                 process.wait(timeout=5)
 
 

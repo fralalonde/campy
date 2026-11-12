@@ -4,11 +4,29 @@
 # this runtime (and some sandboxes) provide.
 set -euo pipefail
 
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        # Git Bash HOME can differ from the home used to install Cargo. Mixing
+        # registry source paths in one target directory invalidates the cache.
+        if [ -z "${CARGO_HOME:-}" ]; then
+            CARGO_BIN="$(command -v cargo)"
+            case "$CARGO_BIN" in
+                */.cargo/bin/cargo|*/.cargo/bin/cargo.exe)
+                    export CARGO_HOME="$(cygpath -w "$(dirname "$(dirname "$CARGO_BIN")")")"
+                    ;;
+            esac
+        fi
+        # Windows can deny rustc's final incremental-directory rename. A failed
+        # session cannot be reused and its diagnostic is replayed on later runs.
+        export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+        ;;
+esac
+
 TC="${CAMPY_TOOLCHAIN:-$HOME/.local/toolchain/x86-64--glibc--stable-2025.08-1}"
 GCC="$TC/bin/x86_64-linux-gcc"
 GXX="$TC/bin/x86_64-linux-g++"
 
-if [ -x "$GCC" ]; then
+if [ "$(uname -s)" = "Linux" ] && [ -x "$GCC" ]; then
     export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$GCC"
     export CC="$GCC"
     [ -x "$GXX" ] && export CXX="$GXX"

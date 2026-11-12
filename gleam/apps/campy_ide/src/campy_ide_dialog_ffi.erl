@@ -101,7 +101,7 @@ start_path(_, Path) ->
             end
     end.
 
-run(Mode, Exe, Args, Base) ->
+run(_Mode, Exe, Args, Base) ->
     Port = open_port({spawn_executable, Exe},
                      [{args, Args}, binary, exit_status, stderr_to_stdout]),
     collect(Port, Base, <<>>).

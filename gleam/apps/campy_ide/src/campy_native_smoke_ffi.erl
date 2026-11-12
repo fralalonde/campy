@@ -66,7 +66,12 @@ run(Source0, ApplicationSource) ->
     exit(Child, kill),
     receive {'DOWN', Monitor, process, Child, killed} -> ok after 3000 -> error(owner_down_timeout) end,
     await_empty(5000),
-    menu_smoke(ApplicationSource),
+    %% Synthetic input is dispatched to the main Slint window. It does not
+    %% cover the Windows context-menu interaction path.
+    case os:type() of
+        {win32, _} -> io:format("MENU_SMOKE_SKIPPED synthetic popup input on Windows~n");
+        _ -> menu_smoke(ApplicationSource)
+    end,
     true = get(beats) >= 3,
     unlink(Heartbeat),
     exit(Heartbeat, shutdown),

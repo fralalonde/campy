@@ -12,8 +12,18 @@ library, or browser is needed for the verified Linux path.
 Slint's generic guidance says the main thread is required by most backends. The
 pinned Winit backend is more specific: version 1.18.1 configures both its Linux
 Wayland and X11 builders with `with_any_thread(true)`. The adapter relies on that
-implementation, pins its Slint version, and refuses native sessions on other OSes.
+implementation and pins its Slint version. The original M0 adapter refused native
+sessions on other OSes.
 See [the backend source](https://github.com/slint-ui/slint/blob/v1.18.1/internal/backends/winit/lib.rs).
+
+## Windows follow-up
+
+The same pinned backend also sets `with_any_thread(true)` for Windows. Campy now
+allows Windows native sessions and keeps its `/proc/thread-self` assertion on
+Linux only. The Windows `just smoke-native` run verified a real window, synthetic
+main-window input, snapshot, resize, reload, generations, ownership, and cleanup.
+The Windows `just run` path opened the IDE and reached UI generation 1. The smoke
+adapter does not cover Windows context-menu popup input.
 
 ## Ownership and scheduling
 
@@ -66,7 +76,7 @@ distribution's native Winit dependencies.
 
 ## Limits
 
-macOS and Windows startup need separate decisions and verification. Focus,
+macOS startup needs a separate decision and verification. Focus,
 selection, scroll, IME composition preservation, generic schemas, package loading,
 and robust state/effect migration remain later milestones.
 

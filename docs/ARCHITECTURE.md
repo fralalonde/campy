@@ -2,7 +2,7 @@
 
 ## Ownership
 
-Each OS application process contains BEAM and the Rust NIF. The Linux UI runtime
+Each OS application process contains BEAM and the Rust NIF. The Linux and Windows UI runtime
 owns a single Slint Winit event loop on a dedicated supported thread. Multiple BEAM
 actors hold logical sessions. Ordinary controls are nodes, not mandatory actors;
 stateful components/windows may have actor owners.
@@ -10,7 +10,7 @@ stateful components/windows may have actor owners.
 The IDE is a Gleam application using this same runtime, not a separate Rust product.
 Rust owns rendering, native integration, and queue transport only.
 
-The NIF supports live Linux sessions and display-free UI compilation. Compilation uses a native worker with an explicit 8 MiB stack, because Slint standard-widget compilation overflows a BEAM scheduler stack. A dirty I/O NIF waits for the result in this bootstrap. Live session NIFs enqueue commands and return immediately; their completions arrive asynchronously. The separate UI thread has its own 8 MiB stack.
+The NIF supports live Linux and Windows sessions and display-free UI compilation. Compilation uses a native worker with an explicit 8 MiB stack, because Slint standard-widget compilation overflows a BEAM scheduler stack. A dirty I/O NIF waits for the result in this bootstrap. Live session NIFs enqueue commands and return immediately; their completions arrive asynchronously. The separate UI thread has its own 8 MiB stack.
 
 ## Canonical description
 
@@ -80,7 +80,7 @@ loaded BEAM code is not rolled back. Full transactional behavior is M3.
 - `campy-renderer`: Slint interpreter and thread-confined live UI state.
 
 See [ADR 0001](adr/0001-linux-ui-thread.md) for bounded session transport,
-owner monitoring, Linux startup, and the current polling/reload tradeoffs.
+owner monitoring, Linux and Windows startup, and the current polling/reload tradeoffs.
 
 Use OTP `priv/` assets for installed packages. Public package interfaces/source
 are additionally needed for statically typed consumer builds; runtime discovery

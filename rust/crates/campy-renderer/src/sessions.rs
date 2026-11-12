@@ -1,4 +1,4 @@
-//! Linux Winit adapter. Live Slint values never leave this dedicated UI thread.
+//! Winit adapter. Live Slint values never leave this dedicated UI thread.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -229,8 +229,8 @@ pub fn active_sessions() -> usize {
 }
 
 pub fn open(sink: EventSink) -> Result<Session, String> {
-    if !cfg!(target_os = "linux") {
-        return Err("Native sessions currently support Linux Winit only".into());
+    if !cfg!(any(target_os = "linux", target_os = "windows")) {
+        return Err("Native sessions currently support Linux and Windows Winit only".into());
     }
     let runtime = RUNTIME.get_or_init(start).as_ref().map_err(Clone::clone)?;
     let mut registrations = runtime
@@ -310,6 +310,7 @@ struct LiveSession {
 }
 
 fn thread_detail() -> String {
+    #[cfg(target_os = "linux")]
     let tid = std::fs::read_link("/proc/thread-self")
         .ok()
         .and_then(|path| {
@@ -317,11 +318,22 @@ fn thread_detail() -> String {
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| "unknown".into());
-    format!(
-        "pid={} tid={tid} thread={:?}",
-        std::process::id(),
-        std::thread::current().id()
-    )
+    #[cfg(target_os = "linux")]
+    {
+        format!(
+            "pid={} tid={tid} thread={:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        format!(
+            "pid={} thread={:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )
+    }
 }
 
 impl LiveSession {
@@ -531,7 +543,7 @@ impl LiveSession {
 }
 
 fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), String> {
-    // The pinned Winit backend explicitly sets with_any_thread(true) on Linux.
+    // The pinned Winit backend explicitly sets with_any_thread(true) on Linux and Windows.
     // This adapter never relies on a scheduler or dirty scheduler being the UI thread.
     slint::BackendSelector::new()
         .backend_name("winit".into())
@@ -539,11 +551,14 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
         .select()
         .map_err(|e| e.to_string())?;
     let ui_thread = std::thread::current().id();
-    let os_tid = std::fs::read_link("/proc/thread-self").map_err(|e| e.to_string())?;
-    assert_ne!(
-        os_tid.file_name().unwrap().to_string_lossy(),
-        std::process::id().to_string()
-    );
+    #[cfg(target_os = "linux")]
+    {
+        let os_tid = std::fs::read_link("/proc/thread-self").map_err(|e| e.to_string())?;
+        assert_ne!(
+            os_tid.file_name().unwrap().to_string_lossy(),
+            std::process::id().to_string()
+        );
+    }
     eprintln!(
         "Campy UI thread: {} backend=winit renderer=software",
         thread_detail()

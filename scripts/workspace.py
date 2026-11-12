@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """Small cross-toolchain runner; public commands live in the root justfile."""
 
 from __future__ import annotations
@@ -183,7 +183,7 @@ def main() -> None:
     if action == "doctor":
         for executable, flag in (
             ("cargo", "--version"), ("rustc", "--version"),
-            ("gleam", "--version"), ("just", "--version"), ("python3", "--version"),
+            ("gleam", "--version"), ("just", "--version"), (sys.executable, "--version"),
         ):
             command([executable, flag])
         command(["erl", "-noshell", "-eval",
