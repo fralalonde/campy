@@ -35,6 +35,12 @@ if [ "$(uname -s)" = "Linux" ] && [ -x "$GCC" ]; then
     export RUSTFLAGS="-Clink-arg=-Wl,--allow-shlib-undefined"
     SHIM="$HOME/.local/share/campy-sandbox/bin/campy-pkg-config"
     [ -x "$SHIM" ] && export PKG_CONFIG="$SHIM"
+    # The linker may emit -lfontconfig before its -L search path, so make the
+    # runtime fontconfig dev symlink discoverable through GCC's search path too.
+    SANDBOX_LIB="$HOME/.local/share/campy-sandbox/lib"
+    if [ -e "$SANDBOX_LIB/libfontconfig.so" ]; then
+        export LIBRARY_PATH="$SANDBOX_LIB${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    fi
 fi
 
 exec cargo "$@"
