@@ -104,6 +104,13 @@ def gleam(args: list[str]) -> None:
                 expected="passed, no failures" if args[0] == "test" else None)
 
 
+def clean() -> None:
+    gleam(["clean"])
+    for entry in NATIVE.glob("*"):
+        if entry.name != ".gitkeep":
+            entry.unlink()
+
+
 def watch_files() -> list[Path]:
     roots = [
         ROOT / "gleam/apps/campy_ide/src",
@@ -192,6 +199,8 @@ def main() -> None:
         stage_nif()
     elif action == "gleam":
         gleam(args)
+    elif action == "clean":
+        clean()
     elif action == "run":
         command(["gleam", "run"], cwd=APP, expected="Campy window closed:")
     elif action == "smoke":

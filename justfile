@@ -21,6 +21,11 @@ build-gleam:
 # Build both subroots and install the development NIF into the bridge package.
 build: stage-nif build-gleam
 
+# Remove Rust/Gleam build artifacts and the staged development NIF.
+clean:
+    ./scripts/cargo.sh clean --manifest-path rust/Cargo.toml
+    python scripts/workspace.py clean
+
 # Open the native Gleam/BEAM IDE host (Linux or Windows Winit).
 run: build
     python scripts/workspace.py run

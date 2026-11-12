@@ -22,7 +22,9 @@ just doctor
 just run
 ```
 
-`just run` builds Rust and Gleam, stages the NIF, and opens Campy Studio. On Linux, `./campy` is an equivalent launcher. Development: `just dev` watches Gleam sources; `just check` runs formatting and tests. There is no packaged installer yet.
+`just run` builds Rust and Gleam, stages the NIF, and opens Campy Studio. On Linux, `./campy` is an equivalent launcher. Development: `just dev` watches Gleam sources; `just check` runs formatting and
+tests; `just clean` removes Rust/Gleam build artifacts and the staged
+development NIF. There is no packaged installer yet.
 
 ## State and limits
 
