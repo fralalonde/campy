@@ -130,6 +130,13 @@ pub fn main() {
   let last = apply(session, ide_ui.snapshot(project_properties), last)
   snapshot(session, "ide-project.png")
 
+  let container =
+    model
+    |> state.select("panel-1")
+    |> state.commit_field("border", "12")
+  let last = apply(session, ide_ui.snapshot(container), last)
+  snapshot(session, "ide-container.png")
+
   let context = state.open_context_menu(model, "pet-button")
   let last = apply(session, ide_ui.snapshot(context), last)
   snapshot(session, "ide-context.png")

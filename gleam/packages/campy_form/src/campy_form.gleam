@@ -40,6 +40,7 @@ pub type Align {
   Left
   Right
   Client
+  Fill
 }
 
 pub type Control {
@@ -68,11 +69,12 @@ pub type Form {
     parents: List(#(String, String)),
     aligns: List(#(String, Align)),
     layouts: List(#(String, Layout)),
+    borders: List(#(String, Int)),
   )
 }
 
 pub fn new_form() -> Form {
-  Form("campy.form", "Campy Form", 640, 420, Free, [], [], [], [])
+  Form("campy.form", "Campy Form", 640, 420, Free, [], [], [], [], [])
 }
 
 // Starting project so the IDE opens with something to play with.
@@ -110,6 +112,7 @@ pub fn demo_form() -> Form {
         True,
       ),
     ],
+    [],
     [],
     [],
     [],
@@ -203,6 +206,7 @@ pub fn align_key(align: Align) -> String {
     Left -> "left"
     Right -> "right"
     Client -> "client"
+    Fill -> "fill"
   }
 }
 
@@ -214,6 +218,7 @@ pub fn align_label(align: Align) -> String {
     Left -> "Left"
     Right -> "Right"
     Client -> "Client"
+    Fill -> "Fill (between siblings)"
   }
 }
 
@@ -224,6 +229,7 @@ pub fn align_from_key(key: String) -> Align {
     "left" -> Left
     "right" -> Right
     "client" -> Client
+    "fill" -> Fill
     _ -> NoAlign
   }
 }
@@ -231,23 +237,59 @@ pub fn align_from_key(key: String) -> Align {
 // Effective geometry used by the designer and live preview, including design
 // alignment. Column/Row layouts position controls with Slint, so their stored
 // geometry is returned for editor-side hit testing only.
+pub fn border_of(form: Form, parent_id: String) -> Int {
+  case list.find(form.borders, fn(entry) { entry.0 == parent_id }) {
+    Ok(entry) -> int.max(0, entry.1)
+    Error(_) -> 0
+  }
+}
+
+pub fn set_border_for(form: Form, parent_id: String, border: Int) -> Form {
+  let value = int.max(0, int.min(512, border))
+  let rest = list.filter(form.borders, fn(entry) { entry.0 != parent_id })
+  let borders = case value {
+    0 -> rest
+    _ -> list.append(rest, [#(parent_id, value)])
+  }
+  Form(..form, borders: borders)
+}
+
+fn inner_bounds(
+  form: Form,
+  parent_id: String,
+  px: Int,
+  py: Int,
+  pw: Int,
+  ph: Int,
+) -> #(Int, Int, Int, Int) {
+  let border = border_of(form, parent_id)
+  #(
+    px + border,
+    py + border,
+    int.max(0, pw - border * 2),
+    int.max(0, ph - border * 2),
+  )
+}
+
 pub fn bounds(form: Form, control: Control) -> #(Int, Int, Int, Int) {
   case form.layout {
     Free -> {
       let parent_id = parent_of(form, control.id)
       let #(px, py, pw, ph) = parent_bounds(form, control)
+      let #(ix, iy, iw, ih) = inner_bounds(form, parent_id, px, py, pw, ph)
       case layout_of(form, parent_id) {
         Free ->
           case align_of(form, control.id) {
             NoAlign -> #(control.x, control.y, control.width, control.height)
-            Top -> #(px, py, pw, control.height)
-            Bottom -> #(px, py + ph - control.height, pw, control.height)
-            Left -> #(px, py, control.width, ph)
-            Right -> #(px + pw - control.width, py, control.width, ph)
-            Client -> #(px, py, pw, ph)
+            Top -> #(ix, iy, iw, control.height)
+            Bottom -> #(ix, iy + ih - control.height, iw, control.height)
+            Left -> #(ix, iy, control.width, ih)
+            Right -> #(ix + iw - control.width, iy, control.width, ih)
+            Client -> #(ix, iy, iw, ih)
+            Fill -> fill_bounds(form, control, parent_id, ix, iy, iw, ih)
           }
-        Column -> arranged_column(form, control, parent_id, px, py, pw)
-        Row -> arranged_row(form, control, parent_id, px, py, ph)
+        Column -> arranged_column(form, control, parent_id, ix, iy, iw)
+        Row -> arranged_row(form, control, parent_id, ix, iy, ih)
       }
     }
     Column | Row -> #(control.x, control.y, control.width, control.height)
@@ -266,8 +308,8 @@ fn arranged_column(
     children_of(form, parent_id)
     |> list.take_while(fn(sibling) { sibling.id != control.id })
   let offset =
-    list.fold(before, 8, fn(total, sibling) { total + sibling.height + 6 })
-  #(px + 8, py + offset, int.max(8, pw - 16), control.height)
+    list.fold(before, py, fn(total, sibling) { total + sibling.height + 6 })
+  #(px, offset, int.max(1, pw), control.height)
 }
 
 fn arranged_row(
@@ -282,8 +324,55 @@ fn arranged_row(
     children_of(form, parent_id)
     |> list.take_while(fn(sibling) { sibling.id != control.id })
   let offset =
-    list.fold(before, 8, fn(total, sibling) { total + sibling.width + 6 })
-  #(px + offset, py + 8, control.width, int.max(8, ph - 16))
+    list.fold(before, px, fn(total, sibling) { total + sibling.width + 6 })
+  #(offset, py, control.width, int.max(1, ph))
+}
+
+fn fill_bounds(
+  form: Form,
+  control: Control,
+  parent_id: String,
+  ix: Int,
+  iy: Int,
+  iw: Int,
+  ih: Int,
+) -> #(Int, Int, Int, Int) {
+  let cx = control.x
+  let cy = control.y
+  let cr = cx + control.width
+  let cb = cy + control.height
+  let #(left, top, right, bottom) =
+    children_of(form, parent_id)
+    |> list.filter(fn(sibling) { sibling.id != control.id })
+    |> list.fold(#(ix, iy, ix + iw, iy + ih), fn(rect, sibling) {
+      let #(sx, sy, sw, sh) = case align_of(form, sibling.id) {
+        Fill -> #(sibling.x, sibling.y, sibling.width, sibling.height)
+        _ -> bounds(form, sibling)
+      }
+      let sr = sx + sw
+      let sb = sy + sh
+      let overlaps_x = sx < cr && sr > cx
+      let overlaps_y = sy < cb && sb > cy
+      let #(l, t, r, b) = rect
+      let l = case overlaps_y && sr <= cx {
+        True -> int.max(l, sr)
+        False -> l
+      }
+      let r = case overlaps_y && sx >= cr {
+        True -> int.min(r, sx)
+        False -> r
+      }
+      let t = case overlaps_x && sb <= cy {
+        True -> int.max(t, sb)
+        False -> t
+      }
+      let b = case overlaps_x && sy >= cb {
+        True -> int.min(b, sy)
+        False -> b
+      }
+      #(l, t, r, b)
+    })
+  #(left, top, int.max(1, right - left), int.max(1, bottom - top))
 }
 
 fn parent_bounds(form: Form, control: Control) -> #(Int, Int, Int, Int) {
@@ -634,6 +723,8 @@ pub fn paste_controls(
   clipboard: List(Control),
   clipboard_parents: List(#(String, String)),
   clipboard_aligns: List(#(String, Align)),
+  clipboard_layouts: List(#(String, Layout)),
+  clipboard_borders: List(#(String, Int)),
   target_id: String,
 ) -> #(Form, Option(Control)) {
   case clipboard {
@@ -686,12 +777,30 @@ pub fn paste_controls(
             Error(_) -> Error(Nil)
           }
         })
+      let new_layouts =
+        list.filter_map(mapping, fn(entry) {
+          let #(old_id, control) = entry
+          case list.find(clipboard_layouts, fn(layout) { layout.0 == old_id }) {
+            Ok(layout) -> Ok(#(control.id, layout.1))
+            Error(_) -> Error(Nil)
+          }
+        })
+      let new_borders =
+        list.filter_map(mapping, fn(entry) {
+          let #(old_id, control) = entry
+          case list.find(clipboard_borders, fn(border) { border.0 == old_id }) {
+            Ok(border) -> Ok(#(control.id, border.1))
+            Error(_) -> Error(Nil)
+          }
+        })
       let next =
         Form(
           ..form,
           controls: list.append(form.controls, pasted_controls),
           parents: list.append(form.parents, new_parents),
           aligns: list.append(form.aligns, new_aligns),
+          layouts: list.append(form.layouts, new_layouts),
+          borders: list.append(form.borders, new_borders),
         )
       #(next, find_new(next, pasted_root.id))
     }

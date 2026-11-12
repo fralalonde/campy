@@ -714,6 +714,7 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "field-title" -> state.commit_field(model, "title", payload)
     "field-width" -> state.commit_field(model, "width", payload)
     "field-height" -> state.commit_field(model, "height", payload)
+    "field-border" -> state.commit_field(model, "border", payload)
     "tab-properties" -> state.set_tab(model, Properties)
     "tab-events" -> state.set_tab(model, Events)
     "edit-event" -> state.open_event(model, payload)

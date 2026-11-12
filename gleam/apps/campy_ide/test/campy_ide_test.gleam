@@ -238,6 +238,7 @@ pub fn preview_honours_form_layouts_test() {
       [],
       [],
       [],
+      [],
     )
   let assert Ok(free) = preview.to_slint(form)
   campy_bridge.validate_ui(free) |> should.equal(Ok(1))
@@ -971,6 +972,7 @@ pub fn container_layout_property_is_undoable_test() {
   let changed =
     demo_state()
     |> state.select("panel-1")
+    |> state.commit_field("border", "8")
     |> state.set_container_layout(campy_form.Column)
   let assert Some(form) = state.active_form(changed)
   campy_form.layout_of(form, "panel-1") |> should.equal(campy_form.Column)
@@ -1001,4 +1003,48 @@ pub fn campy_has_a_tent_icon_test() {
   |> list.find(fn(item) { item.path == changed.project.path })
   |> should.equal(Ok(project.Project(..changed.project, icon: "assets/cat.png")))
   state.undo(changed).project.icon |> should.equal(project.camping_icon)
+}
+
+pub fn border_fields_update_form_and_container_test() {
+  let container =
+    demo_state()
+    |> state.select("panel-1")
+    |> state.commit_field("border", "12")
+  let assert Some(form) = state.active_form(container)
+  campy_form.border_of(form, "panel-1") |> should.equal(12)
+  let undone = state.undo(container)
+  let assert Some(form) = state.active_form(undone)
+  campy_form.border_of(form, "panel-1") |> should.equal(0)
+
+  let window = demo_state() |> state.commit_field("border", "16")
+  let assert Some(form) = state.active_form(window)
+  campy_form.border_of(form, "") |> should.equal(16)
+}
+
+pub fn fill_alignment_is_available_test() {
+  state.align_from_name("Fill") |> should.equal(campy_form.Fill)
+  let aligned =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.set_align(campy_form.Fill)
+  let assert Some(form) = state.active_form(aligned)
+  campy_form.align_of(form, "pet-button") |> should.equal(campy_form.Fill)
+}
+
+pub fn paste_copies_container_border_and_layout_test() {
+  let pasted =
+    demo_state()
+    |> state.select("panel-1")
+    |> state.commit_field("border", "12")
+    |> state.set_container_layout(campy_form.Column)
+    |> state.copy_selected
+    |> state.select("")
+    |> state.paste
+  let assert Some(form) = state.active_form(pasted)
+  let assert Ok(copy) =
+    list.find(form.controls, fn(control) {
+      string.starts_with(control.id, "panel-1-copy")
+    })
+  campy_form.border_of(form, copy.id) |> should.equal(12)
+  campy_form.layout_of(form, copy.id) |> should.equal(campy_form.Column)
 }

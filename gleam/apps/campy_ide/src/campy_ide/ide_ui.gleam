@@ -201,6 +201,7 @@ fn scalars(model: State) -> List(Update) {
       TextUpdate("module-count", module_count_text(model)),
       IntUpdate("canvas-w", form_width(form)),
       IntUpdate("canvas-h", form_height(form)),
+      IntUpdate("form-border-size", form_border_size(model)),
       IntUpdate("window-x", window_x(model)),
       IntUpdate("window-y", window_y(model)),
       IntUpdate(
@@ -251,6 +252,8 @@ fn scalars(model: State) -> List(Update) {
       ScalarIntUpdate("selection-count", list.length(model.selection)),
       ScalarIntUpdate("layout-index", layout_index(form)),
       ScalarIntUpdate("container-layout-index", container_layout_index(model)),
+      TextUpdate("insp-border", selected_border(model)),
+      TextUpdate("form-border", form_border(model)),
       BoolUpdate("dark-mode", is_dark_scheme(model.scheme)),
       TextUpdate("editor-font", model.font),
       IntUpdate("editor-font-size", model.font_size),
@@ -903,6 +906,7 @@ fn callbacks() -> String {
   <> "  callback dialog-new-project();\n"
   <> "  callback dialog-open-project();\n"
   <> "  callback field-project-title(string);\n"
+  <> "  callback field-border(string);\n"
   <> "  callback context-menu(string);\n"
   <> "  callback close-context-menu();\n"
   <> "  callback context-copy();\n"
@@ -917,6 +921,7 @@ fn callbacks() -> String {
   <> "  callback code-apply(string);\n"
   <> "  callback set-align(string);\n"
   <> "  callback set-layout(string);\n"
+  <> "  callback set-container-layout(string);\n"
   <> "  callback set-layout-free();\n"
   <> "  callback set-layout-column();\n"
   <> "  callback set-layout-row();\n"
@@ -1404,7 +1409,7 @@ fn grid_lines() -> String {
 
 fn column_canvas() -> String {
   "            if !root.slint-tab && root.layout-column: ScrollView { width: 100%; height: 100%;\n"
-  <> "              VerticalLayout { padding: 16px; spacing: 8px;\n"
+  <> "              VerticalLayout { padding: root.form-border-size; spacing: 6px;\n"
   <> "                for control in root.control-items: ControlView {\n"
   <> "                  data: control; designing: true; free-layout: false; height: control.h;\n"
   <> "                  theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface;\n"
@@ -1416,7 +1421,7 @@ fn column_canvas() -> String {
 
 fn row_canvas() -> String {
   "            if !root.slint-tab && root.layout-row: ScrollView { width: 100%; height: 100%;\n"
-  <> "              HorizontalLayout { padding: 16px; spacing: 8px; height: 100%;\n"
+  <> "              HorizontalLayout { padding: root.form-border-size; spacing: 6px; height: 100%;\n"
   <> "                for control in root.control-items: ControlView {\n"
   <> "                  data: control; designing: true; free-layout: false; width: control.w; height: 100%;\n"
   <> "                  theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface;\n"
@@ -1523,7 +1528,15 @@ fn right_pane() -> String {
   <> field("H", "insp-h", "field-h")
   <> "          if root.layout-free: HorizontalLayout { height: 30px; spacing: 6px;\n"
   <> "            Text { text: \"Align\"; width: 64px; vertical-alignment: center; color: root.theme-fg; }\n"
-  <> "            ComboBox { model: [\"None (free)\", \"Top\", \"Bottom\", \"Left\", \"Right\", \"Client\"]; current-index: root.align-index; selected => { root.set-align(self.current-value); } }\n"
+  <> "            ComboBox { model: [\"None (free)\", \"Top\", \"Bottom\", \"Left\", \"Right\", \"Client\", \"Fill\"]; current-index: root.align-index; selected => { root.set-align(self.current-value); } }\n"
+  <> "          }\n"
+  <> "          if root.container-layout-index >= 0: HorizontalLayout { height: 30px; spacing: 6px;\n"
+  <> "            Text { text: \"Layout\"; width: 64px; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "            ComboBox { model: [\"Free\", \"Column\", \"Row\"]; current-index: root.container-layout-index; selected => { root.set-container-layout(self.current-value); } }\n"
+  <> "          }\n"
+  <> "          if root.container-layout-index >= 0: HorizontalLayout { height: 30px; spacing: 6px;\n"
+  <> "            Text { text: \"Border\"; width: 64px; vertical-alignment: center; color: root.theme-fg; }\n"
+  <> "            LineEdit { text <=> root.insp-border; horizontal-stretch: 1; accepted(text) => { root.field-border(text); } }\n"
   <> "          }\n"
   <> check_row("Enabled", "insp-enabled", "toggle-enabled")
   <> check_row("Visible", "insp-visible", "toggle-visible")
@@ -1560,6 +1573,7 @@ fn right_pane() -> String {
   <> "            Text { text: \"Layout\"; width: 64px; vertical-alignment: center; color: root.theme-fg; }\n"
   <> "            ComboBox { model: [\"Free\", \"Column\", \"Row\"]; current-index: root.layout-index; selected => { root.set-layout(self.current-value); } }\n"
   <> "          }\n"
+  <> field("Border", "form-border", "field-border")
   <> "        }\n"
   <> "        if root.has-selection && root.events-tab: VerticalLayout { spacing: 6px;\n"
   <> "          if root.has-events: HorizontalLayout { spacing: 6px; height: 32px;\n"
@@ -1936,6 +1950,31 @@ fn window_y(model: State) -> Int {
   state.window_position(model).1
 }
 
+fn selected_border(model: State) -> String {
+  case selected_control(model), active_form(model) {
+    Some(control), Some(form) ->
+      case campy_form.accepts_children(control.kind) {
+        True -> int.to_string(campy_form.border_of(form, control.id))
+        False -> ""
+      }
+    _, _ -> ""
+  }
+}
+
+fn form_border_size(model: State) -> Int {
+  case active_form(model) {
+    Some(form) -> campy_form.border_of(form, "")
+    None -> 0
+  }
+}
+
+fn form_border(model: State) -> String {
+  case active_form(model) {
+    Some(form) -> int.to_string(campy_form.border_of(form, ""))
+    None -> "0"
+  }
+}
+
 fn container_layout_index(model: State) -> Int {
   case selected_control(model), active_form(model) {
     Some(control), Some(form) ->
@@ -1966,7 +2005,7 @@ fn layout_index(form: Option(Form)) -> Int {
 
 fn align_index(align: campy_form.Align) -> Int {
   index_of(
-    ["none", "top", "bottom", "left", "right", "client"],
+    ["none", "top", "bottom", "left", "right", "client", "fill"],
     campy_form.align_key(align),
   )
 }

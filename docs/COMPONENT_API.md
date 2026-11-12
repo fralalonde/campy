@@ -118,9 +118,9 @@ the IDE palette. The basic LCL-inspired set is:
 
 Where LCL and Slint disagree, Slint's model wins: properties and events follow
 the Slint widgets, and layout uses Slint's Free/Column/Row model. LCL-style
-Top/Bottom/Left/Right/Client alignment is available on Free-layout controls and
-follows the parent container. Panels and group boxes also have a
-Free/Column/Row child layout;
+Top/Bottom/Left/Right/Client/Fill alignment is available on Free-layout controls and
+follows the parent container; Fill consumes the space between siblings. Panels
+and group boxes also have a Free/Column/Row child layout and a Border margin;
 docking order and anchors are not reproduced yet. The catalog supplies the
 palette labels (icon + LCL-style name), default sizes, default text, child
 acceptance, and handler event keys. Handler names remain `<control>_<event>`
@@ -160,15 +160,16 @@ A workspace is a versioned compressed Erlang term
 active project path. Campy auto-saves it after document or project-list changes.
 Projects can be switched, created (`Project N` with a `Main` module and a unique
 `projects/project-N.campy` path), and deleted from the workspace; deleting keeps
-the project file. Each project is independently versioned (v7 now) and keeps its
+the project file. Each project is independently versioned (v8 now) and keeps its
 own modules, form, handler source, undo history, path, and icon.
 
 ## Designer model (current IDE slice)
 
 `campy_form` provides the IDE's form model (the CCL kinds with absolute
-geometry), a form-level `Free | Column | Row` layout, per-container layouts, a
+geometry), a form-level `Free | Column | Row` layout, per-container layouts and
+borders, a
 parent map for container adoption, an alignment map, derived handler names and
-stub generation, subtree copy/paste, the versioned project codec (v7), the
+stub generation, subtree copy/paste, the versioned project codec (v8), the
 workspace codec, and the standalone form-window emitter. Panels and the window root
 accept children; adoption walks from the selected control to its first accepting
 ancestor and falls back to the window. Picture stores its path in the control's

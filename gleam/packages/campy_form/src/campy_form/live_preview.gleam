@@ -28,6 +28,7 @@ pub type Snapshot {
     width: Int,
     height: Int,
     layout: Layout,
+    border: Int,
     controls: List(PreviewControl),
   )
 }
@@ -38,6 +39,7 @@ pub fn snapshot(form: Form) -> Snapshot {
     form.width,
     form.height,
     form.layout,
+    campy_form.border_of(form, ""),
     list.map(campy_form.render_controls(form), fn(control) {
       let #(x, y, w, h) = case form.layout {
         Free -> campy_form.bounds(form, control)
@@ -85,6 +87,7 @@ pub fn to_slint() -> String {
   <> "  in-out property <bool> layout-free: true;\n"
   <> "  in-out property <bool> layout-column: false;\n"
   <> "  in-out property <bool> layout-row: false;\n"
+  <> "  in-out property <length> form-border: 0px;\n"
   <> "  callback event(string);\n"
   <> "  Rectangle { width: 100%; height: 100%; background: Palette.background;\n"
   <> free_layout()
@@ -106,7 +109,7 @@ fn free_layout() -> String {
 
 fn column_layout() -> String {
   "    if root.layout-column: ScrollView { width: 100%; height: 100%;\n"
-  <> "      VerticalLayout { padding: 8px; spacing: 8px;\n"
+  <> "      VerticalLayout { padding: root.form-border; spacing: 8px;\n"
   <> "        for control in root.control-items: PreviewItem {\n"
   <> "          data: control; width: 100%; height: control.h;\n"
   <> "          event(payload) => { root.event(payload); }\n"
@@ -117,7 +120,7 @@ fn column_layout() -> String {
 
 fn row_layout() -> String {
   "    if root.layout-row: ScrollView { width: 100%; height: 100%;\n"
-  <> "      HorizontalLayout { padding: 8px; spacing: 8px; height: 100%;\n"
+  <> "      HorizontalLayout { padding: root.form-border; spacing: 8px; height: 100%;\n"
   <> "        for control in root.control-items: PreviewItem {\n"
   <> "          data: control; width: control.w; height: 100%;\n"
   <> "          event(payload) => { root.event(payload); }\n"

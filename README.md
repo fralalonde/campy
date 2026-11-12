@@ -41,10 +41,12 @@ Layout:
   handle shows an outline preview and commits once on release, keeping the
   gesture smooth. Window positions are kept per module. The canvas has a
   contrasting surface and a light grid. Free controls can also use LCL-style
-  **alignment** (Top, Bottom, Left, Right, Client), which follows the control's
-  parent container (or the window at the root), not always the window. Panels
-  and group boxes have their own **Layout** property (Free, Column, Row) that
-  arranges their direct children.
+  **alignment** (Top, Bottom, Left, Right, Client, Fill), which follows the
+  control's parent container (or the window at the root), not always the window.
+  **Fill** uses the remaining space between sibling components. Panels and group
+  boxes have their own **Layout** property (Free, Column, Row) and a **Border**
+  margin that insets aligned and arranged children. The window itself also has a
+  Border.
 - **Adoption and clipboard**: panels and group boxes accept children. New and
   pasted controls are adopted by the selected container, its first accepting
   ancestor, or the window; **dragging a control onto a panel reparents it**, and
@@ -102,8 +104,8 @@ The inspector edits the canonical form model (name, text, x, y, w, h, enabled,
 visible), and the Events tab (`OnClick`, `OnTextChanged`) opens the handler in
 the central Code view, generating a typed Gleam stub when one does not exist.
 The Code view is syntax-highlighted and has a focused editor for the selected
-handler with Apply/Cancel. Files are versioned Erlang-term projects (v7);
-v1–v6 files (and older projects embedded in a workspace) are upgraded on load.
+handler with Apply/Cancel. Files are versioned Erlang-term projects (v8);
+v1–v7 files (and older projects embedded in a workspace) are upgraded on load.
 Projects carry an icon; Campy's own project uses a little camping-tent icon. The Cat Café demo demonstrates a panel with
 adopted children, a picture, a list, and handler stubs; the Widgets module
 showcases the CCL controls and top/bottom aligned labels; the Welcome module
@@ -177,8 +179,8 @@ Café form), `ide-widgets.png` (the CCL Widgets module), `ide-code.png`
 window), `ide-updated.png` (selection applied through properties only),
 `ide-multiselect.png`, `ide-drop-target.png`, `ide-place.png`,
 `ide-select-mode.png`, `ide-console.png`, `ide-context.png`,
-`ide-project-dialog.png`, `ide-welcome.png`, `ide-agent.png`, and
-`ide-workspace.png` for visual review. `just generate` writes the derived
+`ide-project-dialog.png`, `ide-project.png`, `ide-container.png`,
+`ide-welcome.png`, `ide-agent.png`, and `ide-workspace.png` for visual review. `just generate` writes the derived
 `generated/search_box.slint` fixture; do not edit it. `just fmt` formats both
 languages. `just check` runs the display-free test suite, including real NIF
 integration.

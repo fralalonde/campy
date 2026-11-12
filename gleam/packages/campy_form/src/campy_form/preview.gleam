@@ -37,6 +37,7 @@ pub fn to_slint(form: Form) -> Result(String, String) {
 }
 
 fn content(form: Form) -> String {
+  let border = campy_form.border_of(form, "")
   case form.layout {
     campy_form.Free ->
       string.join(
@@ -47,7 +48,9 @@ fn content(form: Form) -> String {
       )
     campy_form.Column ->
       "    ScrollView { width: 100%; height: 100%;\n"
-      <> "      VerticalLayout { padding: 8px; spacing: 8px;\n"
+      <> "      VerticalLayout { padding: "
+      <> px(border)
+      <> "; spacing: 8px;\n"
       <> string.join(
         list.map(campy_form.render_controls(form), fn(control) {
           indent(control_element(form, control, False))
@@ -57,7 +60,9 @@ fn content(form: Form) -> String {
       <> "      }\n"
       <> "    }\n"
     campy_form.Row ->
-      "    HorizontalLayout { padding: 8px; spacing: 8px; height: 100%;\n"
+      "    HorizontalLayout { padding: "
+      <> px(border)
+      <> "; spacing: 8px; height: 100%;\n"
       <> string.join(
         list.map(campy_form.render_controls(form), fn(control) {
           indent(control_element(form, control, False))

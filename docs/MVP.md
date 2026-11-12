@@ -88,10 +88,11 @@ Delivered:
    click-drag placement on the form. The right pane is the Properties/Events
    inspector.
 5. File menu: New project / New module / Open… / Save / Save As… / Quit.
-   Projects are versioned, compressed Erlang terms (`projects/*.campy`, v7),
-   validated on load; v1–v6 files (and older projects embedded in a workspace) are
+   Projects are versioned, compressed Erlang terms (`projects/*.campy`, v8),
+   validated on load; v1–v7 files (and older projects embedded in a workspace) are
    upgraded, including form layout, the adoption parent map, alignment,
-   per-container layouts, and project icons. Workspaces are versioned compressed terms
+   per-container layouts, project icons, and container borders. Workspaces are
+   versioned compressed terms
    (`projects/workspace.campy`, v1) holding full project snapshots and the active
    project path.
 6. Form editor: the form is a movable/resizable **module window** (title bar,
@@ -118,9 +119,11 @@ Delivered:
    control to the window, and rendering order draws containers before their
    children. Only a target that would change the parent is highlighted.
    Alignment: Free-layout controls can use LCL-style Top, Bottom, Left, Right,
-   or Client alignment, relative to their parent container (or the window at
-   the root). The preview and designer compute the same geometry. Container
-   Column/Row layouts arrange direct children and ignore alignment. (LCL's dock ordering and anchors are intentionally not
+   Client, or Fill alignment, relative to their parent container (or the
+   window at the root). Fill uses the space between sibling components.
+   Container **Border** margins inset aligned and arranged children. The
+   preview and designer compute the same geometry. Container Column/Row layouts
+   arrange direct children and ignore alignment. (LCL's dock ordering and anchors are intentionally not
    reproduced yet; Slint's layout model is authoritative.)
 9. Adoption and clipboard: panels/group boxes (and the window root) accept
    children. New and

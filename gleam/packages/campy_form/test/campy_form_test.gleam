@@ -62,6 +62,7 @@ pub fn rejects_duplicate_and_invalid_names_test() {
       [],
       [],
       [],
+      [],
     )
   campy_form.validate(duplicate) |> should.be_error
   let invalid =
@@ -85,6 +86,7 @@ pub fn rejects_duplicate_and_invalid_names_test() {
           True,
         ),
       ],
+      [],
       [],
       [],
       [],
@@ -242,6 +244,7 @@ pub fn preview_emits_window_controls_and_callbacks_test() {
       [],
       [],
       [],
+      [],
     )
   let assert Ok(source) = preview.to_slint(form)
   string.contains(source, "export component CampyPreview inherits Window")
@@ -305,6 +308,7 @@ pub fn render_order_puts_containers_before_children_test() {
       [#("button-1", "panel-1")],
       [],
       [],
+      [],
     )
   campy_form.render_controls(form)
   |> list.map(fn(control) { control.id })
@@ -348,6 +352,7 @@ pub fn set_parent_refuses_cycles_and_missing_parents_test() {
       [#("panel-2", "panel-1")],
       [],
       [],
+      [],
     )
   let next = campy_form.set_parent(form, "panel-1", "panel-2")
   campy_form.parent_of(next, "panel-1") |> should.equal("")
@@ -382,6 +387,7 @@ pub fn aligned_controls_follow_the_window_test() {
       [],
       [#("button-1", campy_form.Bottom)],
       [],
+      [],
     )
   let assert Ok(source) = preview.to_slint(form)
   string.contains(source, "x: 0px; y: 270px; width: 400px; height: 30px")
@@ -394,7 +400,7 @@ pub fn project_roundtrip_preserves_modules_test() {
   let assert Ok(saved) = project.save(original, path)
   saved.path |> should.equal(path)
   let assert Ok(loaded) = project.load(path)
-  loaded.version |> should.equal(7)
+  loaded.version |> should.equal(8)
   loaded.icon |> should.equal("assets/camping-tent.png")
   loaded.title |> should.equal("Campy")
   loaded.modules
@@ -502,6 +508,7 @@ pub fn container_layout_arranges_children_test() {
       [#("a", "panel-1"), #("b", "panel-1")],
       [],
       [#("panel-1", campy_form.Column)],
+      [#("panel-1", 8)],
     )
   let #(ax, ay, aw, ah) =
     campy_form.bounds(
@@ -563,4 +570,188 @@ pub fn container_layout_arranges_children_test() {
   bx2 |> should.equal(84)
   bw2 |> should.equal(60)
   bh2 |> should.equal(184)
+}
+
+pub fn border_insets_aligned_children_test() {
+  let form =
+    campy_form.Form(
+      "campy.form",
+      "Border",
+      400,
+      300,
+      campy_form.Free,
+      [
+        campy_form.Control(
+          "panel-1",
+          "panel1",
+          campy_form.Panel,
+          20,
+          20,
+          300,
+          200,
+          "P",
+          True,
+          True,
+        ),
+        campy_form.Control(
+          "client",
+          "client",
+          campy_form.Button,
+          0,
+          0,
+          50,
+          20,
+          "C",
+          True,
+          True,
+        ),
+        campy_form.Control(
+          "bottom",
+          "bottom",
+          campy_form.Button,
+          0,
+          0,
+          50,
+          20,
+          "B",
+          True,
+          True,
+        ),
+      ],
+      [#("client", "panel-1"), #("bottom", "panel-1")],
+      [#("client", campy_form.Client), #("bottom", campy_form.Bottom)],
+      [],
+      [#("panel-1", 10)],
+    )
+  let #(cx, cy, cw, ch) =
+    campy_form.bounds(
+      form,
+      campy_form.Control(
+        "client",
+        "client",
+        campy_form.Button,
+        0,
+        0,
+        50,
+        20,
+        "C",
+        True,
+        True,
+      ),
+    )
+  #(cx, cy, cw, ch) |> should.equal(#(30, 30, 280, 180))
+  let #(bx, by, bw, bh) =
+    campy_form.bounds(
+      form,
+      campy_form.Control(
+        "bottom",
+        "bottom",
+        campy_form.Button,
+        0,
+        0,
+        50,
+        20,
+        "B",
+        True,
+        True,
+      ),
+    )
+  #(bx, by, bw, bh) |> should.equal(#(30, 190, 280, 20))
+}
+
+pub fn fill_uses_space_between_siblings_test() {
+  let form =
+    campy_form.Form(
+      "campy.form",
+      "Fill",
+      400,
+      300,
+      campy_form.Free,
+      [
+        campy_form.Control(
+          "panel-1",
+          "panel1",
+          campy_form.Panel,
+          0,
+          0,
+          300,
+          200,
+          "P",
+          True,
+          True,
+        ),
+        campy_form.Control(
+          "header",
+          "header",
+          campy_form.Label,
+          0,
+          0,
+          100,
+          20,
+          "H",
+          True,
+          True,
+        ),
+        campy_form.Control(
+          "footer",
+          "footer",
+          campy_form.Label,
+          0,
+          0,
+          100,
+          20,
+          "F",
+          True,
+          True,
+        ),
+        campy_form.Control(
+          "fill",
+          "fill",
+          campy_form.Button,
+          20,
+          80,
+          50,
+          30,
+          "Fill",
+          True,
+          True,
+        ),
+      ],
+      [
+        #("header", "panel-1"),
+        #("footer", "panel-1"),
+        #("fill", "panel-1"),
+      ],
+      [
+        #("header", campy_form.Top),
+        #("footer", campy_form.Bottom),
+        #("fill", campy_form.Fill),
+      ],
+      [],
+      [#("panel-1", 10)],
+    )
+  let #(x, y, w, h) =
+    campy_form.bounds(
+      form,
+      campy_form.Control(
+        "fill",
+        "fill",
+        campy_form.Button,
+        20,
+        80,
+        50,
+        30,
+        "Fill",
+        True,
+        True,
+      ),
+    )
+  #(x, y, w, h) |> should.equal(#(10, 30, 280, 140))
+}
+
+pub fn form_border_pads_column_layout_test() {
+  let bordered = campy_form.set_border_for(campy_form.new_form(), "", 12)
+  let form = campy_form.Form(..bordered, layout: campy_form.Column)
+  let assert Ok(source) = preview.to_slint(form)
+  string.contains(source, "padding: 12px") |> should.be_true
 }

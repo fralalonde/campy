@@ -43,6 +43,8 @@ pub type Clipboard {
     controls: List(Control),
     parents: List(#(String, String)),
     aligns: List(#(String, campy_form.Align)),
+    layouts: List(#(String, campy_form.Layout)),
+    borders: List(#(String, Int)),
   )
 }
 
@@ -697,6 +699,15 @@ fn commit_control_field(
       change_control(state, form, id, fn(control) {
         campy_form.Control(..control, text: value)
       })
+    "border" ->
+      case campy_form.find_control(form, id) {
+        Some(control) ->
+          case campy_form.accepts_children(control.kind) {
+            True -> commit_border(state, id, value)
+            False -> status(state, "Border applies to containers")
+          }
+        None -> state
+      }
     "x" -> update_axis(state, form, id, field, value, 0, 4095)
     "y" -> update_axis(state, form, id, field, value, 0, 4095)
     "w" -> update_axis(state, form, id, field, value, 1, 4095)
@@ -756,6 +767,23 @@ fn update_axis(
   }
 }
 
+fn commit_border(state: State, parent_id: String, value: String) -> State {
+  case int.parse(value) {
+    Error(_) -> status(state, "Border must be a whole number")
+    Ok(number) ->
+      case number >= 0 && number <= 512 {
+        True -> {
+          let next =
+            update_active_form(state, fn(form) {
+              campy_form.set_border_for(form, parent_id, number)
+            })
+          status(next, "Border set to " <> int.to_string(number) <> "px")
+        }
+        False -> status(state, "Border must be between 0 and 512")
+      }
+  }
+}
+
 fn commit_form_field(
   state: State,
   form: Form,
@@ -767,6 +795,7 @@ fn commit_form_field(
       update_active_form(state, fn(_) { campy_form.Form(..form, title: value) })
     "width" -> update_form_size(state, form, value, True)
     "height" -> update_form_size(state, form, value, False)
+    "border" -> commit_border(state, "", value)
     _ -> state
   }
 }
@@ -1122,6 +1151,7 @@ pub fn align_from_name(name: String) -> campy_form.Align {
     "Left" -> campy_form.Left
     "Right" -> campy_form.Right
     "Client" -> campy_form.Client
+    "Fill" -> campy_form.Fill
     _ -> campy_form.NoAlign
   }
 }
@@ -1155,9 +1185,19 @@ pub fn copy_selected(state: State) -> State {
             list.filter(form.parents, fn(entry) { list.contains(ids, entry.0) })
           let aligns =
             list.filter(form.aligns, fn(entry) { list.contains(ids, entry.0) })
+          let layouts =
+            list.filter(form.layouts, fn(entry) { list.contains(ids, entry.0) })
+          let borders =
+            list.filter(form.borders, fn(entry) { list.contains(ids, entry.0) })
           State(
             ..state,
-            clipboard: Some(Clipboard(controls, parents, aligns)),
+            clipboard: Some(Clipboard(
+              controls,
+              parents,
+              aligns,
+              layouts,
+              borders,
+            )),
             status: case list.length(state.selection) {
               1 -> "Component copied"
               count -> int.to_string(count) <> " components copied"
@@ -1186,13 +1226,15 @@ pub fn cut_selected(state: State) -> State {
 
 pub fn paste(state: State) -> State {
   case state.clipboard, active_form(state) {
-    Some(Clipboard(controls, parents, aligns)), Some(form) -> {
+    Some(Clipboard(controls, parents, aligns, layouts, borders)), Some(form) -> {
       let #(form, pasted) =
         campy_form.paste_controls(
           form,
           controls,
           parents,
           aligns,
+          layouts,
+          borders,
           adoption_target(state),
         )
       let next = update_active_form(state, fn(_) { form })

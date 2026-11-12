@@ -98,7 +98,7 @@ widget model where one exists (LCL properties are mapped to Slint semantics).
 `campy_form` owns the designer model (a flat list of absolutely positioned
 controls plus a parent map for adoption, an alignment map, and per-container
 layouts), handler-name derivation and stub generation, the versioned project
-codec (v7), the workspace codec (v1), and the standalone form-window emitter. Panels and the window root accept children; new/pasted controls are
+codec (v8), the workspace codec (v1), and the standalone form-window emitter. Panels and the window root accept children; new/pasted controls are
 adopted by the selected accepting component, its first accepting ancestor, or the
 window. Copy/cut/paste snapshots a whole subtree and re-keys it on paste. A
 project is a set of modules, each with one form and its handler source; Campy
@@ -190,9 +190,12 @@ bounds. A move drop re-parents the control to the smallest accepting panel under
 its center (or to the window when dropped outside), and only highlights when
 the parent would change; `render_controls` sorts containers before their
 children so adopted controls draw above their panel. Free controls may also
-declare an LCL-style **alignment** (Top/Bottom/Left/Right/Client), relative to
-the parent container (or the window at the root); designer and preview resolve
-the same geometry. Container layouts take precedence over alignment. The Free
+declare an LCL-style **alignment** (Top/Bottom/Left/Right/Client/Fill),
+relative to the parent container (or the window at the root). Fill uses the
+inner parent area minus the space occupied by siblings around the control.
+Containers have a **Border** margin; aligned and arranged children resolve
+against the inset inner rectangle. Designer and preview resolve the same
+geometry. Container layouts take precedence over alignment. The Free
 canvas uses a contrasting background and light grid, and module-window moves and
 resizes show an outline preview before committing on release.
 
@@ -201,7 +204,8 @@ stub in that module's source, and the code view displays the highlighted source
 or edits one handler at a time. The Settings → Editor dialog changes the code
 font family/size and the color scheme. Project files are compressed, versioned
 Erlang terms validated on load; v1 (single form), v2 (modules), v3 (layout),
-v4 (parent map), and v5 (alignment) files upgrade to v7 (per-container layouts and project icons). Cargo builds use
+v4 (parent map), v5 (alignment), v6 (per-container layouts), and v7 (icons)
+files upgrade to v8 (container borders). Cargo builds use
 `scripts/cargo.sh`, which selects the compatible glibc toolchain when installed
 and avoids producing a NIF that requires a newer glibc than the runtime. The selected component can be
 removed with the inspector trashcan or the Delete key; both go through the

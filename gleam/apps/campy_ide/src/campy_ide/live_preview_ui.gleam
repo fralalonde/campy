@@ -23,6 +23,10 @@ pub fn apply(
   ))
   use _ <- result.try(bridge.submit(
     session,
+    bridge.SetInt(1, "form-border", snapshot.border),
+  ))
+  use _ <- result.try(bridge.submit(
+    session,
     bridge.SetBool(1, "layout-free", snapshot.layout == campy_form.Free),
   ))
   use _ <- result.try(bridge.submit(
