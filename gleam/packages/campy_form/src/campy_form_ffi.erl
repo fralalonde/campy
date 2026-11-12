@@ -81,8 +81,9 @@ upgrade({project, 6, Title, Modules, Path}) when is_list(Modules) ->
 upgrade({project, 7, Title, Modules, Path, Icon}) when is_list(Modules) ->
     {ok, {project, 8, Title, [upgrade_module(Module, v6) || Module <- Modules],
           Path, Icon}};
-upgrade({project, 8, _Title, Modules, _Path, _Icon} = Project) when is_list(Modules) ->
-    {ok, Project};
+upgrade({project, 8, Title, Modules, Path, Icon}) when is_list(Modules) ->
+    {ok, {project, 8, Title, [upgrade_module(Module, v6) || Module <- Modules],
+          Path, Icon}};
 upgrade(_) ->
     error.
 

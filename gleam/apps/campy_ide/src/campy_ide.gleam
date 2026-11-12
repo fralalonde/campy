@@ -310,8 +310,9 @@ fn reload_native(
     }
     Ok(count) -> {
       let next =
-        state.set_status(
-          model,
+        model
+        |> ensure_current_format
+        |> state.set_status(
           "Reloaded " <> int.to_string(count) <> " Campy modules; refreshing UI",
         )
       case ide_ui.to_slint(next) {
@@ -336,6 +337,15 @@ fn reload_native(
         }
       }
     }
+  }
+}
+
+fn ensure_current_format(model: State) -> State {
+  case model.project.version < project.version {
+    False -> model
+    True ->
+      state.initial_workspace(open_workspace())
+      |> state.set_status("Project format upgraded; workspace reloaded")
   }
 }
 
