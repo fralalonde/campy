@@ -26,7 +26,9 @@ pub const version = 8
 
 pub const camping_icon = "assets/camping-tent.png"
 
-pub const default_path = "projects/campy.campy"
+pub const default_path = "campy.campy"
+
+pub const legacy_path = "projects/campy.campy"
 
 @external(erlang, "campy_form_ffi", "save_project")
 fn write_project(path: String, project: Project) -> Result(Nil, String)
@@ -48,16 +50,6 @@ pub fn campy() -> Project {
     ],
     default_path,
     camping_icon,
-  )
-}
-
-pub fn new() -> Project {
-  Project(
-    version,
-    "Campy",
-    [Module("main", "Main", campy_form.new_form(), campy_form.default_source())],
-    default_path,
-    "",
   )
 }
 

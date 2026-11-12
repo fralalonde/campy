@@ -266,7 +266,7 @@ pub fn workspace_roundtrip_test() {
   workspace.count(saved) |> should.equal(1)
   let assert Ok(loaded) = workspace.load(path)
   workspace.count(loaded) |> should.equal(1)
-  loaded.active |> should.equal("projects/campy.campy")
+  loaded.active |> should.equal(project.default_path)
   let assert Some(active) = workspace.active_project(loaded)
   active.title |> should.equal("Campy")
 }

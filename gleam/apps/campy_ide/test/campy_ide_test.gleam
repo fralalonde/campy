@@ -441,7 +441,7 @@ pub fn workspace_create_switch_delete_test() {
   })
   |> should.be_true
 
-  let back = state.switch_project(created, "projects/campy.campy")
+  let back = state.switch_project(created, project.default_path)
   back.project.title |> should.equal("Campy")
   list.length(back.project.modules) |> should.equal(4)
 
@@ -954,7 +954,7 @@ pub fn context_menu_selects_the_control_test() {
 }
 
 pub fn project_selection_exposes_project_properties_test() {
-  let selected = demo_state() |> state.switch_project("projects/campy.campy")
+  let selected = demo_state() |> state.switch_project(project.default_path)
   selected.selected_project |> should.be_true
   selected.selected |> should.equal(None)
 

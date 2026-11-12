@@ -65,8 +65,9 @@ keeps the native loop outside BEAM schedulers. Unsupported OSes return errors.
 interpreted Slint runtime it designs for. It is a targeted slice of M4 taken
 early so the IDE can be used and evaluated; M1–M3 below are still the long-term
 architecture work. Campy opens its own workspace (`projects/workspace.campy`,
-created on first run); a workspace holds one or more projects, and each project
-is a set of modules with a form and handler source.
+created on first run) containing its own project (`campy.campy` in the repository
+root); a workspace holds one or more projects, and each project is a set of
+modules with a form and handler source. Run it with `./campy` or `just run`.
 
 Delivered:
 

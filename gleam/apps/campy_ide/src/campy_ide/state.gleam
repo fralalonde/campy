@@ -101,7 +101,6 @@ pub type State {
     selected_project: Bool,
     project_dialog_open: Bool,
     context_open: Bool,
-    context_target: String,
     context_x: Int,
     context_y: Int,
     agent_open: Bool,
@@ -164,7 +163,6 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     selected_project: False,
     project_dialog_open: False,
     context_open: False,
-    context_target: "",
     context_x: 0,
     context_y: 0,
     agent_open: False,
@@ -1287,35 +1285,35 @@ pub fn open_context_menu(state: State, id: String) -> State {
       }
     _, None -> #(8, 8)
   }
-  State(
-    ..picked,
-    context_open: True,
-    context_target: id,
-    context_x: x,
-    context_y: y,
-  )
+  State(..picked, context_open: True, context_x: x, context_y: y)
 }
 
 pub fn close_context_menu(state: State) -> State {
-  State(..state, context_open: False, context_target: "")
+  State(..state, context_open: False)
 }
 
 pub fn set_project_dialog_open(state: State, open: Bool) -> State {
   State(..state, project_dialog_open: open)
 }
 
+fn commit_project(
+  state: State,
+  updated: project.Project,
+  status: String,
+) -> State {
+  let ws = workspace.update_active(state.workspace, updated)
+  commit(state, State(..state, project: updated, workspace: ws, status: status))
+}
+
 pub fn set_project_icon(state: State, icon: String) -> State {
-  let updated =
-    State(
-      ..state,
-      project: project.Project(..state.project, icon: icon),
-      status: case icon {
-        "" -> "Project icon cleared"
-        _ -> "Project icon set"
-      },
-    )
-  let ws = workspace.update_active(updated.workspace, updated.project)
-  commit(state, State(..updated, workspace: ws))
+  commit_project(
+    state,
+    project.Project(..state.project, icon: icon),
+    case icon {
+      "" -> "Project icon cleared"
+      _ -> "Project icon set"
+    },
+  )
 }
 
 pub fn commit_project_field(
@@ -1324,16 +1322,12 @@ pub fn commit_project_field(
   value: String,
 ) -> State {
   case field {
-    "title" -> {
-      let updated =
-        State(
-          ..state,
-          project: project.Project(..state.project, title: value),
-          status: "Project title updated",
-        )
-      let ws = workspace.update_active(updated.workspace, updated.project)
-      commit(state, State(..updated, workspace: ws))
-    }
+    "title" ->
+      commit_project(
+        state,
+        project.Project(..state.project, title: value),
+        "Project title updated",
+      )
     _ -> state
   }
 }

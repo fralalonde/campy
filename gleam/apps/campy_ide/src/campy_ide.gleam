@@ -8,8 +8,8 @@ import campy_ide/ide_ui
 import campy_ide/live_preview_ui
 import campy_ide/mcp
 import campy_ide/state.{
-  type State, Events, NoPopup, OpenFile, PickPicture, PickProjectIcon, Preview,
-  Properties, SaveAs,
+  type Popup, type State, Events, NoPopup, OpenFile, PickPicture,
+  PickProjectIcon, Preview, Properties, SaveAs,
 }
 import gleam/int
 import gleam/io
@@ -74,7 +74,7 @@ fn native_main() {
 // Campy opens its own workspace, created on first run.
 fn open_workspace() -> workspace.Workspace {
   case workspace.load(workspace.default_path) {
-    Ok(loaded) -> loaded
+    Ok(loaded) -> migrate_workspace(loaded)
     Error(_) -> {
       let default = open_self_project()
       let ws = workspace.new(default)
@@ -84,15 +84,42 @@ fn open_workspace() -> workspace.Workspace {
   }
 }
 
+// Keep existing workspaces working after the self project moved to the root.
+fn migrate_workspace(ws: workspace.Workspace) -> workspace.Workspace {
+  case workspace.find(ws, project.default_path) {
+    Some(_) -> ws
+    None ->
+      case workspace.find(ws, project.legacy_path) {
+        Some(old) -> {
+          let moved = move_self_project(old)
+          let next = workspace.replace_path(ws, old.path, moved)
+          let _ = workspace.save(next)
+          next
+        }
+        None -> ws
+      }
+  }
+}
+
+fn move_self_project(self: project.Project) -> project.Project {
+  let moved = project.Project(..self, path: project.default_path)
+  let _ = project.save(moved, project.default_path)
+  moved
+}
+
 // Campy opens itself: its own project file, created on first run.
 fn open_self_project() -> project.Project {
   case project.load(project.default_path) {
     Ok(loaded) -> loaded
-    Error(_) -> {
-      let default = project.campy()
-      let _ = project.save(default, project.default_path)
-      default
-    }
+    Error(_) ->
+      case project.load(project.legacy_path) {
+        Ok(loaded) -> move_self_project(loaded)
+        Error(_) -> {
+          let default = project.campy()
+          let _ = project.save(default, project.default_path)
+          default
+        }
+      }
   }
 }
 
@@ -739,7 +766,6 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "close-module" -> state.close_module(model, payload)
     "new-module" -> state.new_module(model)
     "switch-project" -> state.switch_project(model, payload)
-    "new-project" -> state.create_project(model)
     "delete-project" -> state.delete_active_project(model)
     "file-new" -> state.create_project(model)
     "file-new-module" -> state.new_module(model)
@@ -797,22 +823,33 @@ fn pick_picture(model: State) -> State {
     Some(control) -> control.text
     None -> ""
   }
-  case native_dialog("picture", initial) {
-    Ok(Some(path)) ->
-      state.commit_field(model, "text", path)
-      |> state.set_status("Picture set to " <> path)
-    Ok(None) -> state.set_status(model, "Picture selection cancelled")
-    Error(_) -> state.set_popup(model, PickPicture)
-  }
+  pick_image(model, initial, PickPicture, "Picture", fn(model, path) {
+    state.commit_field(model, "text", path)
+  })
 }
 
 fn pick_project_icon(model: State) -> State {
-  case native_dialog("picture", model.project.icon) {
+  pick_image(
+    model,
+    model.project.icon,
+    PickProjectIcon,
+    "Project icon",
+    state.set_project_icon,
+  )
+}
+
+fn pick_image(
+  model: State,
+  initial: String,
+  fallback: Popup,
+  label: String,
+  apply: fn(State, String) -> State,
+) -> State {
+  case native_dialog("picture", initial) {
     Ok(Some(path)) ->
-      state.set_project_icon(model, path)
-      |> state.set_status("Project icon set to " <> path)
-    Ok(None) -> state.set_status(model, "Project icon selection cancelled")
-    Error(_) -> state.set_popup(model, PickProjectIcon)
+      apply(model, path) |> state.set_status(label <> " set to " <> path)
+    Ok(None) -> state.set_status(model, label <> " selection cancelled")
+    Error(_) -> state.set_popup(model, fallback)
   }
 }
 

@@ -102,8 +102,8 @@ codec (v8), the workspace codec (v1), and the standalone form-window emitter. Pa
 adopted by the selected accepting component, its first accepting ancestor, or the
 window. Copy/cut/paste snapshots a whole subtree and re-keys it on paste. A
 project is a set of modules, each with one form and its handler source; Campy
-opens its own project file (whose first module is the Cat Café demo) and creates
-it on first run.
+opens its own project file (`campy.campy` at the repository root, whose first
+module is the Cat Café demo) and creates it on first run.
 
 `campy_ide/ide_ui` renders the whole IDE shell — one-row menus/palette/Run
 controls, Projects navigator, module navigator, tabbed module editor, object

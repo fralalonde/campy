@@ -5,11 +5,12 @@ same component packages, BEAM runtime, and in-process Rust/Slint bridge.
 
 ## Status
 
-`just run` opens **Campy Studio**, a Delphi/Lazarus-style IDE built from the same
-interpreted Slint runtime and the same **CCL** component catalog as the apps it
-designs. Campy opens **its own workspace** (`projects/workspace.campy`, created
-on first run) containing its own project (`projects/campy.campy`), whose modules
-are the **Cat Café**, **CCL Widgets**, **Welcome**, and **Search box** demos.
+`./campy` (or `just run`) opens **Campy Studio**, a Delphi/Lazarus-style IDE
+built from the same interpreted Slint runtime and the same **CCL** component
+catalog as the apps it designs. Campy opens **its own workspace**
+(`projects/workspace.campy`, created on first run) containing its own project
+(`campy.campy` in the repository root), whose modules are the **Cat Café**,
+**CCL Widgets**, **Welcome**, and **Search box** demos.
 
 Layout:
 
@@ -148,7 +149,8 @@ to 1.18.1 and Rustler to 0.39.0. First builds need network access.
 ```sh
 cd ~/Code/Campy
 just doctor
-just run              # open Campy Studio; close the window to exit
+./campy               # build if needed and open Campy Studio
+just run              # same launch path via just
 just dev              # IDE plus restart-on-save source watching
 just check            # formatting + display-free Rust/Gleam/NIF tests
 just snapshot-ide     # render IDE/handler/form PNGs into generated/
@@ -161,7 +163,7 @@ just smoke-native x11 # exercise X11 explicitly
 
 `just run` builds both languages, stages the NIF, and opens the IDE. Use
 **File** to create, open, save, or save-as a project (default
-`projects/campy.campy`), and **Run** to open the designed form in a second native
+`campy.campy`), and **Run** to open the designed form in a second native
 window. While it runs, press **F7** to apply your edits to that same window. A periodic BEAM heartbeat demonstrates that the native event
 loop does not block BEAM scheduling.
 

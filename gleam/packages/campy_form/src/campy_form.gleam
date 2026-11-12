@@ -210,30 +210,6 @@ pub fn align_key(align: Align) -> String {
   }
 }
 
-pub fn align_label(align: Align) -> String {
-  case align {
-    NoAlign -> "None (free)"
-    Top -> "Top"
-    Bottom -> "Bottom"
-    Left -> "Left"
-    Right -> "Right"
-    Client -> "Client"
-    Fill -> "Fill (between siblings)"
-  }
-}
-
-pub fn align_from_key(key: String) -> Align {
-  case key {
-    "top" -> Top
-    "bottom" -> Bottom
-    "left" -> Left
-    "right" -> Right
-    "client" -> Client
-    "fill" -> Fill
-    _ -> NoAlign
-  }
-}
-
 // Effective geometry used by the designer and live preview, including design
 // alignment. Column/Row layouts position controls with Slint, so their stored
 // geometry is returned for editor-side hit testing only.

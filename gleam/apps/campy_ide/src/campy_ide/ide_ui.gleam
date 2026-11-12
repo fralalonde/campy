@@ -853,7 +853,6 @@ fn callbacks() -> String {
   <> "  callback close-module(string);\n"
   <> "  callback new-module();\n"
   <> "  callback switch-project(string);\n"
-  <> "  callback new-project();\n"
   <> "  callback delete-project();\n"
   <> "  callback toggle-view();\n"
   <> "  callback view-form();\n"
