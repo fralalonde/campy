@@ -78,18 +78,26 @@ Delivered:
    module, `+` to add one. The header `+` opens a New/Open project dialog.
    Selecting a project row exposes its title, path, and module count in the
    inspector.
-3. Tabbed module editor (centre): one tab per opened module (closable). A single
-   top-right button switches between the **form editor** and the module's
-   **handler code**. The form editor's bottom tabs are **UI (actual)** and
-   **Code (Slint file)**; the latter shows the generated, read-only Slint source.
-4. Components + inspector: the **CCL** palette is a horizontal pictogram bar on
-   the same row as Run/Stop, with an arrow/box component selector (Label, Edit,
-   Memo, Button, Menu, Check box, Radio button, Combo box, List, Slider,
-   Progress, Panel, Group box, Picture), with type tooltips; clicking arms
-   click-drag placement on the form. The right pane is the Properties/Events
-   inspector.
+3. Tabbed module editor (centre): one tab per opened module in a proper tab
+   panel (selectable, closable, active tab highlighted; the tab strip scrolls
+   when narrow). A square pictogram button in the editor area's top-right
+   corner (Ctrl+Tab) switches between the **form editor** and the module's
+   **handler code**; its pictogram and hint alternate with the current view.
+   The form editor's bottom tabs are **Form** and **Raw**; the latter shows
+   the generated, read-only Slint source.
+4. Components + inspector: the **CCL** palette is a horizontal pictogram bar
+   on the same row as Run/Stop (Label, Edit, Memo, Button, Menu, Check box,
+   Radio button, Combo box, List, Slider, Progress, Panel, Group box,
+   Picture), with hover hints; clicking arms click-drag placement on the form.
+   The right pane has two tabs, **Properties** and **Events**, both rendered
+   by one grid component (name on the left, value display/editor on the
+   right; no buttons). Row count matches the component's property or event
+   list exactly. With several components selected only the properties they
+   have in common appear; differing values are blank and editing a shared
+   value applies to the whole selection. Right-clicking a multi-selection
+   offers an **Align** submenu (Left, Right, Center, Top, Down, Middle).
 5. File menu: New project / New module / Open… / Save / Save As… / Quit.
-   Projects are versioned, compressed Erlang terms (`projects/*.campy`, v8),
+   Projects are versioned, compressed Erlang terms (`projects/*.campy`, v9),
    validated on load; v1–v7 files (and older projects embedded in a workspace) are
    upgraded, including form layout, the adoption parent map, alignment,
    per-container layouts, project icons, and container borders. Workspaces are
@@ -100,38 +108,54 @@ Delivered:
    per-module position, corner resize) on a larger design canvas. Controls use
    cursor drag to move and eight resize handles (corners and sides) with
    directional cursors and a live outline (committed once on release); the same
-   form model drives the run window. Moving or resizing the module window shows
-   an outline preview and commits on release, so the gesture stays smooth. The
-   canvas has a contrasting surface and a light grid. Layout is chosen from a
-   Properties dropdown. Clicking the empty canvas selects the **window** itself.
-   A form can use Free, Column, or Row layout; Column/Row delegate placement to
-   Slint layouts and need no geometry messages. Panels and group boxes also
-   have their own Free/Column/Row Layout property for their children.
+   form model drives the run window. Moving or resizing the module window
+   shows an outline preview and commits on release, so the gesture stays
+   smooth. The canvas has a contrasting surface and a light grid that follows
+   the window size (the surface stretches to the visible pane, and the baked
+   24px grid covers the full placement extent). Layout is chosen from a
+   Properties dropdown. Clicking the empty canvas selects the **window**
+   itself. The select tool commits on mouse release: clicking a component
+   selects it when the button is released (Ctrl-click toggles
+   multi-selection). Dragging past a small threshold draws a selection
+   frame — from the empty canvas or from an unselected component (a
+   selected component is moved instead, so drag-to-select works even when
+   the gesture starts on top of a control) — and dragging a
+   multi-selection previews the whole group moving together. A form can
+   use Free, Column, or Row layout; Column/Row
+   delegate placement to Slint layouts and need no geometry messages. Panels
+   and group boxes also have their own Free/Column/Row Layout property for
+   their children. Overlapping siblings stack in creation order; the context
+   menu (and Edit menu) offer **Bring to front** / **Move to back**, and the
+   run window renders the same z-order.
 7. CCL components: Label, Edit, Memo, Button, Menu, Check box, Radio button,
    Combo box, List (sample rows), Slider, Progress, Panel, Group box, and
    Picture. Menu renders as a menu title and opens sample items in the run
-   window; the Welcome demo uses it.
-   Picture stores a path in its text field (editable in the inspector or via the
-   **Choose picture…** path dialog) and renders in the designer and run window.
-   The `campy_ccl` package is the single catalog used for keys, labels, default
-   sizes/text, event names, and palette rows by both the designer and the IDE.
+   window; the Welcome demo uses it. Picture stores a path in its text field
+   (editable in the inspector or via the **Choose picture…** path dialog) and
+   renders in the designer and run window; it also has a **Transparency**
+   percent (0 opaque, 100 invisible) shown in the inspector and applied in
+   both. The `campy_ccl` package is the single catalog used for keys, labels,
+   default sizes/text, event names, and palette rows by both the designer and
+   the IDE. Palette hints appear as a chip under the palette bar while
+   hovering a tile: Slint tooltips restart their dwell timer on every pointer
+   move, so a hovering (never perfectly still) hand would never see one.
 8. Containers: panels and group boxes accept children from the palette, paste,
-   or a drag; dropping over a container reparents, dropping outside returns the
-   control to the window, and rendering order draws containers before their
-   children. Only a target that would change the parent is highlighted.
-   Alignment: Free-layout controls can use LCL-style Top, Bottom, Left, Right,
-   Client, or Fill alignment, relative to their parent container (or the
-   window at the root). Fill uses the space between sibling components.
-   Container **Border** margins inset aligned and arranged children. The
-   preview and designer compute the same geometry. Container Column/Row layouts
-   arrange direct children and ignore alignment. (LCL's dock ordering and anchors are intentionally not
-   reproduced yet; Slint's layout model is authoritative.)
+   or a drag; the drop target follows the cursor, so dropping over a container
+   reparents it and dropping outside returns the control to the window.
+   Rendering order draws containers before their children. Only a target that
+   would change the parent is highlighted. Alignment: Free-layout controls can
+   use LCL-style Top, Bottom, Left, Right, Client, or Fill alignment, relative
+   to their parent container (or the window at the root). Fill uses the space
+   between sibling components. Container **Border** margins inset aligned and
+   arranged children. The preview and designer compute the same geometry.
+   Container Column/Row layouts arrange direct children and ignore alignment.
+   (LCL's dock ordering and anchors are intentionally not reproduced yet;
+   Slint's layout model is authoritative.)
 9. Adoption and clipboard: panels/group boxes (and the window root) accept
-   children. New and
-   pasted controls go to the selected component when it accepts children, else
-   its first accepting ancestor, else the window. Edit → Copy / Cut / Paste
-   duplicates whole subtrees with fresh names and positions; moving a panel moves
-   its descendants.
+   children. New and pasted controls go to the selected component when it
+   accepts children, else its first accepting ancestor, else the window.
+   Edit → Copy / Cut / Paste duplicates whole subtrees with fresh names and
+   positions; moving a panel moves its descendants.
 10. Object inspector: properties (name, text, x, y, w, h, align, enabled,
     visible) and an Events tab. Clicking `OnClick` / `OnTextChanged` opens the handler in the
    central Code view and generates a stub when one does not exist.

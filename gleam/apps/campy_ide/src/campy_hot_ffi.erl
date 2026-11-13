@@ -53,16 +53,28 @@ reload_modules(BuildRoot) ->
                          lists:prefix(BuildRoot, Beam),
                          is_campy_module(Beam),
                          Mod =/= campy_bridge_ffi,
-                         Mod =/= campy_hot_ffi],
-    Results = [reload_one(Mod) || Mod <- Candidates],
-    Reloaded = length([ok || ok <- Results]),
-    case [Error || {error, Error} <- Results] of
-        [] ->
-            {ok, Reloaded};
-        Errors ->
-            Text = unicode:characters_to_binary(io_lib:format("~p", [Errors])),
-            {error, <<"reloaded ", (integer_to_binary(Reloaded))/binary,
-                      " modules; errors: ", Text/binary>>}
+                         Mod =/= campy_hot_ffi,
+                         Mod =/= campy_ide],
+    %% Load the loop module first. If campy_ide cannot swap in (its previous
+    %% version is still running on this process), load nothing else either:
+    %% new leaf modules with the old loop would read records the old state
+    %% does not have. The caller reports the failure; the next F6 retries.
+    case reload_one(campy_ide) of
+        ok ->
+            Results = [reload_one(Mod) || Mod <- Candidates],
+            Reloaded = 1 + length([ok || ok <- Results]),
+            case [Error || {error, Error} <- Results] of
+                [] ->
+                    {ok, Reloaded};
+                Errors ->
+                    Text = unicode:characters_to_binary(io_lib:format("~p", [Errors])),
+                    {error, <<"reloaded ", (integer_to_binary(Reloaded))/binary,
+                              " modules; errors: ", Text/binary>>}
+            end;
+        {error, Reason} ->
+            {error, <<"campy_ide is still on its previous version; ",
+                      "no modules were reloaded, press F6 again: ",
+                      (unicode:characters_to_binary(io_lib:format("~p", [Reason])))/binary>>}
     end.
 
 is_campy_module(Beam) ->

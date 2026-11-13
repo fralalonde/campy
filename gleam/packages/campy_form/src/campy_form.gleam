@@ -70,12 +70,21 @@ pub type Form {
     aligns: List(#(String, Align)),
     layouts: List(#(String, Layout)),
     borders: List(#(String, Int)),
+    transparencies: List(#(String, Int)),
   )
 }
 
 pub fn new_form() -> Form {
-  Form("campy.form", "Campy Form", 640, 420, Free, [], [], [], [], [])
+  Form("campy.form", "Campy Form", 640, 420, Free, [], [], [], [], [], [])
 }
+
+// Control coordinates and sizes are capped at 4095 so every control stays
+// within the designer's placement extent (the baked grid covers window
+// position 2000 + maximum form size + margins).
+pub const max_coordinate = 4095
+
+// Forms may be larger than any single control coordinate.
+pub const max_form_size = 4096
 
 // Starting project so the IDE opens with something to play with.
 pub fn demo_form() -> Form {
@@ -112,6 +121,7 @@ pub fn demo_form() -> Form {
         True,
       ),
     ],
+    [],
     [],
     [],
     [],
@@ -228,6 +238,25 @@ pub fn set_border_for(form: Form, parent_id: String, border: Int) -> Form {
     _ -> list.append(rest, [#(parent_id, value)])
   }
   Form(..form, borders: borders)
+}
+
+// Picture transparency in percent: 0 is fully opaque (the default), 100 fully
+// transparent. Other kinds ignore the value.
+pub fn transparency_of(form: Form, id: String) -> Int {
+  case list.find(form.transparencies, fn(entry) { entry.0 == id }) {
+    Ok(entry) -> int.max(0, int.min(100, entry.1))
+    Error(_) -> 0
+  }
+}
+
+pub fn set_transparency_for(form: Form, id: String, transparency: Int) -> Form {
+  let value = int.max(0, int.min(100, transparency))
+  let rest = list.filter(form.transparencies, fn(entry) { entry.0 != id })
+  let transparencies = case value {
+    0 -> rest
+    _ -> list.append(rest, [#(id, value)])
+  }
+  Form(..form, transparencies: transparencies)
 }
 
 fn inner_bounds(
@@ -366,23 +395,39 @@ pub fn remove_controls(form: Form, ids: List(String)) -> Form {
   list.fold(ids, form, fn(current, id) { remove_control(current, id) })
 }
 
-pub fn container_at(form: Form, x: Int, y: Int) -> String {
+// Hit-testing for container adoption: the smallest visible child-accepting
+// control whose rendered bounds contain the point. Aligned and arranged
+// containers occupy their computed bounds, not their stored geometry, so both
+// palette placement and drag-drop reparenting resolve the same target.
+// `blocked` (the dragged control's own subtree) is never a candidate.
+pub fn container_at_excluding(
+  form: Form,
+  x: Int,
+  y: Int,
+  blocked: List(String),
+) -> String {
   let candidates =
     list.filter(form.controls, fn(candidate) {
-      candidate.visible
+      !list.contains(blocked, candidate.id)
+      && candidate.visible
       && accepts_children(candidate.kind)
-      && x >= candidate.x
-      && x <= candidate.x + candidate.width
-      && y >= candidate.y
-      && y <= candidate.y + candidate.height
+      && {
+        let #(bx, by, bw, bh) = bounds(form, candidate)
+        x >= bx && x <= bx + bw && y >= by && y <= by + bh
+      }
     })
-  case smallest_container(candidates, None) {
+  case smallest_control(form, candidates, None) {
     Some(candidate) -> candidate.id
     None -> ""
   }
 }
 
-fn smallest_container(
+pub fn container_at(form: Form, x: Int, y: Int) -> String {
+  container_at_excluding(form, x, y, [])
+}
+
+fn smallest_control(
+  form: Form,
   candidates: List(Control),
   best: Option(Control),
 ) -> Option(Control) {
@@ -391,15 +436,16 @@ fn smallest_container(
     [candidate, ..rest] -> {
       let next = case best {
         None -> Some(candidate)
-        Some(current) ->
-          case
-            candidate.width * candidate.height < current.width * current.height
-          {
+        Some(current) -> {
+          let #(_, _, cw, ch) = bounds(form, candidate)
+          let #(_, _, bw, bh) = bounds(form, current)
+          case cw * ch < bw * bh {
             True -> Some(candidate)
             False -> Some(current)
           }
+        }
       }
-      smallest_container(rest, next)
+      smallest_control(form, rest, next)
     }
   }
 }
@@ -493,6 +539,44 @@ fn visit_controls(
   })
 }
 
+// Z-order among overlapping siblings follows the controls list: render_controls
+// (and the canvases it feeds) draw later entries above earlier ones. A
+// container's subtree travels with it structurally, so its children stay
+// attached. Both functions keep the relative order of the moved controls.
+pub fn bring_to_front(form: Form, ids: List(String)) -> Form {
+  reorder_controls(form, ids, True)
+}
+
+pub fn send_to_back(form: Form, ids: List(String)) -> Form {
+  reorder_controls(form, ids, False)
+}
+
+fn reorder_controls(form: Form, ids: List(String), front: Bool) -> Form {
+  case ids {
+    [] -> form
+    _ -> {
+      let moved =
+        list.filter(form.controls, fn(control) {
+          list.contains(ids, control.id)
+        })
+      case moved {
+        [] -> form
+        _ -> {
+          let rest =
+            list.filter(form.controls, fn(control) {
+              !list.contains(ids, control.id)
+            })
+          let controls = case front {
+            True -> list.append(rest, moved)
+            False -> list.append(moved, rest)
+          }
+          Form(..form, controls: controls)
+        }
+      }
+    }
+  }
+}
+
 pub fn set_align(form: Form, id: String, align: Align) -> Form {
   let others = list.filter(form.aligns, fn(entry) { entry.0 != id })
   let aligns = case align {
@@ -551,10 +635,10 @@ pub fn add_control_rect(
       prefix <> "-" <> suffix,
       prefix <> suffix,
       kind,
-      int.max(0, int.min(4095, x)),
-      int.max(0, int.min(4095, y)),
-      int.max(8, int.min(4095, width)),
-      int.max(8, int.min(4095, height)),
+      int.clamp(x, 0, max_coordinate),
+      int.clamp(y, 0, max_coordinate),
+      int.clamp(width, 8, max_coordinate),
+      int.clamp(height, 8, max_coordinate),
       default_text(kind),
       True,
       True,
@@ -701,6 +785,7 @@ pub fn paste_controls(
   clipboard_aligns: List(#(String, Align)),
   clipboard_layouts: List(#(String, Layout)),
   clipboard_borders: List(#(String, Int)),
+  clipboard_transparencies: List(#(String, Int)),
   target_id: String,
 ) -> #(Form, Option(Control)) {
   case clipboard {
@@ -769,6 +854,14 @@ pub fn paste_controls(
             Error(_) -> Error(Nil)
           }
         })
+      let new_transparencies =
+        list.filter_map(mapping, fn(entry) {
+          let #(old_id, control) = entry
+          case list.find(clipboard_transparencies, fn(t) { t.0 == old_id }) {
+            Ok(transparency) -> Ok(#(control.id, transparency.1))
+            Error(_) -> Error(Nil)
+          }
+        })
       let next =
         Form(
           ..form,
@@ -777,6 +870,7 @@ pub fn paste_controls(
           aligns: list.append(form.aligns, new_aligns),
           layouts: list.append(form.layouts, new_layouts),
           borders: list.append(form.borders, new_borders),
+          transparencies: list.append(form.transparencies, new_transparencies),
         )
       #(next, find_new(next, pasted_root.id))
     }
@@ -846,8 +940,8 @@ pub fn validate(form: Form) -> Result(Form, String) {
   case
     form.width > 0
     && form.height > 0
-    && form.width <= 4096
-    && form.height <= 4096
+    && form.width <= max_form_size
+    && form.height <= max_form_size
   {
     False -> Error("Form size must be between 1 and 4096 pixels")
     True -> {

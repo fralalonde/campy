@@ -160,7 +160,7 @@ A workspace is a versioned compressed Erlang term
 active project path. Campy auto-saves it after document or project-list changes.
 Projects can be switched, created (`Project N` with a `Main` module and a unique
 `projects/project-N.campy` path), and deleted from the workspace; deleting keeps
-the project file. Each project is independently versioned (v8 now) and keeps its
+the project file. Each project is independently versioned (v9 now) and keeps its
 own modules, form, handler source, undo history, path, and icon.
 
 ## Designer model (current IDE slice)
@@ -168,15 +168,17 @@ own modules, form, handler source, undo history, path, and icon.
 `campy_form` provides the IDE's form model (the CCL kinds with absolute
 geometry), a form-level `Free | Column | Row` layout, per-container layouts and
 borders, a
-parent map for container adoption, an alignment map, derived handler names and
-stub generation, subtree copy/paste, the versioned project codec (v8), the
+parent map for container adoption, an alignment map, a picture-transparency
+map, derived handler names and
+stub generation, subtree copy/paste, the versioned project codec (v9), the
 workspace codec, and the standalone form-window emitter. Panels and the window root
 accept children; adoption walks from the selected control to its first accepting
 ancestor and falls back to the window. Picture stores its path in the control's
 text field and is emitted with `@image-url(...)` in the run window. Free forms
 support cursor move and eight-handle resize; Column/Row forms use Slint
-layouts. Dropping a control over a panel/group box reparents it; dropping it
-outside all containers returns it to the window. Rendering orders a container
+layouts. Dropping a control reparents it to the container under the cursor;
+dropping it outside all containers returns it to the window. Rendering orders a
+container
 before its children so adopted controls stay visible. The designer
 model is deliberately separate
 from the M1 versioned component schema: the visual designer was built ahead of

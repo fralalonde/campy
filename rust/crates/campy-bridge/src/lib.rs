@@ -23,7 +23,11 @@ impl Drop for SessionResource {
     }
 }
 
+// Variant names are the wire protocol: rustler decodes them from the Gleam
+// `WireValue` constructors (`{wire_text, ...}` terms), so they must stay in
+// sync with gleam/packages/campy_bridge/src/campy_bridge.gleam.
 #[derive(rustler::NifTaggedEnum)]
+#[allow(clippy::enum_variant_names)]
 enum WireValue {
     WireText(String),
     WireBool(bool),
@@ -170,6 +174,9 @@ fn active_sessions() -> u64 {
 #[derive(rustler::NifTaggedEnum)]
 enum TestInput {
     Click(f32, f32),
+    Move(f32, f32),
+    Press(f32, f32),
+    Release(f32, f32),
     Text(String),
     KeyCombo(Vec<String>),
     Close,
@@ -187,6 +194,9 @@ fn test_input(
     use campy_renderer::sessions::{Command as Native, TestInput as Input};
     let input = match input {
         TestInput::Click(x, y) => Input::Click(x, y),
+        TestInput::Move(x, y) => Input::Move(x, y),
+        TestInput::Press(x, y) => Input::Press(x, y),
+        TestInput::Release(x, y) => Input::Release(x, y),
         TestInput::Text(text) => Input::Text(text),
         TestInput::KeyCombo(keys) => Input::KeyCombo(keys),
         TestInput::Close => Input::Close,

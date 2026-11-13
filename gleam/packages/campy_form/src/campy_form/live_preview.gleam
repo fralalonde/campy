@@ -19,6 +19,7 @@ pub type PreviewControl {
     visible: Bool,
     picture: String,
     value: Int,
+    transparency: Int,
   )
 }
 
@@ -65,6 +66,7 @@ pub fn snapshot(form: Form) -> Snapshot {
           _ -> ""
         },
         control_value(control),
+        campy_form.transparency_of(form, control.id),
       )
     }),
   )
@@ -72,7 +74,7 @@ pub fn snapshot(form: Form) -> Snapshot {
 
 pub fn to_slint() -> String {
   "import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, ScrollView, Slider, TextEdit } from \"std-widgets.slint\";\n"
-  <> "struct PreviewControl { id: string, kind: string, text: string, x: length, y: length, w: length, h: length, enabled: bool, visible: bool, picture: image, value: float }\n"
+  <> "struct PreviewControl { id: string, kind: string, text: string, x: length, y: length, w: length, h: length, enabled: bool, visible: bool, picture: image, value: float, transparency: float }\n"
   <> component()
   <> "export component CampyPreview inherits Window {\n"
   <> "  title: root.app-title;\n"
@@ -156,7 +158,7 @@ fn component() -> String {
   <> "  if data.kind == \"slider\": Slider { x: 0; y: 0; width: parent.width; height: parent.height; minimum: 0.0; maximum: 100.0; value: data.value; enabled: data.enabled; changed => { root.event(data.id + \":changed\"); } }\n"
   <> "  if data.kind == \"progress\": ProgressIndicator { x: 0; y: (parent.height - 6px) / 2; width: parent.width; height: 6px; progress: data.value / 100.0; }\n"
   <> "  if data.kind == \"panel\" || data.kind == \"group\": Text { x: 8px; y: 6px; text: data.text; color: Palette.foreground; font-weight: 600; }\n"
-  <> "  if data.kind == \"picture\": Image { x: 0; y: 0; width: parent.width; height: parent.height; source: data.picture; image-fit: contain; }\n"
+  <> "  if data.kind == \"picture\": Image { x: 0; y: 0; width: parent.width; height: parent.height; source: data.picture; image-fit: contain; opacity: 1.0 - data.transparency / 100.0; }\n"
   <> "  if data.kind == \"menu\": menu-area := ContextMenuArea {\n"
   <> "    Button { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text + \"  ▾\"; enabled: data.enabled; clicked => { menu-area.show({ x: 0px, y: self.height }); } }\n"
   <> "    Menu {\n"

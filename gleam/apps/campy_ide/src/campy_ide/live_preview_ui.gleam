@@ -60,6 +60,7 @@ pub fn wire(
       #("visible", bridge.WireBool(control.visible)),
       #("picture", bridge.WireImage(control.picture)),
       #("value", bridge.WireInt(control.value)),
+      #("transparency", bridge.WireInt(control.transparency)),
     ])
   })
 }

@@ -3,6 +3,7 @@ import campy_form
 import campy_form/live_preview
 import campy_form/preview
 import campy_form/project
+import campy_form/workspace
 import campy_ide
 import campy_ide/ide_ui
 import campy_ide/live_preview_ui
@@ -123,10 +124,17 @@ pub fn structural_edits_change_models_not_the_shell_test() {
   after |> should.not_equal(before)
 
   // The shell is model-driven; its structural parts do not depend on the
-  // edited state (only baked scalar defaults differ).
+  // edited state (only baked scalar defaults differ). Opened modules render
+  // as tabs of the TabPanel, each closable.
   let assert Ok(shell) = ide_ui.to_slint(model)
   string.contains(shell, "for module in root.module-items") |> should.be_true
-  string.contains(shell, "for tab in root.tab-items") |> should.be_true
+  string.contains(shell, "TabPanel {") |> should.be_true
+  string.contains(shell, "model: root.tab-items;") |> should.be_true
+  string.contains(shell, "for tab in root.model:") |> should.be_true
+  string.contains(shell, "select-tab(id) => { root.tab-module(id); }")
+  |> should.be_true
+  string.contains(shell, "close-tab(id) => { root.close-module(id); }")
+  |> should.be_true
   string.contains(shell, "for control in root.control-items") |> should.be_true
   string.contains(shell, "for line in root.code-lines") |> should.be_true
 }
@@ -145,7 +153,10 @@ pub fn selection_updates_control_model_and_scalars_test() {
   ide_ui.diff(snapshot.scalars, snapshot.scalars) |> should.equal([])
   list.any(changes, fn(update) { ide_ui.update_name(update) == "has-selection" })
   |> should.be_true
-  list.any(changes, fn(update) { ide_ui.update_name(update) == "insp-name" })
+  // The property grid now carries the selected control's values.
+  list.any(next.props, fn(row) {
+    row.key == "name" && row.value == "pet_button"
+  })
   |> should.be_true
   list.any(changes, fn(update) { ide_ui.update_name(update) == "status" })
   |> should.be_false
@@ -235,6 +246,7 @@ pub fn preview_honours_form_layouts_test() {
           True,
         ),
       ],
+      [],
       [],
       [],
       [],
@@ -683,7 +695,7 @@ pub fn drag_over_reports_the_target_parent_test() {
   let dragged =
     demo_state()
     |> state.select("pet-button")
-    |> state.begin_drag
+    |> state.begin_drag("pet-button")
     |> state.set_drop_x(300)
     |> state.update_drop(300)
   dragged.drop_active |> should.be_false
@@ -692,13 +704,45 @@ pub fn drag_over_reports_the_target_parent_test() {
   let outside =
     demo_state()
     |> state.select("pet-button")
-    |> state.begin_drag
+    |> state.begin_drag("pet-button")
     |> state.set_drop_x(700)
     |> state.update_drop(10)
   outside.drop_active |> should.be_true
   outside.drop_candidate |> should.equal("")
 
   state.end_gesture(dragged).drop_active |> should.be_false
+}
+
+// The cursor, not the dragged control's centre, decides the drop target: the
+// button lands on panel-1 but the pointer stays beside it, so the window keeps
+// it; releasing with the cursor over the panel adopts it.
+pub fn drop_target_follows_the_cursor_test() {
+  let added = state.add(state.select(demo_state(), ""), campy_form.Button)
+  let assert Some(button) = state.selected_control(added)
+
+  let beside_panel =
+    added
+    |> state.begin_gesture
+    |> state.begin_drag(button.id)
+    |> state.set_drop_x(600)
+    |> state.update_drop(100)
+    |> state.move_gesture_x(50)
+    |> state.move_gesture_y(50)
+    |> state.end_gesture
+  let assert Some(form) = state.active_form(beside_panel)
+  campy_form.parent_of(form, button.id) |> should.equal("")
+
+  let over_panel =
+    beside_panel
+    |> state.begin_gesture
+    |> state.begin_drag(button.id)
+    |> state.set_drop_x(100)
+    |> state.update_drop(100)
+    |> state.move_gesture_x(0)
+    |> state.move_gesture_y(10)
+    |> state.end_gesture
+  let assert Some(form) = state.active_form(over_panel)
+  campy_form.parent_of(form, button.id) |> should.equal("panel-1")
 }
 
 pub fn hints_toggle_is_a_scalar_test() {
@@ -717,6 +761,60 @@ pub fn shell_contains_ui_hints_test() {
   |> should.be_true
 }
 
+// Palette hints are hover-state driven, not dwell-timer tooltips: Slint's
+// Tooltip restarts its delay on every pointer move, so a human hand (which
+// never holds perfectly still) never sees one. The palette instead shows a
+// hint chip driven by has-hover, which jitter cannot reset.
+pub fn palette_hints_are_hover_chips_not_dwell_tooltips_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  // No dwell tooltip on the palette tiles.
+  string.contains(shell, "@markdown(\"{item.label}\")") |> should.be_false
+  // Hovering a tile sets the hint text; leaving clears it (guarded so a
+  // neighbouring tile's enter is not clobbered by this tile's exit).
+  string.contains(
+    shell,
+    "if self.has-hover { root.palette-hint = item.label + \" — click, then drag on the form to place it\"; }",
+  )
+  |> should.be_true
+  string.contains(
+    shell,
+    "if !self.has-hover && root.palette-hint == item.label + \" — click, then drag on the form to place it\" { root.palette-hint = \"\"; }",
+  )
+  |> should.be_true
+  // The chip renders below the palette bar, only while a tile is hovered and
+  // hints are enabled.
+  string.contains(
+    shell,
+    "if root.palette-hint != \"\" && root.show-hints: Rectangle {",
+  )
+  |> should.be_true
+}
+
+// Each opened module is a proper tab: closable, selected through the panel.
+pub fn tab_panel_renders_opened_modules_test() {
+  let model = state.open_module(demo_state(), "widgets")
+  let snapshot = ide_ui.snapshot(model)
+  list_length(snapshot.tabs) |> should.equal(2)
+
+  let assert Ok(shell) = ide_ui.to_slint(model)
+  string.contains(shell, "component TabPanel inherits Rectangle")
+  |> should.be_true
+  // Tabs come from the model, so opening/closing modules never reloads.
+  string.contains(shell, "for tab in root.model: Rectangle {")
+  |> should.be_true
+  string.contains(shell, "clicked => { root.select-tab(tab.id); }")
+  |> should.be_true
+  string.contains(shell, "clicked => { root.close-tab(tab.id); }")
+  |> should.be_true
+  // The module editor lives inside the panel's content area.
+  string.contains(shell, "TabPanel {") |> should.be_true
+  string.contains(
+    shell,
+    "Rectangle { horizontal-stretch: 1; vertical-stretch: 1;",
+  )
+  |> should.be_true
+}
+
 pub fn console_logs_and_clears_test() {
   let logged =
     demo_state()
@@ -726,6 +824,60 @@ pub fn console_logs_and_clears_test() {
   state.console_text(state.clear_console(logged)) |> should.equal("")
 }
 
+// Shift is no longer a selection modifier: no property lights the window
+// outline, and the plain select tool draws the marquee itself.
+pub fn shell_has_no_shift_selection_modifier_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  string.contains(shell, "shift-down") |> should.be_false
+  string.contains(shell, "frame-tool") |> should.be_false
+  // Pressing arms nothing; crossing the threshold arms the drag, and
+  // selection and moves are still committed on release.
+  string.contains(shell, "left) { root.gesture-start();")
+  |> should.be_false
+  string.contains(
+    shell,
+    "drag-armed = true; root.gesture-start(); root.drag-start(data.id);",
+  )
+  |> should.be_true
+  string.contains(
+    shell,
+    "if (root.additive) { root.toggle-select(data.id); } else { root.select(data.id); }",
+  )
+  |> should.be_true
+  // Drag-over reports the cursor position, not the control's centre.
+  string.contains(shell, "round((data.x + self.mouse-x) / 1px)")
+  |> should.be_true
+}
+
+// The hybrid gesture contract on a free-layout control: a press alone commits
+// nothing; dragging past the threshold from a selected control moves it, while
+// dragging from an unselected control draws the same dotted marquee as the
+// empty canvas and commits it through the frame pipeline (so drag-to-select
+// works even when the gesture starts on top of a component).
+pub fn control_drag_beyond_threshold_draws_marquee_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  // Pressing a control starts neither the drag nor the frame.
+  string.contains(shell, "left) { root.gesture-start();")
+  |> should.be_false
+  // Past the threshold, an unselected control opens the window-level marquee
+  // at the press point (control-relative mouse plus the control's origin).
+  string.contains(shell, "marquee-armed = true; marquee-active = true;")
+  |> should.be_true
+  string.contains(shell, "marquee-x = data.x + self.pressed-x;")
+  |> should.be_true
+  // The frame commits through the same rect/frame-apply pipeline as the
+  // canvas marquee, with keyboard focus restored for follow-up commands.
+  string.contains(shell, "root.rect-x(round(marquee-x / 1px));")
+  |> should.be_true
+  string.contains(shell, "root.rect-h(round(marquee-h / 1px));")
+  |> should.be_true
+  string.contains(
+    shell,
+    "frame-apply() => { key-handler.focus(); root.frame-apply(); }",
+  )
+  |> should.be_true
+}
+
 pub fn console_input_is_logged_test() {
   let model = state.console_input(demo_state(), "ping")
   let text = state.console_text(model)
@@ -733,16 +885,144 @@ pub fn console_input_is_logged_test() {
   string.contains(text, "app is not running") |> should.be_true
 }
 
-pub fn layout_selection_is_a_scalar_test() {
+pub fn layout_selection_shows_in_the_grid_test() {
   let model = state.set_layout(demo_state(), campy_form.Column)
   let snapshot = ide_ui.snapshot(model)
-  let assert Ok(update) =
-    list.find(snapshot.scalars, fn(item) {
-      ide_ui.update_name(item) == "layout-index"
-    })
-  update |> should.equal(ide_ui.ScalarIntUpdate("layout-index", 1))
+  // The window grid carries the Layout choice with Column's index.
+  let assert [row] =
+    list.filter(snapshot.props, fn(row) { row.key == "layout" })
+  row.index |> should.equal(1)
+  row.kind |> should.equal("choice")
+  row.options |> should.equal(["Free", "Column", "Row"])
   let assert Some(form) = state.active_form(model)
   form.layout |> should.equal(campy_form.Column)
+}
+
+// With several components selected the grid shows only the properties they
+// have in common; values that differ are blank, shared values are shown.
+pub fn multi_selection_grid_shows_common_props_test() {
+  let model =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.toggle_select("feed-button")
+  let snapshot = ide_ui.snapshot(model)
+
+  // Names and texts differ → blank. Y, W, H are shared by the two buttons.
+  let assert Ok(name) = list.find(snapshot.props, fn(row) { row.key == "name" })
+  name.value |> should.equal("")
+  let assert Ok(text) = list.find(snapshot.props, fn(row) { row.key == "text" })
+  text.value |> should.equal("")
+  let assert Ok(y) = list.find(snapshot.props, fn(row) { row.key == "y" })
+  y.value |> should.equal("236")
+  let assert Ok(w) = list.find(snapshot.props, fn(row) { row.key == "w" })
+  w.value |> should.equal("140")
+
+  // Button rows only: no container Layout/Border, no picture Transparency.
+  list.any(snapshot.props, fn(row) { row.key == "layout" }) |> should.be_false
+  list.any(snapshot.props, fn(row) { row.key == "transparency" })
+  |> should.be_false
+
+  // Events: both buttons have OnClick; handler names differ → blank value.
+  let assert [event] = snapshot.events
+  event.label |> should.equal("OnClick")
+  event.value |> should.equal("")
+}
+
+// Editing a shared property applies to every selected component.
+pub fn apply_prop_edits_the_whole_selection_test() {
+  let model =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.toggle_select("feed-button")
+  let edited = state.apply_prop(model, "text", "Hello")
+  let assert Some(form) = state.active_form(edited)
+  let assert Some(pet) = campy_form.find_control(form, "pet-button")
+  let assert Some(feed) = campy_form.find_control(form, "feed-button")
+  pet.text |> should.equal("Hello")
+  feed.text |> should.equal("Hello")
+
+  // Geometry: both buttons take the same X.
+  let moved = state.apply_prop(edited, "x", "40")
+  let assert Some(form) = state.active_form(moved)
+  let assert Some(pet) = campy_form.find_control(form, "pet-button")
+  let assert Some(feed) = campy_form.find_control(form, "feed-button")
+  pet.x |> should.equal(40)
+  feed.x |> should.equal(40)
+
+  // A name is per-component: editing it in a multi-selection is rejected.
+  let named = state.apply_prop(edited, "name", "renamed")
+  named.status |> should.equal("Name applies to a single component")
+}
+
+// The context-menu Align submenu: edges to the shared extreme, centres to
+// the average, each root moving with its subtree in one undo step.
+pub fn align_selection_arranges_the_group_test() {
+  let model =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.toggle_select("search-edit")
+
+  // Left edges to the leftmost.
+  let left = state.align_selection(model, "left")
+  let assert Some(form) = state.active_form(left)
+  let assert Some(pet) = campy_form.find_control(form, "pet-button")
+  let assert Some(search) = campy_form.find_control(form, "search-edit")
+  pet.x |> should.equal(44)
+  search.x |> should.equal(44)
+
+  // Centre: average of the two centres (44+70 and 264+140 → 259).
+  let centered = state.align_selection(model, "center")
+  let assert Some(form) = state.active_form(centered)
+  let assert Some(pet) = campy_form.find_control(form, "pet-button")
+  let assert Some(search) = campy_form.find_control(form, "search-edit")
+  pet.x |> should.equal(259 - 70)
+  search.x |> should.equal(259 - 140)
+
+  // One undo step returns the whole arrangement.
+  let undone = state.undo(centered)
+  let assert Some(form) = state.active_form(undone)
+  let assert Some(pet) = campy_form.find_control(form, "pet-button")
+  let assert Some(search) = campy_form.find_control(form, "search-edit")
+  pet.x |> should.equal(44)
+  search.x |> should.equal(264)
+
+  // Fewer than two components cannot align.
+  let single =
+    state.align_selection(demo_state() |> state.select("pet-button"), "left")
+  single.status |> should.equal("Select at least two components to align")
+}
+
+// The shell: inspector text and canvas size are gone; the right pane is a
+// two-tab grid; the editor views switch via the corner button and Ctrl+Tab;
+// the multi-selection context menu carries the Align submenu.
+pub fn shell_inspector_grid_and_view_toggle_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  string.contains(shell, "\"Inspector\"") |> should.be_false
+  string.contains(shell, "canvas-label") |> should.be_false
+  string.contains(shell, "UI (actual)") |> should.be_false
+  string.contains(shell, "Code (Slint file)") |> should.be_false
+  string.contains(shell, "text: \"▦ Form\"") |> should.be_true
+  string.contains(shell, "text: \"⌨ Raw\"") |> should.be_true
+  // Tab strip with no buttons, and one grid for both tabs.
+  string.contains(shell, "root.events-tab ? root.event-items : root.prop-items")
+  |> should.be_true
+  string.contains(shell, "component PropGrid inherits Rectangle")
+  |> should.be_true
+  string.contains(shell, "component PropRow inherits Rectangle")
+  |> should.be_true
+  // Corner view toggle with alternating pictogram, and its shortcut.
+  string.contains(shell, "text: root.code-view ? \"▦\" : \"⌨\"")
+  |> should.be_true
+  string.contains(shell, "@keys(Control + Tab)") |> should.be_true
+  string.contains(shell, "Form editor\" : \"⌨ Handler code\"")
+  |> should.be_false
+  // The Align submenu appears for multi-selections and dispatches each kind.
+  string.contains(
+    shell,
+    "if root.selection-count > 1: Button { text: \"Align ▸\"",
+  )
+  |> should.be_true
+  string.contains(shell, "root.align-selection(\"middle\")") |> should.be_true
 }
 
 pub fn mcp_protocol_handles_initialize_and_tools_test() {
@@ -881,6 +1161,33 @@ pub fn models_apply_on_the_live_instance_test() {
   let assert Ok(_) =
     campy_bridge.submit(session, campy_bridge.ReadText(1, "status"))
   wait_property("status") |> should.equal(model.status)
+  wait_no_failure(5)
+  // The inspector grid models must apply too — including a mixed
+  // multi-selection whose differing Align choice arrives as index -1.
+  let multi =
+    model
+    |> state.select("pet-button")
+    |> state.toggle_select("search-edit")
+    |> state.set_align(campy_form.Top)
+  let multi_snapshot = ide_ui.snapshot(multi)
+  let assert Ok(_) =
+    campy_bridge.submit(
+      session,
+      campy_bridge.SetModel(
+        1,
+        "prop-items",
+        ide_ui.props_wire(multi_snapshot.props),
+      ),
+    )
+  let assert Ok(_) =
+    campy_bridge.submit(
+      session,
+      campy_bridge.SetModel(
+        1,
+        "event-items",
+        ide_ui.props_wire(multi_snapshot.events),
+      ),
+    )
   wait_no_failure(5)
   let _ = campy_bridge.close_session(session)
 }
@@ -1047,4 +1354,198 @@ pub fn paste_copies_container_border_and_layout_test() {
     })
   campy_form.border_of(form, copy.id) |> should.equal(12)
   campy_form.layout_of(form, copy.id) |> should.equal(campy_form.Column)
+}
+
+// Ordering actions: overlapping siblings can be brought to front / moved to
+// back from the selection, and the step is undoable.
+pub fn ordering_actions_reorder_selection_test() {
+  let model = demo_state() |> state.select("pet-button")
+  let front = state.bring_to_front(model)
+  let assert Some(form) = state.active_form(front)
+  campy_form.render_controls(form)
+  |> list.map(fn(control) { control.id })
+  |> should.equal([
+    "panel-1", "picture-1", "label-1", "list-1", "search-edit", "feed-button",
+    "pet-button",
+  ])
+
+  let back = state.send_to_back(front |> state.select("pet-button"))
+  let assert Some(form) = state.active_form(back)
+  campy_form.render_controls(form)
+  |> list.map(fn(control) { control.id })
+  |> should.equal([
+    "panel-1", "pet-button", "picture-1", "label-1", "list-1", "search-edit",
+    "feed-button",
+  ])
+
+  let undone = state.undo(back)
+  let assert Some(form) = state.active_form(undone)
+  campy_form.render_controls(form)
+  |> list.map(fn(control) { control.id })
+  |> should.equal([
+    "panel-1", "picture-1", "label-1", "list-1", "search-edit", "feed-button",
+    "pet-button",
+  ])
+}
+
+// Picture transparency flows from the inspector into the designer model, the
+// generated run window, the live preview, and the clipboard.
+pub fn picture_transparency_flows_everywhere_test() {
+  let model = demo_state() |> state.select("picture-1")
+  let set = state.commit_field(model, "transparency", "60")
+
+  // Inspector grid row.
+  ide_ui.snapshot(set).props
+  |> list.any(fn(row) { row.key == "transparency" && row.value == "60" })
+  |> should.be_true
+
+  // Designer canvas model.
+  ide_ui.snapshot(set).controls
+  |> list.any(fn(control) {
+    control.id == "picture-1" && control.transparency == 60
+  })
+  |> should.be_true
+
+  // Generated run window.
+  let assert Some(form) = state.active_form(set)
+  let assert Ok(source) = preview.to_slint(form)
+  string.contains(source, "opacity: 0.4;") |> should.be_true
+
+  // Live preview.
+  let snapshot = live_preview.snapshot(form)
+  let assert [_, picture, ..] = snapshot.controls
+  picture.transparency |> should.equal(60)
+
+  // Clipboard keeps it for paste.
+  let copied = state.copy_selected(set)
+  let pasted = state.paste(state.select(copied, ""))
+  let assert Some(form) = state.active_form(pasted)
+  let pasted_picture =
+    list.find(form.controls, fn(control) {
+      control.kind == campy_form.Picture && control.id != "picture-1"
+    })
+  let assert Ok(picture) = pasted_picture
+  campy_form.transparency_of(form, picture.id) |> should.equal(60)
+
+  // Rejected for non-pictures and out-of-range values.
+  let rejected =
+    state.commit_field(
+      model |> state.select("pet-button"),
+      "transparency",
+      "50",
+    )
+  rejected.status |> should.equal("Transparency applies to pictures")
+  let clamped = state.commit_field(model, "transparency", "500")
+  clamped.status |> should.equal("Transparency must be between 0 and 100")
+}
+
+// F6 swaps in new beams while the running process still holds state built by
+// the previous code. A project saved by an older format must be reloaded from
+// disk before the new code reads its records; a current one passes through.
+pub fn stale_project_format_migrates_on_hot_reload_test() {
+  let model = demo_state()
+  let stale =
+    state.State(..model, project: project.Project(..model.project, version: 8))
+  let next =
+    state.ensure_current_format(stale, fn() { workspace.new(project.campy()) })
+  next.project.version |> should.equal(project.version)
+  string.contains(next.status, "upgraded") |> should.be_true
+
+  // Current-format state is returned untouched; the loader must not run.
+  let kept =
+    state.ensure_current_format(model, fn() {
+      panic as "loader must not run for the current format"
+    })
+  should.be_true(kept.project == model.project)
+  kept.status |> should.equal(model.status)
+}
+
+// The design-surface grid is baked at 24px spacing, so its extent must cover
+// the largest surface the model allows (window position ≤ 2000, form size
+// ≤ 4096, +28 title bar +80 margin → 6176x6204), and the surface stretches to
+// at least the visible pane so an enlarged window keeps its grid.
+pub fn canvas_grid_covers_the_whole_surface_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  // Last baked lines: 257*24 = 6168, 258*24 = 6192.
+  string.contains(shell, "x: 6168px") |> should.be_true
+  string.contains(shell, "y: 6192px") |> should.be_true
+  // The surface is at least as large as the pane, whatever the window size.
+  string.contains(shell, "width: max(root.surface-w, parent.width)")
+  |> should.be_true
+  string.contains(shell, "height: max(root.surface-h, parent.height)")
+  |> should.be_true
+}
+
+// Dragging previews the whole selection: the pressed control follows its own
+// drag delta, the other selected controls follow a shared window-level offset
+// published while dragging. The offset only applies to the rest of the
+// selection when the pressed control was itself selected, so the preview
+// matches the commit (which replaces the selection otherwise).
+pub fn multi_selection_drag_previews_together_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  // Pressed control: local delta; others: shared offset while multi-dragging.
+  string.contains(
+    shell,
+    "x: free-layout ? (root.live-drag-id == data.id ? drag-x : root.live-drag-active && root.live-drag-multi && data.selected ? root.live-drag-offset-x : 0px) : 0px;",
+  )
+  |> should.be_true
+  string.contains(
+    shell,
+    "y: free-layout ? (root.live-drag-id == data.id ? drag-y : root.live-drag-active && root.live-drag-multi && data.selected ? root.live-drag-offset-y : 0px) : 0px;",
+  )
+  |> should.be_true
+  // Pressing arms the shared offset (multi = the pressed control's selected
+  // flag); moving publishes it; releasing resets it.
+  string.contains(
+    shell,
+    "root.live-drag-id = id; root.live-drag-active = true; root.live-drag-multi = control.selected;",
+  )
+  |> should.be_true
+  string.contains(
+    shell,
+    "drag-shift-x(dx) => { root.live-drag-offset-x = dx; }",
+  )
+  |> should.be_true
+  string.contains(
+    shell,
+    "root.live-drag-active = false; root.live-drag-id = \"\";",
+  )
+  |> should.be_true
+  // The moved handler publishes the shift alongside the drop-target cursor.
+  string.contains(shell, "root.drag-shift-x(drag-x);") |> should.be_true
+  // Resize handles hide while a live drag is in progress.
+  string.contains(
+    shell,
+    "if designing && free-layout && data.primary && !live-drag-active:",
+  )
+  |> should.be_true
+}
+
+// Placement and drag-drop share one hit-tester (campy_form.container_at_*),
+// which resolves rendered bounds — so a control placed inside an aligned
+// container's computed area is adopted by it, matching drag-drop reparenting.
+pub fn placement_uses_computed_container_bounds_test() {
+  let aligned =
+    demo_state()
+    |> state.select("panel-1")
+    |> state.set_align(campy_form.Client)
+  // The panel is Client-aligned: its rendered bounds are the window minus the
+  // border, starting near (0,0) — far from its stored (24,24).
+  let assert Some(form) = state.active_form(aligned)
+  let assert Some(panel) = campy_form.find_control(form, "panel-1")
+  let #(px, py, pw, ph) = campy_form.bounds(form, panel)
+  should.be_true(pw >= 600 && ph >= 300)
+  should.be_true(px < 24 || py < 24)
+
+  let placed =
+    aligned
+    |> state.arm_component("button")
+    |> state.set_rect_x(px + 40)
+    |> state.set_rect_y(py + 40)
+    |> state.set_rect_w(120)
+    |> state.set_rect_h(32)
+    |> state.place_component
+  let assert Some(form) = state.active_form(placed)
+  let assert Some(control) = state.selected_control(placed)
+  campy_form.parent_of(form, control.id) |> should.equal("panel-1")
 }

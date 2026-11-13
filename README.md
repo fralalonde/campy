@@ -24,13 +24,25 @@ just run
 
 `just run` builds Rust and Gleam, stages the NIF, and opens Campy Studio. On Linux, `./campy` is an equivalent launcher. Development: `just dev` watches Gleam sources; `just check` runs formatting and
 tests; `just clean` removes Rust/Gleam build artifacts and the staged
-development NIF. There is no packaged installer yet.
+development NIF.
+
+## Package for distribution
+
+```sh
+just package
+```
+
+Produces `generated/dist/campy-studio-<version>-<os>-<arch>.tar.gz`: a portable
+build that unpacks anywhere and runs with `./campy`, requiring only an
+Erlang/OTP 27+ installation (`erl` on PATH) — no Rust, Gleam, Python, or
+`just`. The release NIF and the windowing stack's native libraries
+(`libxkbcommon-x11` and friends, from `generated/native-deps`) are bundled.
 
 ## State and limits
 
 - Working prototype: project/workspace persistence, form designer, property inspector, undo/redo, native preview, and F7 updates to a running form.
 - Handler stubs can be edited, but the preview does not execute handler code. Its console logs events and input.
-- F6 reloads Gleam code in the IDE; Rust/NIF changes and state-shape changes need a restart.
+- F6 reloads Gleam code in the IDE (a project-format upgrade reloads the workspace in place); Rust/NIF changes and other state-shape changes need a restart.
 - Palette drag-and-drop, richer source editing, and the general versioned component schema are unfinished.
 - Native sessions run on Linux and Windows. Windows context-menu input is not covered by the automated smoke test.
 

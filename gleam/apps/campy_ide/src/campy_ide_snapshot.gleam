@@ -100,7 +100,7 @@ pub fn main() {
   let dropping =
     model
     |> state.select("pet-button")
-    |> state.begin_drag
+    |> state.begin_drag("pet-button")
     |> state.set_drop_x(700)
     |> state.update_drop(10)
   let last = apply(session, ide_ui.snapshot(dropping), last)
@@ -109,14 +109,6 @@ pub fn main() {
   let placing = state.arm_component(model, "button")
   let last = apply(session, ide_ui.snapshot(placing), last)
   snapshot(session, "ide-place.png")
-
-  let assert Ok(_) =
-    bridge.submit(session, bridge.SetBool(1, "shift-down", True))
-  let assert Ok(_) = bridge.submit(session, bridge.ReadText(1, "status"))
-  wait_for(1, "property:status", "select-mode barrier")
-  snapshot(session, "ide-select-mode.png")
-  let assert Ok(_) =
-    bridge.submit(session, bridge.SetBool(1, "shift-down", False))
 
   let console =
     model
@@ -247,6 +239,22 @@ fn apply(
       submit_retry(
         session,
         bridge.SetModel(1, "code-lines", ide_ui.code_wire(next.code)),
+      )
+    True -> Nil
+  }
+  case next.props == last.props {
+    False ->
+      submit_retry(
+        session,
+        bridge.SetModel(1, "prop-items", ide_ui.props_wire(next.props)),
+      )
+    True -> Nil
+  }
+  case next.events == last.events {
+    False ->
+      submit_retry(
+        session,
+        bridge.SetModel(1, "event-items", ide_ui.props_wire(next.events)),
       )
     True -> Nil
   }

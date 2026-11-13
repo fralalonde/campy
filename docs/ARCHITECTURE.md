@@ -96,23 +96,34 @@ and the form metadata derive from this catalog; rendering targets Slint's
 widget model where one exists (LCL properties are mapped to Slint semantics).
 
 `campy_form` owns the designer model (a flat list of absolutely positioned
-controls plus a parent map for adoption, an alignment map, and per-container
-layouts), handler-name derivation and stub generation, the versioned project
-codec (v8), the workspace codec (v1), and the standalone form-window emitter. Panels and the window root accept children; new/pasted controls are
+controls plus a parent map for adoption, an alignment map, a
+picture-transparency map, and per-container layouts), handler-name derivation
+and stub generation, the versioned project codec (v9), the workspace codec
+(v1), and the standalone form-window emitter. Container hit-testing lives here
+too (`container_at*`): placement and drag-drop reparenting resolve the same
+rendered bounds. Panels and the window root accept children; new/pasted
+controls are
 adopted by the selected accepting component, its first accepting ancestor, or the
 window. Copy/cut/paste snapshots a whole subtree and re-keys it on paste. A
 project is a set of modules, each with one form and its handler source; Campy
 opens its own project file (`campy.campy` at the repository root, whose first
 module is the Cat Café demo) and creates it on first run.
 
-`campy_ide/ide_ui` renders the whole IDE shell — one-row menus/palette/Run
-controls, Projects navigator, module navigator, tabbed module editor, object
+`campy_ide/ide_ui` owns the shell's data side — snapshots of scalar state and
+models, scalar diffing, and the wire values pushed through the bridge — while
+`campy_ide/ide_ui/shell` generates the static Slint source: one-row
+menus/palette/Run controls, Projects navigator, module navigator, the tabbed
+module editor (a TabPanel component: one closable tab per opened module, driven
+by the tab model — Slint's TabWidget cannot take `for`-generated tabs), object
 inspector, code view, generated-Slint view, console pane, and settings/project
-dialogs — as one interpreted Slint component per structure. A single top-right
+dialogs — as one interpreted Slint component per structure, parameterized only
+by the window title and the baked-in scalar declarations. A single top-right
 button switches the editor between the form and the handler code; the form
 editor's bottom tabs switch between the actual design and the generated Slint
-source. The CCL palette shares the top row with Run/Stop and the arrow/box
-component selector. A separate console pane sits below the editor canvas. The window uses a preferred (not fixed) size, so
+source. The CCL palette shares the top row with the view toggle and Run/Stop;
+hovering a palette tile shows a hint chip (hover-state driven, because Slint
+tooltip dwell timers restart on every pointer move). A separate console pane
+sits below the editor canvas. The window uses a preferred (not fixed) size, so
 the window manager can resize and maximize it. Every panel is data-driven and
 every interaction returns through the generic callback channel, so the IDE uses
 exactly the same bridge as a designed app. Choosing the window (clicking the
@@ -120,14 +131,22 @@ empty canvas) shows its title/size/layout in the inspector and makes it the
 adoption root.
 
 F6 is a development hot-reload path. `campy_hot_ffi:reload/0` runs `gleam build`
-in the app package, then hot-loads every currently loaded `campy_*` Beam from the
-build ebin (`campy_ide` included; the NIF wrapper is excluded). The IDE loop
-re-enters through `campy_hot_ffi:continue/7`, an external call into
+in the app package, then hot-loads `campy_ide` first and every other currently
+loaded `campy_*` Beam from the build ebin (the NIF wrapper and the F6 module
+itself are excluded; if `campy_ide` cannot swap in, nothing else loads either,
+so the process never ends up with new leaf modules under the previous loop).
+The IDE loop re-enters through `campy_hot_ffi:continue/7`, an external call into
 `campy_ide:loop/7`, so the next iteration uses the newly loaded loop and dispatch.
+Because the still-running previous `campy_ide` may be the code executing right
+after the beams swap, the project-format migration (`state.ensure_current_format`)
+lives in the `state` module and is called across that boundary — both from the
+reload path and at the top of `loop` — so a project-format bump reloads the
+workspace from disk before any new code reads stale records.
 The host then regenerates the Slint shell from the new `ide_ui` and submits
 `LoadUi` with the next generation, resetting the diff snapshot so every scalar
 and model is re-applied to the refreshed window. The BEAM process, workspace, and
-project state survive. Rust/NIF changes and changes to record/state shapes still
+project state survive. Rust/NIF changes and changes to `State`/record shapes
+beyond the versioned project format still
 require a process restart.
 
 The preview window is also model-driven. `campy_form/live_preview` emits a shell
@@ -186,8 +205,10 @@ of the eight corner/side handles resize; the UI tracks the gesture locally and
 sends the deltas once on release), while **Column**/**Row** wrap the control
 model in Slint `VerticalLayout`/`HorizontalLayout`. Panels and group boxes can
 also choose Free/Column/Row for their direct children; the host resolves those
-bounds. A move drop re-parents the control to the smallest accepting panel under
-its center (or to the window when dropped outside), and only highlights when
+bounds. A move drop re-parents the control to the smallest accepting container
+under the cursor (or to the window when dropped outside) — placement and
+drag-drop share one hit-tester (`campy_form.container_at*`), which resolves
+rendered bounds — and only highlights when
 the parent would change; `render_controls` sorts containers before their
 children so adopted controls draw above their panel. Free controls may also
 declare an LCL-style **alignment** (Top/Bottom/Left/Right/Client/Fill),
@@ -204,8 +225,8 @@ stub in that module's source, and the code view displays the highlighted source
 or edits one handler at a time. The Settings → Editor dialog changes the code
 font family/size and the color scheme. Project files are compressed, versioned
 Erlang terms validated on load; v1 (single form), v2 (modules), v3 (layout),
-v4 (parent map), v5 (alignment), v6 (per-container layouts), and v7 (icons)
-files upgrade to v8 (container borders). Cargo builds use
+v4 (parent map), v5 (alignment), v6 (per-container layouts), v7 (icons), and
+v8 (container borders) files upgrade to v9 (picture transparency). Cargo builds use
 `scripts/cargo.sh`, which selects the compatible glibc toolchain when installed
 and avoids producing a NIF that requires a newer glibc than the runtime. The selected component can be
 removed with the inspector trashcan or the Delete key; both go through the

@@ -1,6 +1,7 @@
 //! Winit adapter. Live Slint values never leave this dedicated UI thread.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -33,6 +34,9 @@ pub enum Command {
 #[derive(Debug)]
 pub enum TestInput {
     Click(f32, f32),
+    Move(f32, f32),
+    Press(f32, f32),
+    Release(f32, f32),
     Text(String),
     KeyCombo(Vec<String>),
     Close,
@@ -358,12 +362,12 @@ impl LiveSession {
         if let Some(old) = &self.instance {
             let new_properties: HashMap<_, _> = definition.properties().collect();
             for (name, kind) in old.definition().properties() {
-                if new_properties.get(&name) == Some(&kind) {
-                    if let Ok(value) = old.get_property(&name) {
-                        candidate
-                            .set_property(&name, value)
-                            .map_err(|e| e.to_string())?;
-                    }
+                if new_properties.get(&name) == Some(&kind)
+                    && let Ok(value) = old.get_property(&name)
+                {
+                    candidate
+                        .set_property(&name, value)
+                        .map_err(|e| e.to_string())?;
                 }
             }
             candidate.window().set_size(old.window().size());
@@ -492,6 +496,37 @@ impl LiveSession {
                             },
                         ]
                     }
+                    // Hover-only: moves the pointer without pressing, so
+                    // tooltip hover tracking and delay timers run for real.
+                    TestInput::Move(x, y) => {
+                        vec![WindowEvent::PointerMoved {
+                            position: slint::LogicalPosition::new(x, y),
+                        }]
+                    }
+                    // Split drag primitives so tests can snapshot between
+                    // press and release (live drag previews).
+                    TestInput::Press(x, y) => {
+                        vec![
+                            WindowEvent::PointerMoved {
+                                position: slint::LogicalPosition::new(x, y),
+                            },
+                            WindowEvent::PointerPressed {
+                                position: slint::LogicalPosition::new(x, y),
+                                button: PointerEventButton::Left,
+                            },
+                        ]
+                    }
+                    TestInput::Release(x, y) => {
+                        vec![
+                            WindowEvent::PointerMoved {
+                                position: slint::LogicalPosition::new(x, y),
+                            },
+                            WindowEvent::PointerReleased {
+                                position: slint::LogicalPosition::new(x, y),
+                                button: PointerEventButton::Left,
+                            },
+                        ]
+                    }
                     TestInput::Text(text) => text
                         .chars()
                         .flat_map(|character| {
@@ -615,23 +650,22 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
             // this loop is running (e.g. while compiling another session's UI).
             // The registry pass above has already run for this tick, so create
             // the live session on demand instead of dropping the command.
-            if !sessions.contains_key(&id) {
-                if let Ok(registrations) = shared.registrations.lock() {
-                    if let Some(registration) = registrations.get(&id) {
-                        let session = LiveSession {
-                            control: registration.control.clone(),
-                            sink: registration.sink.clone(),
-                            instance: None,
-                            generation: 0,
-                        };
-                        session.emit(
-                            0,
-                            "session-opened",
-                            format!("pid={} thread={ui_thread:?}", std::process::id()),
-                        );
-                        sessions.insert(id, session);
-                    }
-                }
+            if let Entry::Vacant(slot) = sessions.entry(id)
+                && let Ok(registrations) = shared.registrations.lock()
+                && let Some(registration) = registrations.get(&id)
+            {
+                let session = LiveSession {
+                    control: registration.control.clone(),
+                    sink: registration.sink.clone(),
+                    instance: None,
+                    generation: 0,
+                };
+                session.emit(
+                    0,
+                    "session-opened",
+                    format!("pid={} thread={ui_thread:?}", std::process::id()),
+                );
+                slot.insert(session);
             }
             if let Some(session) = sessions.get_mut(&id) {
                 if session.control.close_reason.load(Ordering::Acquire) != 0 {

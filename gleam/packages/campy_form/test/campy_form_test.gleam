@@ -63,6 +63,7 @@ pub fn rejects_duplicate_and_invalid_names_test() {
       [],
       [],
       [],
+      [],
     )
   campy_form.validate(duplicate) |> should.be_error
   let invalid =
@@ -86,6 +87,7 @@ pub fn rejects_duplicate_and_invalid_names_test() {
           True,
         ),
       ],
+      [],
       [],
       [],
       [],
@@ -245,6 +247,7 @@ pub fn preview_emits_window_controls_and_callbacks_test() {
       [],
       [],
       [],
+      [],
     )
   let assert Ok(source) = preview.to_slint(form)
   string.contains(source, "export component CampyPreview inherits Window")
@@ -309,6 +312,7 @@ pub fn render_order_puts_containers_before_children_test() {
       [],
       [],
       [],
+      [],
     )
   campy_form.render_controls(form)
   |> list.map(fn(control) { control.id })
@@ -353,6 +357,7 @@ pub fn set_parent_refuses_cycles_and_missing_parents_test() {
       [],
       [],
       [],
+      [],
     )
   let next = campy_form.set_parent(form, "panel-1", "panel-2")
   campy_form.parent_of(next, "panel-1") |> should.equal("")
@@ -388,6 +393,7 @@ pub fn aligned_controls_follow_the_window_test() {
       [#("button-1", campy_form.Bottom)],
       [],
       [],
+      [],
     )
   let assert Ok(source) = preview.to_slint(form)
   string.contains(source, "x: 0px; y: 270px; width: 400px; height: 30px")
@@ -400,7 +406,7 @@ pub fn project_roundtrip_preserves_modules_test() {
   let assert Ok(saved) = project.save(original, path)
   saved.path |> should.equal(path)
   let assert Ok(loaded) = project.load(path)
-  loaded.version |> should.equal(8)
+  loaded.version |> should.equal(9)
   loaded.icon |> should.equal("assets/camping-tent.png")
   loaded.title |> should.equal("Campy")
   loaded.modules
@@ -509,6 +515,7 @@ pub fn container_layout_arranges_children_test() {
       [],
       [#("panel-1", campy_form.Column)],
       [#("panel-1", 8)],
+      [],
     )
   let #(ax, ay, aw, ah) =
     campy_form.bounds(
@@ -622,6 +629,7 @@ pub fn border_insets_aligned_children_test() {
       [#("client", campy_form.Client), #("bottom", campy_form.Bottom)],
       [],
       [#("panel-1", 10)],
+      [],
     )
   let #(cx, cy, cw, ch) =
     campy_form.bounds(
@@ -729,6 +737,7 @@ pub fn fill_uses_space_between_siblings_test() {
       ],
       [],
       [#("panel-1", 10)],
+      [],
     )
   let #(x, y, w, h) =
     campy_form.bounds(
@@ -754,4 +763,180 @@ pub fn form_border_pads_column_layout_test() {
   let form = campy_form.Form(..bordered, layout: campy_form.Column)
   let assert Ok(source) = preview.to_slint(form)
   string.contains(source, "padding: 12px") |> should.be_true
+}
+
+// Z-order: siblings render in controls-list order, so bring-to-front moves a
+// control after its overlapping siblings and send-to-back before them.
+pub fn bring_to_front_reorders_siblings_test() {
+  let form = overlapping_form()
+  let ordered =
+    campy_form.render_controls(form)
+    |> list.map(fn(control) { control.id })
+  ordered |> should.equal(["panel-1", "under", "over"])
+
+  let front =
+    campy_form.render_controls(campy_form.bring_to_front(form, ["under"]))
+    |> list.map(fn(control) { control.id })
+  front |> should.equal(["panel-1", "over", "under"])
+
+  // Send-to-back moves "over" below its sibling "under"; it still renders
+  // after its parent panel (children draw within their container).
+  let back =
+    campy_form.render_controls(campy_form.send_to_back(form, ["over"]))
+    |> list.map(fn(control) { control.id })
+  back |> should.equal(["panel-1", "over", "under"])
+}
+
+// A moved container keeps its subtree: children still render after their parent.
+pub fn reordering_keeps_children_with_parents_test() {
+  let form = overlapping_form()
+  let back = campy_form.send_to_back(form, ["panel-1"])
+  let ordered =
+    campy_form.render_controls(back)
+    |> list.map(fn(control) { control.id })
+  ordered
+  |> should.equal(["panel-1", "under", "over"])
+}
+
+// Transparency: 0 is opaque (and dropped from the map), values clamp to 0..100.
+pub fn transparency_accessors_test() {
+  let form = overlapping_form()
+  campy_form.transparency_of(form, "under") |> should.equal(0)
+
+  let set =
+    form
+    |> campy_form.set_transparency_for("under", 60)
+    |> campy_form.set_transparency_for("under", 200)
+  campy_form.transparency_of(set, "under") |> should.equal(100)
+
+  let cleared = campy_form.set_transparency_for(set, "under", 0)
+  campy_form.transparency_of(cleared, "under") |> should.equal(0)
+  cleared.transparencies |> should.equal([])
+}
+
+// The run window fades pictures by their transparency.
+pub fn preview_emits_picture_opacity_test() {
+  let form = campy_form.set_transparency_for(picture_form(), "pic-1", 60)
+  let assert Ok(source) = preview.to_slint(form)
+  string.contains(source, "opacity: 0.4;") |> should.be_true
+
+  let assert Ok(plain) = preview.to_slint(picture_form())
+  string.contains(plain, "opacity:") |> should.be_false
+}
+
+fn picture_form() -> campy_form.Form {
+  campy_form.Form(
+    "campy.form",
+    "Picture",
+    400,
+    300,
+    campy_form.Free,
+    [
+      campy_form.Control(
+        "pic-1",
+        "pic1",
+        campy_form.Picture,
+        20,
+        20,
+        200,
+        150,
+        "assets/cat.png",
+        True,
+        True,
+      ),
+    ],
+    [],
+    [],
+    [],
+    [],
+    [],
+  )
+}
+
+fn overlapping_form() -> campy_form.Form {
+  campy_form.Form(
+    "campy.form",
+    "Overlapping",
+    400,
+    300,
+    campy_form.Free,
+    [
+      campy_form.Control(
+        "panel-1",
+        "panel1",
+        campy_form.Panel,
+        10,
+        10,
+        380,
+        280,
+        "P",
+        True,
+        True,
+      ),
+      campy_form.Control(
+        "under",
+        "under",
+        campy_form.Button,
+        40,
+        40,
+        120,
+        32,
+        "Under",
+        True,
+        True,
+      ),
+      campy_form.Control(
+        "over",
+        "over",
+        campy_form.Button,
+        60,
+        40,
+        120,
+        32,
+        "Over",
+        True,
+        True,
+      ),
+    ],
+    [#("under", "panel-1"), #("over", "panel-1")],
+    [],
+    [],
+    [],
+    [],
+  )
+}
+
+// Transparency survives a save/load roundtrip through the v9 codec.
+pub fn transparency_roundtrip_test() {
+  let path = "/tmp/campy-form-transparency-test.campy"
+  let assert [first, ..] = project.campy().modules
+  let updated =
+    project.Module(
+      ..first,
+      form: campy_form.set_transparency_for(first.form, "picture-1", 45),
+    )
+  let assert Ok(_saved) =
+    project.save(project.update_module(project.campy(), updated), path)
+  let assert Ok(loaded) = project.load(path)
+  let assert [first, ..] = loaded.modules
+  campy_form.transparency_of(first.form, "picture-1") |> should.equal(45)
+}
+
+@external(erlang, "campy_form_upgrade_ffi", "write_v8_project")
+fn write_v8_project(path: String) -> Nil
+
+// A v8 project (11-element form tuples, no transparency map) upgrades on load,
+// and the upgraded forms render through the current emitter. This is the exact
+// call that crashed while a stale pre-upgrade form reached preview.to_slint.
+pub fn v8_project_upgrades_and_renders_test() {
+  let path = "/tmp/campy-v8-upgrade-test.campy"
+  write_v8_project(path)
+  let assert Ok(loaded) = project.load(path)
+  loaded.version |> should.equal(9)
+  let assert [module] = loaded.modules
+  let assert Ok(source) = preview.to_slint(module.form)
+  string.contains(source, "@image-url") |> should.be_true
+  campy_form.transparency_of(module.form, "pic-1") |> should.equal(0)
+  let set = campy_form.set_transparency_for(module.form, "pic-1", 40)
+  campy_form.transparency_of(set, "pic-1") |> should.equal(40)
 }

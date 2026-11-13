@@ -12,6 +12,9 @@ doctor:
 build-rust:
     ./scripts/cargo.sh build --manifest-path rust/Cargo.toml --locked
 
+build-rust-release:
+    ./scripts/cargo.sh build --manifest-path rust/Cargo.toml --locked --release
+
 stage-nif: build-rust
     python scripts/workspace.py stage-nif
 
@@ -20,6 +23,11 @@ build-gleam:
 
 # Build both subroots and install the development NIF into the bridge package.
 build: stage-nif build-gleam
+
+# Package the IDE as a portable archive for distribution (runs with only OTP).
+# Leaves a release NIF staged; `just build` restores the development build.
+package: build-rust-release
+    python scripts/workspace.py export
 
 # Remove Rust/Gleam build artifacts and the staged development NIF.
 clean:
@@ -52,6 +60,7 @@ fmt:
 
 fmt-check:
     ./scripts/cargo.sh fmt --manifest-path rust/Cargo.toml --all -- --check
+    ./scripts/cargo.sh clippy --manifest-path rust/Cargo.toml --locked --all-targets
     python scripts/workspace.py gleam format --check
 
 check: fmt-check test
@@ -70,3 +79,11 @@ smoke-native backend="auto": build-gleam
     ./scripts/cargo.sh build --manifest-path rust/Cargo.toml --locked --features campy-bridge/ui-testing
     python scripts/workspace.py stage-nif
     python scripts/smoke_native.py {{backend}}
+
+# Native drag-gesture probe: verifies the designer's hybrid drag contract
+# (click selects, drag from a selection moves, drag from empty space or an
+# unselected control draws the marquee) with injected pointer input.
+probe-gestures:
+    ./scripts/cargo.sh build --manifest-path rust/Cargo.toml --locked --features campy-bridge/ui-testing
+    python scripts/workspace.py stage-nif
+    python scripts/workspace.py gesture-probe

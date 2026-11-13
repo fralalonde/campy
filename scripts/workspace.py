@@ -7,6 +7,7 @@ import hashlib
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -22,6 +23,7 @@ PACKAGES = [
 ] + [APP]
 NATIVE = ROOT / "gleam/packages/campy_bridge/priv/native"
 RELOAD = ROOT / "generated/reload.signal"
+DIST = ROOT / "generated/dist"
 
 
 def environment() -> dict[str, str]:
@@ -77,25 +79,35 @@ def command(args: list[str], cwd: Path = ROOT, expected: str | None = None) -> N
         stop_process(child)
 
 
-def stage_nif() -> None:
+def nif_names() -> tuple[str, str]:
     system = platform.system()
     names = {
         "Linux": ("libcampy_bridge.so", "campy_bridge.so"),
         "Darwin": ("libcampy_bridge.dylib", "campy_bridge.so"),
         "Windows": ("campy_bridge.dll", "campy_bridge.dll"),
     }
-    source_name, target_name = names[system]
+    return names[system]
+
+
+def stage_nif(profile: str = "debug") -> Path:
+    source_name, target_name = nif_names()
     target = Path(os.environ.get("CARGO_TARGET_DIR", str(ROOT / "rust/target")))
     if not target.is_absolute():
         target = ROOT / target
-    source = target / "debug" / source_name
+    source = target / profile / source_name
     NATIVE.mkdir(parents=True, exist_ok=True)
     destination = NATIVE / target_name
+    if not source.is_file():
+        raise SystemExit(
+            f"Missing {profile} NIF at {source.relative_to(ROOT)}; "
+            f"build Rust first (just build-rust{'-release' if profile == 'release' else ''})."
+        )
     # Never overwrite a shared library mapped into a running BEAM VM.
     temporary = destination.with_suffix(destination.suffix + ".new")
     shutil.copy2(source, temporary)
     os.replace(temporary, destination)
-    print(f"Staged {destination.relative_to(ROOT)}", flush=True)
+    print(f"Staged {destination.relative_to(ROOT)} ({profile})", flush=True)
+    return destination
 
 
 def gleam(args: list[str]) -> None:
@@ -106,6 +118,7 @@ def gleam(args: list[str]) -> None:
 
 def clean() -> None:
     gleam(["clean"])
+    shutil.rmtree(DIST, ignore_errors=True)
     for entry in NATIVE.glob("*"):
         if entry.name != ".gitkeep":
             entry.unlink()
@@ -185,6 +198,103 @@ def dev() -> None:
         return
 
 
+LAUNCHER = """#!/bin/sh
+# Portable launcher for a packaged Campy app; requires only `erl` on PATH.
+set -eu
+BASE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export CAMPY_NIF_DIR="$BASE/campy_bridge/priv/native"
+libs="$BASE/native-libs"
+if [ -d "$libs" ]; then
+    export LD_LIBRARY_PATH="$libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+exec "$BASE/entrypoint.sh" run "$@"
+"""
+
+SHIPMENT_README = """Campy Studio {version}
+A portable build; unpack anywhere and run ./campy.
+
+Requires only an Erlang/OTP 27+ installation with `erl` on PATH.
+Development hot reload (F6) and generated codegen output are unavailable
+here; unpack the source repository for the full studio workflow.
+"""
+
+
+def app_version() -> str:
+    manifest = (APP / "gleam.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', manifest, re.MULTILINE)
+    if not match:
+        raise SystemExit("Cannot find the version in gleam/apps/campy_ide/gleam.toml")
+    return match.group(1)
+
+
+def export() -> None:
+    """Package the IDE as a portable archive that runs with only Erlang/OTP."""
+    stage_nif("release")
+    shipment = APP / "build/erlang-shipment"
+    shutil.rmtree(shipment, ignore_errors=True)
+    command(["gleam", "export", "erlang-shipment"], cwd=APP)
+    nif = shipment / "campy_bridge/priv/native" / nif_names()[1]
+    if not nif.is_file():
+        raise SystemExit("The shipment is missing the staged campy_bridge NIF.")
+    launcher = shipment / "campy"
+    launcher.write_text(LAUNCHER, encoding="utf-8")
+    os.chmod(launcher, 0o755)
+    (shipment / "README.txt").write_text(
+        SHIPMENT_README.format(version=app_version()), encoding="utf-8"
+    )
+    # Ship the app's image assets; image paths resolve relative to the
+    # launcher's working directory, which is the shipment root.
+    assets = APP / "assets"
+    if assets.is_dir():
+        shutil.copytree(assets, shipment / "assets", dirs_exist_ok=True)
+    # Bundle the curated native libraries the windowing stack may need
+    # (for example libxkbcommon-x11), so target machines need not have them.
+    local_libs = ROOT / "generated/native-deps/usr/lib64"
+    if local_libs.is_dir():
+        bundled = shipment / "native-libs"
+        bundled.mkdir(exist_ok=True)
+        for lib in sorted(local_libs.iterdir()):
+            shutil.copy2(lib, bundled / lib.name)
+    check_shipment(shipment)
+    write_archive(shipment)
+
+
+def check_shipment(shipment: Path) -> None:
+    # Development-only variables (CAMPY_ROOT, reload signals) stay unset to
+    # reproduce the launcher environment; the NIF directory points inside.
+    env = {
+        key: value for key, value in environment().items()
+        if not key.startswith("CAMPY_")
+    }
+    env["CAMPY_NIF_DIR"] = str(shipment / "campy_bridge/priv/native")
+    probe = ('io:format("campy nif ~s loaded~n", '
+             '[integer_to_list(campy_bridge_ffi:protocol_version())]), halt().')
+    ebins = sorted(str(path) for path in sorted(shipment.glob("*/ebin")))
+    result = subprocess.run(
+        ["erl", "-noshell", "-eval", probe,
+         *[path for ebin in ebins for path in ("-pa", ebin)]],
+        env=env, capture_output=True, text=True,
+    )
+    if result.returncode or "campy nif" not in result.stdout:
+        raise SystemExit(
+            "Shipment NIF probe failed:\n"
+            f"{result.stdout}{result.stderr}"
+        )
+    print(result.stdout.strip(), flush=True)
+
+
+def write_archive(shipment: Path) -> None:
+    name = f"campy-studio-{app_version()}-{platform.system().lower()}-{platform.machine().lower()}"
+    staged = shipment.parent / name
+    shutil.rmtree(staged, ignore_errors=True)
+    shutil.copytree(shipment, staged)
+    DIST.mkdir(parents=True, exist_ok=True)
+    archive = shutil.make_archive(str(DIST / name), "gztar", root_dir=staged.parent, base_dir=name)
+    shutil.rmtree(staged, ignore_errors=True)
+    size = Path(archive).stat().st_size / (1 << 20)
+    print(f"Packaged {Path(archive).relative_to(ROOT)} ({size:.1f} MiB)", flush=True)
+
+
 def main() -> None:
     action, *args = sys.argv[1:]
     if action == "doctor":
@@ -197,6 +307,8 @@ def main() -> None:
                  'io:format("OTP ~s~n", [erlang:system_info(otp_release)]), halt().'])
     elif action == "stage-nif":
         stage_nif()
+    elif action == "export":
+        export()
     elif action == "gleam":
         gleam(args)
     elif action == "clean":
@@ -205,6 +317,8 @@ def main() -> None:
         command(["gleam", "run"], cwd=APP, expected="Campy window closed:")
     elif action == "smoke":
         command(["gleam", "run", "-m", "campy_bootstrap"], cwd=APP, expected="Campy bootstrap:")
+    elif action == "gesture-probe":
+        command(["gleam", "run", "-m", "campy_gesture_probe"], cwd=APP)
     elif action == "generate":
         command(["gleam", "run", "-m", "campy_codegen"], cwd=APP,
                 expected="Generated and validated")

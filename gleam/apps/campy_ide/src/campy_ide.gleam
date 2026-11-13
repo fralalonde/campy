@@ -140,6 +140,11 @@ pub fn loop(
   last: ide_ui.Snapshot,
   heartbeat: Int,
 ) -> Nil {
+  // F6 re-enters here (via the external campy_hot_ffi:continue call) with a
+  // model that may still have been built by the previous code. Migrate before
+  // anything reads it, so a project-format change reloads the workspace from
+  // disk instead of touching stale records.
+  let model = state.ensure_current_format(model, open_workspace)
   case mcp.next_request() {
     Some(#(handle, tool, arg)) -> {
       let #(next, text, is_error) = mcp_handle(model, tool, arg)
@@ -336,9 +341,12 @@ fn reload_native(
       IdeContinue(next, accepted, ide_ui.empty_snapshot())
     }
     Ok(count) -> {
+      // Cross the module boundary on purpose: after the beams swap, the
+      // previous campy_ide may still be executing here, and state's freshly
+      // loaded ensure_current_format migrates a stale pre-upgrade model before
+      // any new code reads its records.
       let next =
-        model
-        |> ensure_current_format
+        state.ensure_current_format(model, open_workspace)
         |> state.set_status(
           "Reloaded " <> int.to_string(count) <> " Campy modules; refreshing UI",
         )
@@ -364,15 +372,6 @@ fn reload_native(
         }
       }
     }
-  }
-}
-
-fn ensure_current_format(model: State) -> State {
-  case model.project.version < project.version {
-    False -> model
-    True ->
-      state.initial_workspace(open_workspace())
-      |> state.set_status("Project format upgraded; workspace reloaded")
   }
 }
 
@@ -635,6 +634,26 @@ fn sync(
       )
     True -> Nil
   }
+  case next.props == last.props {
+    False ->
+      submit_model(
+        native,
+        generation,
+        "prop-items",
+        ide_ui.props_wire(next.props),
+      )
+    True -> Nil
+  }
+  case next.events == last.events {
+    False ->
+      submit_model(
+        native,
+        generation,
+        "event-items",
+        ide_ui.props_wire(next.events),
+      )
+    True -> Nil
+  }
   next
 }
 
@@ -725,7 +744,7 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "set-layout-row" -> state.set_layout(model, campy_form.Row)
     "select" -> state.select(model, payload)
     "toggle-select" -> state.toggle_select(model, payload)
-    "drag-start" -> state.begin_drag(model)
+    "drag-start" -> state.begin_drag(model, payload)
     "drag-over-x" -> state.set_drop_x(model, delta(payload))
     "drag-over-y" -> state.update_drop(model, delta(payload))
     "window-move-x" -> state.move_window(model, delta(payload), 0)
@@ -752,6 +771,22 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "field-width" -> state.commit_field(model, "width", payload)
     "field-height" -> state.commit_field(model, "height", payload)
     "field-border" -> state.commit_field(model, "border", payload)
+    "field-transparency" -> state.commit_field(model, "transparency", payload)
+    "order-front" -> state.bring_to_front(model)
+    "order-back" -> state.send_to_back(model)
+    "prop-edit" ->
+      case string.split_once(payload, ";") {
+        Ok(#(key, value)) -> state.apply_prop(model, key, value)
+        Error(_) -> model
+      }
+    "prop-open" ->
+      case payload {
+        "picture" -> pick_picture(model)
+        _ -> state.open_event(model, payload)
+      }
+    "open-align" -> state.toggle_context_align(model)
+    "align-selection" ->
+      state.close_context_menu(state.align_selection(model, payload))
     "tab-properties" -> state.set_tab(model, Properties)
     "tab-events" -> state.set_tab(model, Events)
     "edit-event" -> state.open_event(model, payload)

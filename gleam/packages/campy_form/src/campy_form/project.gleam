@@ -22,7 +22,7 @@ pub type Project {
   )
 }
 
-pub const version = 8
+pub const version = 9
 
 pub const camping_icon = "assets/camping-tent.png"
 
@@ -154,6 +154,7 @@ fn cat_cafe_form() -> Form {
       #("pet-button", "panel-1"),
       #("feed-button", "panel-1"),
     ],
+    [],
     [],
     [],
     [],
@@ -327,6 +328,7 @@ fn widgets_form() -> Form {
     [#("header", campy_form.Top), #("footer", campy_form.Bottom)],
     [],
     [],
+    [],
   )
 }
 
@@ -399,6 +401,7 @@ fn welcome_form() -> Form {
     [],
     [],
     [],
+    [],
   )
 }
 
@@ -451,6 +454,7 @@ fn search_form() -> Form {
         True,
       ),
     ],
+    [],
     [],
     [],
     [],

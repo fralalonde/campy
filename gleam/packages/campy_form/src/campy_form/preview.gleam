@@ -2,6 +2,7 @@ import campy_form.{
   type Control, type Form, Button, CheckBox, ComboBox, EditBox, GroupBox, Label,
   ListBox, Memo, Menu, Panel, Picture, Progress, RadioButton, Slider,
 }
+import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
@@ -40,8 +41,10 @@ fn content(form: Form) -> String {
   let border = campy_form.border_of(form, "")
   case form.layout {
     campy_form.Free ->
+      // Render order matches the designer canvas (containers before children,
+      // siblings in z-order), so reordering is reflected in the run window.
       string.join(
-        list.map(form.controls, fn(control) {
+        list.map(campy_form.render_controls(form), fn(control) {
           control_element(form, control, True)
         }),
         "",
@@ -128,12 +131,12 @@ fn control_element(form: Form, control: Control, free: Bool) -> String {
       <> " visible: "
       <> bool(control.visible)
       <> ";\n"
-      <> outer_inner(control)
+      <> outer_inner(form, control)
       <> "    }\n"
   }
 }
 
-fn outer_inner(control: Control) -> String {
+fn outer_inner(form: Form, control: Control) -> String {
   case control.kind {
     Label ->
       "      Text { x: 0; y: 0; width: parent.width; height: parent.height; text: "
@@ -167,7 +170,9 @@ fn outer_inner(control: Control) -> String {
         path ->
           "      Image { x: 0; y: 0; width: parent.width; height: parent.height; source: @image-url("
           <> quote(path)
-          <> "); image-fit: contain; }\n"
+          <> "); image-fit: contain;"
+          <> opacity_suffix(form, control.id)
+          <> " }\n"
       }
     Memo ->
       "      TextEdit { x: 0; y: 0; width: parent.width; height: parent.height; text: "
@@ -247,6 +252,18 @@ fn value_of(control: Control) -> Int {
   case int.parse(control.text) {
     Ok(value) -> int.max(0, int.min(100, value))
     Error(_) -> 50
+  }
+}
+
+// Picture transparency: 0 keeps the image fully opaque, 100 makes it invisible.
+fn opacity_suffix(form: campy_form.Form, id: String) -> String {
+  let transparency = campy_form.transparency_of(form, id)
+  case transparency {
+    0 -> ""
+    _ ->
+      " opacity: "
+      <> float.to_string(1.0 -. int.to_float(transparency) /. 100.0)
+      <> ";"
   }
 }
 

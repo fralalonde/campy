@@ -45,6 +45,7 @@ pub type Clipboard {
     aligns: List(#(String, campy_form.Align)),
     layouts: List(#(String, campy_form.Layout)),
     borders: List(#(String, Int)),
+    transparencies: List(#(String, Int)),
   )
 }
 
@@ -103,6 +104,7 @@ pub type State {
     context_open: Bool,
     context_x: Int,
     context_y: Int,
+    context_align: Bool,
     agent_open: Bool,
     mcp_enabled: Bool,
     mcp_port: Int,
@@ -112,6 +114,8 @@ pub type State {
     drop_active: Bool,
     drop_candidate: String,
     drop_x: Int,
+    drop_y: Int,
+    drag_control: Option(String),
     rect: #(Int, Int, Int, Int),
     console: List(String),
     window_positions: List(#(String, #(Int, Int))),
@@ -121,6 +125,26 @@ pub type State {
 
 pub fn initial(project: Project) -> State {
   initial_workspace(workspace.new(project))
+}
+
+// A hot reload (F6) swaps in new beams while the running process still holds
+// state built by the previous code. When the project format version moved on,
+// the in-memory document is stale — its records may not even have the fields
+// the new code reads — so reload the workspace from disk instead. This lives
+// in `state` (not `campy_ide`) on purpose: the previous `campy_ide` module may
+// still be the one executing after the beams swap, and calling through this
+// module boundary runs the *current* migration logic with the *current*
+// `project.version` constant.
+pub fn ensure_current_format(
+  state: State,
+  load_workspace: fn() -> Workspace,
+) -> State {
+  case state.project.version < project.version {
+    False -> state
+    True ->
+      initial_workspace(load_workspace())
+      |> set_status("Project format upgraded; workspace reloaded")
+  }
 }
 
 pub fn initial_workspace(workspace: Workspace) -> State {
@@ -165,6 +189,7 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     context_open: False,
     context_x: 0,
     context_y: 0,
+    context_align: False,
     agent_open: False,
     mcp_enabled: False,
     mcp_port: 7817,
@@ -174,6 +199,8 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     drop_active: False,
     drop_candidate: "",
     drop_x: 0,
+    drop_y: 0,
+    drag_control: None,
     rect: #(0, 0, 0, 0),
     console: [],
     window_positions: [],
@@ -706,10 +733,23 @@ fn commit_control_field(
           }
         None -> state
       }
-    "x" -> update_axis(state, form, id, field, value, 0, 4095)
-    "y" -> update_axis(state, form, id, field, value, 0, 4095)
-    "w" -> update_axis(state, form, id, field, value, 1, 4095)
-    "h" -> update_axis(state, form, id, field, value, 1, 4095)
+    "transparency" ->
+      case campy_form.find_control(form, id) {
+        Some(control) ->
+          case control.kind {
+            campy_form.Picture -> commit_transparency(state, id, value)
+            _ -> status(state, "Transparency applies to pictures")
+          }
+        None -> state
+      }
+    "x" ->
+      update_axis(state, form, id, field, value, 0, campy_form.max_coordinate)
+    "y" ->
+      update_axis(state, form, id, field, value, 0, campy_form.max_coordinate)
+    "w" ->
+      update_axis(state, form, id, field, value, 1, campy_form.max_coordinate)
+    "h" ->
+      update_axis(state, form, id, field, value, 1, campy_form.max_coordinate)
     _ -> state
   }
 }
@@ -782,6 +822,62 @@ fn commit_border(state: State, parent_id: String, value: String) -> State {
   }
 }
 
+fn commit_transparency(state: State, id: String, value: String) -> State {
+  case int.parse(value) {
+    Error(_) -> status(state, "Transparency must be a whole number")
+    Ok(number) ->
+      case number >= 0 && number <= 100 {
+        True -> {
+          let next =
+            update_active_form(state, fn(form) {
+              campy_form.set_transparency_for(form, id, number)
+            })
+          status(next, "Transparency set to " <> int.to_string(number) <> "%")
+        }
+        False -> status(state, "Transparency must be between 0 and 100")
+      }
+  }
+}
+
+// Z-order for overlapping siblings follows the controls list: render_controls
+// draws later entries above earlier ones. Moving reorders within the whole
+// form; a control's subtree keeps rendering relative to its own parent.
+pub fn bring_to_front(state: State) -> State {
+  reorder_selection(state, True)
+}
+
+pub fn send_to_back(state: State) -> State {
+  reorder_selection(state, False)
+}
+
+fn reorder_selection(state: State, front: Bool) -> State {
+  case active_form(state) {
+    None -> state
+    Some(form) -> {
+      let roots = selection_roots(state, form)
+      case roots {
+        [] -> status(state, "Select a component to reorder")
+        _ -> {
+          let next =
+            update_active_form(state, fn(current) {
+              case front {
+                True -> campy_form.bring_to_front(current, roots)
+                False -> campy_form.send_to_back(current, roots)
+              }
+            })
+          commit(
+            state,
+            status(next, case front {
+              True -> "Brought to front"
+              False -> "Moved to back"
+            }),
+          )
+        }
+      }
+    }
+  }
+}
+
 fn commit_form_field(
   state: State,
   form: Form,
@@ -805,7 +901,7 @@ fn update_form_size(
   is_width: Bool,
 ) -> State {
   case int.parse(value) {
-    Ok(number) if number > 0 && number <= 4096 ->
+    Ok(number) if number > 0 && number <= campy_form.max_form_size ->
       update_active_form(state, fn(_) {
         case is_width {
           True -> campy_form.Form(..form, width: number)
@@ -837,34 +933,27 @@ pub fn begin_gesture(state: State) -> State {
 }
 
 pub fn end_gesture(state: State) -> State {
-  State(..state, merge_undo: False, drop_active: False, drop_candidate: "")
+  State(
+    ..state,
+    merge_undo: False,
+    drop_active: False,
+    drop_candidate: "",
+    drag_control: None,
+  )
 }
 
+// Move the selection (including each root's subtree) by a delta, clamped to
+// the canvas.
 fn move_selected_raw(state: State, dx: Int, dy: Int) -> State {
   case state.selection, active_form(state) {
-    [_], Some(form) -> {
-      let ids = selection_subtree_ids(state, form)
+    [_, ..], Some(form) -> {
       let next =
-        list.fold(ids, form, fn(acc, control_id) {
-          campy_form.update_selected(acc, control_id, fn(control) {
+        list.fold(selection_subtree_ids(state, form), form, fn(acc, id) {
+          campy_form.update_selected(acc, id, fn(control) {
             campy_form.Control(
               ..control,
-              x: int.max(0, int.min(4095, control.x + dx)),
-              y: int.max(0, int.min(4095, control.y + dy)),
-            )
-          })
-        })
-      update_active_form(state, fn(_) { next })
-    }
-    [_, _, ..], Some(form) -> {
-      let ids = selection_subtree_ids(state, form)
-      let next =
-        list.fold(ids, form, fn(acc, control_id) {
-          campy_form.update_selected(acc, control_id, fn(control) {
-            campy_form.Control(
-              ..control,
-              x: int.max(0, int.min(4095, control.x + dx)),
-              y: int.max(0, int.min(4095, control.y + dy)),
+              x: int.clamp(control.x + dx, 0, campy_form.max_coordinate),
+              y: int.clamp(control.y + dy, 0, campy_form.max_coordinate),
             )
           })
         })
@@ -904,9 +993,7 @@ fn reparent_after_drop(state: State) -> State {
           case campy_form.find_control(current, id) {
             None -> #(current, labels)
             Some(control) -> {
-              let #(x, y, width, height) = campy_form.bounds(current, control)
-              let target =
-                drop_target_at(current, control, x + width / 2, y + height / 2)
+              let target = drop_target_for(state, current, control)
               let next = campy_form.set_parent(current, id, target)
               let label = case target == "" {
                 True -> "Moved to the window"
@@ -929,44 +1016,25 @@ fn reparent_after_drop(state: State) -> State {
   }
 }
 
-fn drop_target_at(form: Form, control: Control, cx: Int, cy: Int) -> String {
-  let blocked = campy_form.subtree_ids(form, control.id)
-  let candidates =
-    list.filter(form.controls, fn(candidate) {
-      !list.contains(blocked, candidate.id)
-      && candidate.visible
-      && campy_form.accepts_children(candidate.kind)
-      && cx >= candidate.x
-      && cx <= candidate.x + candidate.width
-      && cy >= candidate.y
-      && cy <= candidate.y + candidate.height
-    })
-  case smallest_control(candidates, None) {
-    Some(candidate) -> candidate.id
-    None -> ""
+// A pointer drag reparents by where the cursor is released; moves without a
+// gesture (programmatic moves, tests) fall back to the control's centre.
+fn drop_target_for(state: State, form: Form, control: Control) -> String {
+  case state.drag_control {
+    Some(_) -> drop_target_at(form, control, state.drop_x, state.drop_y)
+    None -> {
+      let #(x, y, width, height) = campy_form.bounds(form, control)
+      drop_target_at(form, control, x + width / 2, y + height / 2)
+    }
   }
 }
 
-fn smallest_control(
-  candidates: List(Control),
-  best: Option(Control),
-) -> Option(Control) {
-  case candidates {
-    [] -> best
-    [candidate, ..rest] -> {
-      let next = case best {
-        None -> Some(candidate)
-        Some(current) ->
-          case
-            candidate.width * candidate.height < current.width * current.height
-          {
-            True -> Some(candidate)
-            False -> Some(current)
-          }
-      }
-      smallest_control(rest, next)
-    }
-  }
+fn drop_target_at(form: Form, control: Control, cx: Int, cy: Int) -> String {
+  campy_form.container_at_excluding(
+    form,
+    cx,
+    cy,
+    campy_form.subtree_ids(form, control.id),
+  )
 }
 
 fn resize_selected_raw(state: State, dw: Int, dh: Int) -> State {
@@ -975,8 +1043,8 @@ fn resize_selected_raw(state: State, dw: Int, dh: Int) -> State {
       change_control(state, form, id, fn(control) {
         campy_form.Control(
           ..control,
-          width: int.max(8, int.min(4095, control.width + dw)),
-          height: int.max(8, int.min(4095, control.height + dh)),
+          width: int.clamp(control.width + dw, 8, campy_form.max_coordinate),
+          height: int.clamp(control.height + dh, 8, campy_form.max_coordinate),
         )
       })
     _, _ -> state
@@ -1004,8 +1072,7 @@ fn resize_left_raw(state: State, dx: Int) -> State {
   case state.selected, active_form(state) {
     Some(id), Some(form) ->
       change_control(state, form, id, fn(control) {
-        let new_x =
-          int.max(0, int.min(control.x + dx, control.x + control.width - 8))
+        let new_x = int.clamp(control.x + dx, 0, control.x + control.width - 8)
         campy_form.Control(
           ..control,
           x: new_x,
@@ -1022,7 +1089,7 @@ fn resize_right_raw(state: State, dx: Int) -> State {
       change_control(state, form, id, fn(control) {
         campy_form.Control(
           ..control,
-          width: int.max(8, int.min(4095, control.width + dx)),
+          width: int.clamp(control.width + dx, 8, campy_form.max_coordinate),
         )
       })
     _, _ -> state
@@ -1033,8 +1100,7 @@ fn resize_top_raw(state: State, dy: Int) -> State {
   case state.selected, active_form(state) {
     Some(id), Some(form) ->
       change_control(state, form, id, fn(control) {
-        let new_y =
-          int.max(0, int.min(control.y + dy, control.y + control.height - 8))
+        let new_y = int.clamp(control.y + dy, 0, control.y + control.height - 8)
         campy_form.Control(
           ..control,
           y: new_y,
@@ -1051,7 +1117,7 @@ fn resize_bottom_raw(state: State, dy: Int) -> State {
       change_control(state, form, id, fn(control) {
         campy_form.Control(
           ..control,
-          height: int.max(8, int.min(4095, control.height + dy)),
+          height: int.clamp(control.height + dy, 8, campy_form.max_coordinate),
         )
       })
     _, _ -> state
@@ -1154,6 +1220,190 @@ pub fn align_from_name(name: String) -> campy_form.Align {
   }
 }
 
+// Align the multi-selection: edges to the shared extreme, centres to the
+// average ("center" puts the components in one column, "middle" in one row).
+// Every root moves together with its subtree, as one undo step.
+pub fn align_selection(state: State, kind: String) -> State {
+  case active_form(state) {
+    None -> state
+    Some(form) -> {
+      let roots = selection_roots(state, form)
+      case list.length(roots) < 2 {
+        True -> status(state, "Select at least two components to align")
+        False -> {
+          let rects =
+            list.filter_map(roots, fn(id) {
+              case campy_form.find_control(form, id) {
+                Some(control) -> Ok(campy_form.bounds(form, control))
+                None -> Error(Nil)
+              }
+            })
+          case rects {
+            [] -> state
+            _ -> {
+              let count = list.length(rects)
+              let min_x = fold_rect(rects, campy_form.max_coordinate, 0)
+              let max_right = fold_rect(rects, 0, 2)
+              let min_y = fold_rect(rects, campy_form.max_coordinate, 1)
+              let max_bottom = fold_rect(rects, 0, 3)
+              let avg_cx =
+                list.fold(rects, 0, fn(acc, rect) { acc + rect.0 + rect.2 / 2 })
+                / count
+              let avg_cy =
+                list.fold(rects, 0, fn(acc, rect) { acc + rect.1 + rect.3 / 2 })
+                / count
+              let next =
+                update_active_form(state, fn(_) {
+                  align_form(
+                    form,
+                    list.zip(roots, rects),
+                    kind,
+                    min_x,
+                    max_right,
+                    min_y,
+                    max_bottom,
+                    avg_cx,
+                    avg_cy,
+                  )
+                })
+              commit(
+                state,
+                status(
+                  next,
+                  "Aligned " <> int.to_string(count) <> " components",
+                ),
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// Fold the rects' field `index` (0=x 1=y 2=w 3=h) with the given extreme.
+fn fold_rect(
+  rects: List(#(Int, Int, Int, Int)),
+  start: Int,
+  index: Int,
+) -> Int {
+  list.fold(rects, start, fn(acc, rect) {
+    let value = case index {
+      0 -> rect.0
+      1 -> rect.1
+      2 -> rect.2
+      _ -> rect.3
+    }
+    case index == 0 || index == 1 {
+      True -> int.min(acc, value)
+      False -> int.max(acc, value)
+    }
+  })
+}
+
+fn align_form(
+  form: Form,
+  pairs: List(#(String, #(Int, Int, Int, Int))),
+  kind: String,
+  min_x: Int,
+  max_right: Int,
+  min_y: Int,
+  max_bottom: Int,
+  avg_cx: Int,
+  avg_cy: Int,
+) -> Form {
+  list.fold(pairs, form, fn(acc, pair) {
+    let #(id, rect) = pair
+    let #(x, y, w, h) = rect
+    let #(tx, ty) = case kind {
+      "left" -> #(min_x, y)
+      "right" -> #(max_right - w, y)
+      "center" -> #(avg_cx - w / 2, y)
+      "top" -> #(x, min_y)
+      "bottom" -> #(x, max_bottom - h)
+      "middle" -> #(x, avg_cy - h / 2)
+      _ -> #(x, y)
+    }
+    let dx = tx - x
+    let dy = ty - y
+    case dx == 0 && dy == 0 {
+      True -> acc
+      False ->
+        list.fold(campy_form.subtree_ids(acc, id), acc, fn(inner, sid) {
+          campy_form.update_selected(inner, sid, fn(control) {
+            campy_form.Control(
+              ..control,
+              x: int.clamp(control.x + dx, 0, campy_form.max_coordinate),
+              y: int.clamp(control.y + dy, 0, campy_form.max_coordinate),
+            )
+          })
+        })
+    }
+  })
+}
+
+// The inspector grid commits one property for the whole selection (or the
+// module window when nothing is selected) as a single undo step.
+pub fn apply_prop(state: State, key: String, value: String) -> State {
+  case state.selected, active_form(state) {
+    Some(_), Some(_) -> {
+      let next =
+        list.fold(state.selection, state, fn(acc, id) {
+          case active_form(acc) {
+            Some(current) -> apply_control_prop(acc, current, id, key, value)
+            None -> acc
+          }
+        })
+      commit(state, next)
+    }
+    None, Some(form) ->
+      commit(state, commit_form_field(state, form, key, value))
+    _, _ -> status(state, "Open a module first")
+  }
+}
+
+fn apply_control_prop(
+  state: State,
+  form: Form,
+  id: String,
+  key: String,
+  value: String,
+) -> State {
+  case key {
+    "name" ->
+      case list.length(state.selection) == 1 {
+        True -> commit_control_field(state, form, id, "name", value)
+        False -> status(state, "Name applies to a single component")
+      }
+    "enabled" | "visible" -> {
+      let on = value == "true"
+      change_control(state, form, id, fn(control) {
+        case key {
+          "enabled" -> campy_form.Control(..control, enabled: on)
+          _ -> campy_form.Control(..control, visible: on)
+        }
+      })
+    }
+    "align" ->
+      update_active_form(state, fn(_) {
+        campy_form.set_align(form, id, align_from_name(value))
+      })
+    "layout" ->
+      case campy_form.find_control(form, id) {
+        Some(control) ->
+          case campy_form.accepts_children(control.kind) {
+            True ->
+              update_active_form(state, fn(_) {
+                campy_form.set_layout_for(form, id, layout_from_name(value))
+              })
+            False -> state
+          }
+        None -> state
+      }
+    _ -> commit_control_field(state, form, id, key, value)
+  }
+}
+
 pub fn copy_selected(state: State) -> State {
   case active_form(state) {
     None -> status(state, "Select a component to copy")
@@ -1187,6 +1437,10 @@ pub fn copy_selected(state: State) -> State {
             list.filter(form.layouts, fn(entry) { list.contains(ids, entry.0) })
           let borders =
             list.filter(form.borders, fn(entry) { list.contains(ids, entry.0) })
+          let transparencies =
+            list.filter(form.transparencies, fn(entry) {
+              list.contains(ids, entry.0)
+            })
           State(
             ..state,
             clipboard: Some(Clipboard(
@@ -1195,6 +1449,7 @@ pub fn copy_selected(state: State) -> State {
               aligns,
               layouts,
               borders,
+              transparencies,
             )),
             status: case list.length(state.selection) {
               1 -> "Component copied"
@@ -1224,7 +1479,9 @@ pub fn cut_selected(state: State) -> State {
 
 pub fn paste(state: State) -> State {
   case state.clipboard, active_form(state) {
-    Some(Clipboard(controls, parents, aligns, layouts, borders)), Some(form) -> {
+    Some(Clipboard(controls, parents, aligns, layouts, borders, transparencies)),
+      Some(form)
+    -> {
       let #(form, pasted) =
         campy_form.paste_controls(
           form,
@@ -1233,6 +1490,7 @@ pub fn paste(state: State) -> State {
           aligns,
           layouts,
           borders,
+          transparencies,
           adoption_target(state),
         )
       let next = update_active_form(state, fn(_) { form })
@@ -1285,11 +1543,22 @@ pub fn open_context_menu(state: State, id: String) -> State {
       }
     _, None -> #(8, 8)
   }
-  State(..picked, context_open: True, context_x: x, context_y: y)
+  State(
+    ..picked,
+    context_open: True,
+    context_x: x,
+    context_y: y,
+    context_align: False,
+  )
 }
 
 pub fn close_context_menu(state: State) -> State {
-  State(..state, context_open: False)
+  State(..state, context_open: False, context_align: False)
+}
+
+// The Align submenu of the canvas context menu toggles next to the menu.
+pub fn toggle_context_align(state: State) -> State {
+  State(..state, context_align: !state.context_align)
 }
 
 pub fn set_project_dialog_open(state: State, open: Bool) -> State {
@@ -1381,8 +1650,8 @@ fn resize_form_raw(state: State, dw: Int, dh: Int) -> State {
       update_active_form(state, fn(_) {
         campy_form.Form(
           ..form,
-          width: int.max(240, int.min(4096, form.width + dw)),
-          height: int.max(160, int.min(4096, form.height + dh)),
+          width: int.clamp(form.width + dw, 240, campy_form.max_form_size),
+          height: int.clamp(form.height + dh, 160, campy_form.max_form_size),
         )
       })
   }
@@ -1679,8 +1948,8 @@ pub fn place_component(state: State) -> State {
         True -> -dh
         False -> dh
       }
-      let width = int.max(8, int.min(4095, abs_w))
-      let height = int.max(8, int.min(4095, abs_h))
+      let width = int.clamp(abs_w, 8, campy_form.max_coordinate)
+      let height = int.clamp(abs_h, 8, campy_form.max_coordinate)
       let parent = campy_form.container_at(form, start_x, start_y)
       let #(form, control) =
         campy_form.add_control_rect(
@@ -1711,25 +1980,46 @@ pub fn place_component(state: State) -> State {
   }
 }
 
-pub fn begin_drag(state: State) -> State {
-  State(..state, drop_active: True, drop_candidate: "", drop_x: 0)
+// Pressing a control arms the drop tracking and remembers which control is
+// under the pointer; the selection itself is only committed on release.
+pub fn begin_drag(state: State, id: String) -> State {
+  State(
+    ..state,
+    drop_active: False,
+    drop_candidate: "",
+    drop_x: 0,
+    drop_y: 0,
+    drag_control: Some(id),
+  )
 }
 
 pub fn set_drop_x(state: State, value: Int) -> State {
   State(..state, drop_x: value)
 }
 
+// The drag-over position is the cursor, so the drop target follows the pointer
+// rather than the dragged control's centre.
 pub fn update_drop(state: State, y: Int) -> State {
-  case selected_control(state), active_form(state) {
+  let tracked = State(..state, drop_y: y)
+  case dragging_control(tracked), active_form(tracked) {
     Some(control), Some(form) -> {
-      let target = drop_target_at(form, control, state.drop_x, y)
+      let target = drop_target_at(form, control, tracked.drop_x, y)
       let changed = target != campy_form.parent_of(form, control.id)
-      State(..state, drop_active: changed, drop_candidate: case changed {
+      State(..tracked, drop_active: changed, drop_candidate: case changed {
         True -> target
         False -> ""
       })
     }
-    _, _ -> state
+    _, _ -> tracked
+  }
+}
+
+// The control pressed at the start of a pointer drag; falls back to the
+// inspector selection for moves that happen without a pointer gesture.
+fn dragging_control(state: State) -> Option(Control) {
+  case state.drag_control, active_form(state) {
+    Some(id), Some(form) -> campy_form.find_control(form, id)
+    _, _ -> selected_control(state)
   }
 }
 
