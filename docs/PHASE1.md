@@ -311,23 +311,32 @@ pub type Report {
 ```
 
 3. `campy_app/start(config) -> Result(Ref, String)` where
-   `config = Config(app: String, version: Int, digest: String, handlers_module: String, snapshot: campy_form Snapshot-type from live_preview, report: fn(Report) -> Nil)`.
-   Behavior:
-   - Starts a `gleam_otp` supervisor with restart intensity 3 restarts / 10 s
-     (make these fields on Config with those defaults). One child: the app
-     actor.
+   `config = Config(app: String, version: Int, digest: String, handlers_module: String, form: campy_form.Form, report: fn(Report) -> Nil, restart_limit: Int, restart_window_ms: Int)`.
+   The form — not a pre-derived snapshot — is the config's payload: handler
+   names derive from `Control.name` via `campy_form.handler_name`, and the
+   live-preview snapshot's `PreviewControl` projection does not carry names,
+   so dispatch must resolve `(control_id, event_key)` through
+   `campy_form.find_control(form, id)`. The actor derives
+   `live_preview.snapshot(config.form)` itself, so dispatch and rendering
+   always come from one canonical form. `restart_limit`/`restart_window_ms`
+   documented defaults: 3 and 10_000 (Gleam has no default arguments; provide
+   a defaults helper or set them at call sites). Behavior:
+   - Starts a `gleam_otp` supervisor with the configured restart intensity.
+     One child: the app actor.
    - The app actor: `bridge.open_session()`, submit `LoadUi(1,
-     live_preview.to_slint())`, apply the snapshot (adapt the command sequence
+     live_preview.to_slint())`, derive and apply
+      `live_preview.snapshot(config.form)` (adapt the command sequence
      from `campy_ide/live_preview_ui.gleam` — copy into
      `campy_app/preview_apply.gleam`; campy_form must stay bridge-free), then
      receive.
-   - Events: the actor **never polls**. `campy_app/deliver(ref, event)` puts a
+   - Events: the actor **never polls**. `campy_app/deliver(ref, event)` (a `campy_bridge.NativeEvent`) puts a
      message in the actor mailbox. The single poll owner (IDE loop now; runner
      process in P1.3) forwards events whose session id belongs to the app.
      Unknown sessions must be ignored by the caller, not the actor.
-4. Event dispatch: map `(control_id, event_key)` → handler name via
-   `campy_form.handler_name`, call it in the `handlers_module` through a new
-   FFI `src/campy_app_ffi.erl`:
+4. Event dispatch: resolve the control with
+   `campy_form.find_control(config.form, control_id)` and map to the handler
+   name via `campy_form.handler_name(control, event_key)`, then call it in the
+   `handlers_module` through a new FFI `src/campy_app_ffi.erl`:
 
 ```erlang
 apply_handler(Mod, Fun) ->
@@ -344,16 +353,20 @@ apply_handler(Mod, Fun) ->
    check first. Handler errors produce `HandlerError(handler, reason)` with
    reason truncated to its first line, 180 chars (mirror `short_error` in
    campy_ide.gleam). **Handler errors never restart the actor.**
-5. Snapshot updates: `campy_app/apply_snapshot(ref, snapshot)` → actor
-   re-applies via preview_apply, bumps an internal generation, reports
+5. Snapshot updates: `campy_app/apply_snapshot(ref, form)` returns `Nil`
+   (fire-and-forget); the actor derives `live_preview.snapshot(form)`,
+   re-applies via preview_apply, bumps an internal generation, and reports
    `Applied`. Old snapshot stays live on failure (report the error string in
    `Console`, do not crash).
 6. Crash path: if the actor crashes (e.g. bridge rejects), the supervisor
-   restarts it (fresh session, snapshot re-applied) and `Restarted` is
-   reported; after intensity is exceeded the supervisor stops and `GaveUp` is
-   reported. Actor state is rebuilt from `config` — P1 apps hold no state
-   beyond the snapshot (document this limitation in the module doc comment).
-7. `campy_app/stop(ref)` → clean stop, `Stopped` report, session closed.
+   restarts it (fresh session, form re-applied) and `Restarted` is reported;
+   after intensity is exceeded the supervisor stops and `GaveUp` is reported.
+   `Restarted`/`GaveUp` come from a watcher process monitoring the
+   supervisor's exit reasons, and `GaveUp` is suppressed during an explicit
+   stop. Actor state is rebuilt from `config` — P1 apps hold no state beyond
+   the form/snapshot (document this limitation in the module doc comment).
+7. `campy_app/stop(ref)` → returns `Nil`, clean stop, `Stopped` report,
+   session closed.
 
 **Files.** `gleam/packages/campy_app/**` only.
 
@@ -393,8 +406,8 @@ source tree. No builds, no IO beyond writing the tree.
    - `out_dir/gleam.toml`: name `campy_app_<module_slug>`, target erlang,
      same gleam range, deps by path `../../../packages/campy_app`,
      `campy_bridge`, `campy_form`, `campy_runtime`; gleeunit dev-dep.
-   - `out_dir/src/campy_app_<module_slug>.gleam`: a `main` that builds the
-     snapshot from the embedded form (see below) and calls `campy_app.start`
+   - `out_dir/src/campy_app_<module_slug>.gleam`: a `main` that passes the
+      embedded form (see below) to `campy_app.start`
      with `report` = print each report as one console line (format below), then
      loops forever forwarding `campy_bridge.poll` events to
      `campy_app.deliver` — the standalone app owns the single poll loop.
@@ -404,8 +417,8 @@ source tree. No builds, no IO beyond writing the tree.
      function `pub fn form() -> campy_form.Form` reconstructing the module's
      form (mirror how `campy_form/project.gleam`'s demo constructors build
      forms — e.g. `project.campy()` / the Cat Café constructor — using
-     campy_form's public constructors). The snapshot is derived via
-     `campy_form/live_preview.snapshot(form)` in the generated main.
+     campy_form's public constructors). The generated main passes the form to
+      `campy_app.start`; `campy_app` derives the snapshot itself.
    - Handler dispatch table: emit `handlers_module` constant string and rely
      on ABI v1 dynamic dispatch (no per-handler generated call sites).
 4. Console report line format (exact):
@@ -584,10 +597,10 @@ pub fn stop(ref: Ref) -> Nil
    via FFI; load each `modules` entry with the soft-purge discipline copied
    from `campy_hot_ffi.erl` (`code:soft_purge` then `code:load_file`;
    on `not_purged`, retry once via `code:purge` — the app actor is suspended
-   across the swap, see 4); then `campy_app.start` with the snapshot built
-   from the manifest's provenance (reload the project + module form — the
-   artifact deliberately does not embed the form in P1; snapshot derives from
-   the same project the IDE has open, which is identical by construction).
+   across the swap, see 4); then `campy_app.start` with the module's form
+   reloaded from the manifest's provenance (the artifact deliberately does not
+   embed the form in P1; it reloads from the same project the IDE has open,
+   which is identical by construction).
 4. `update_code(new artifact)`: pause (suspend the app actor's processing —
    simplest correct P1 mechanism: the runner stops delivering events and
    awaits an ack of quiescence from the actor mailbox being empty via a
