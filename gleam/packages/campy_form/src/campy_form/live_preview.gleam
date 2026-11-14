@@ -1,6 +1,8 @@
+import campy_ccl
 import campy_form.{type Form, type Layout, Free}
 import gleam/int
 import gleam/list
+import gleam/string
 
 // Live preview shell for the app under development. Unlike the static emitter
 // used for the generated-Slint tab, this window is loaded once and then driven
@@ -20,6 +22,13 @@ pub type PreviewControl {
     picture: String,
     value: Int,
     transparency: Int,
+    checked: Bool,
+    placeholder: String,
+    read_only: Bool,
+    minimum: Float,
+    maximum: Float,
+    current_index: Int,
+    items: List(String),
   )
 }
 
@@ -67,6 +76,13 @@ pub fn snapshot(form: Form) -> Snapshot {
         },
         control_value(control),
         campy_form.transparency_of(form, control.id),
+        prop(control, "checked") == "true",
+        prop(control, "placeholder-text"),
+        prop(control, "read-only") == "true",
+        int.to_float(prop_int(control, "minimum", 0)),
+        int.to_float(prop_int(control, "maximum", 100)),
+        prop_int(control, "current-index", 0),
+        combo_items(control),
       )
     }),
   )
@@ -74,7 +90,7 @@ pub fn snapshot(form: Form) -> Snapshot {
 
 pub fn to_slint() -> String {
   "import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, ScrollView, Slider, TextEdit } from \"std-widgets.slint\";\n"
-  <> "struct PreviewControl { id: string, kind: string, text: string, x: length, y: length, w: length, h: length, enabled: bool, visible: bool, picture: image, value: float, transparency: float }\n"
+  <> "struct PreviewControl { id: string, kind: string, text: string, x: length, y: length, w: length, h: length, enabled: bool, visible: bool, picture: image, value: float, transparency: float, checked: bool, placeholder: string, read-only: bool, minimum: float, maximum: float, current-index: int, items: [string] }\n"
   <> component()
   <> "export component CampyPreview inherits Window {\n"
   <> "  title: root.app-title;\n"
@@ -174,4 +190,27 @@ fn control_value(control: campy_form.Control) -> Int {
     Ok(value) -> int.max(0, int.min(100, value))
     Error(_) -> 50
   }
+}
+
+fn prop(control: campy_form.Control, key: String) -> String {
+  campy_form.control_prop(
+    control,
+    key,
+    campy_ccl.prop_default(campy_form.kind_key(control.kind), key),
+  )
+}
+
+fn prop_int(control: campy_form.Control, key: String, default: Int) -> Int {
+  case int.parse(prop(control, key)) {
+    Ok(value) -> value
+    Error(_) -> default
+  }
+}
+
+// The combo's items are its text, comma separated, like the designer's editor.
+fn combo_items(control: campy_form.Control) -> List(String) {
+  control.text
+  |> string.split(",")
+  |> list.map(string.trim)
+  |> list.filter(fn(item) { item != "" })
 }

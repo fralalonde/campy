@@ -1,5 +1,7 @@
 //! In-process BEAM boundary. Commands enqueue; live UI values stay on the UI thread.
 
+mod lsp;
+
 use rustler::{Encoder, Env, LocalPid, Monitor, OwnedEnv, Resource, ResourceArc};
 use std::sync::Arc;
 
@@ -65,6 +67,7 @@ enum Command {
     SetBool(u64, String, bool),
     SetInt(u64, String, i64),
     SetModel(u64, String, Vec<WireValue>),
+    SetCode(u64, String),
     SetColor(u64, String, String),
     ReadText(u64, String),
     Resize(u64, u32, u32),
@@ -87,6 +90,7 @@ impl From<Command> for campy_renderer::sessions::Command {
                     .map(WireValue::into_prop)
                     .collect::<Vec<_>>(),
             ),
+            Command::SetCode(g, t) => Native::SetCode(g, t),
             Command::SetColor(g, p, v) => Native::SetColor(g, p, v),
             Command::ReadText(g, p) => Native::ReadText(g, p),
             Command::Resize(g, w, h) => Native::Resize(g, w, h),
@@ -207,4 +211,5 @@ fn test_input(
     Ok(nil())
 }
 
+// NIFs register themselves via inventory (including the lsp module's).
 rustler::init!("campy_bridge_ffi");

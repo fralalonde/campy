@@ -1,15 +1,33 @@
 import campy_bridge as bridge
+import campy_ccl
 import campy_form.{type Control, type Form, type Kind}
 import campy_form/project.{type Module, type Project}
 import campy_form/workspace.{type Workspace}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 
 pub type Tab {
   Properties
   Events
+}
+
+// One row of the code editor's completion popup.
+pub type Completion {
+  Completion(label: String, detail: String, insert: String)
+}
+
+// The in-app file browser: used for every file operation (open, save as,
+// picture and icon picking) so the filesystem is browsable even where no
+// native dialog exists. `mode` is the Popup kind that accepts the result.
+pub type Browser {
+  Browser(mode: Popup, dir: String, name: String, entries: List(BrowserEntry))
+}
+
+pub type BrowserEntry {
+  BrowserEntry(name: String, is_dir: Bool)
 }
 
 // Which editor the centre pane shows for the active module.
@@ -46,6 +64,7 @@ pub type Clipboard {
     layouts: List(#(String, campy_form.Layout)),
     borders: List(#(String, Int)),
     transparencies: List(#(String, Int)),
+    colors: List(#(String, String)),
   )
 }
 
@@ -119,6 +138,19 @@ pub type State {
     rect: #(Int, Int, Int, Int),
     console: List(String),
     window_positions: List(#(String, #(Int, Int))),
+    caret: #(Int, Int),
+    completions: List(Completion),
+    completion_index: Int,
+    completions_requested: Bool,
+    diagnostics: List(#(Int, Int, String)),
+    lsp_uri: String,
+    code_version: Int,
+    browser: Option(Browser),
+    code_jump: Option(Int),
+    code_jump_nonce: Int,
+    nav_context_open: Bool,
+    nav_kind: String,
+    nav_id: String,
     status: String,
   )
 }
@@ -204,6 +236,19 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     rect: #(0, 0, 0, 0),
     console: [],
     window_positions: [],
+    caret: #(0, 0),
+    completions: [],
+    completion_index: 0,
+    completions_requested: False,
+    diagnostics: [],
+    lsp_uri: "",
+    code_version: 1,
+    browser: None,
+    code_jump: None,
+    code_jump_nonce: 0,
+    nav_context_open: False,
+    nav_kind: "",
+    nav_id: "",
     status: "Ready",
   )
 }
@@ -312,6 +357,8 @@ fn with_project(state: State, workspace: Workspace, project: Project) -> State {
     clipboard: state.clipboard,
     preview: state.preview,
     selected_project: True,
+    caret: state.caret,
+    diagnostics: state.diagnostics,
     status: "Project · " <> project.title,
   )
 }
@@ -416,11 +463,16 @@ fn update_active_form(state: State, change: fn(Form) -> Form) -> State {
 pub fn open_module(state: State, id: String) -> State {
   case project.find_module(state.project, id) {
     None -> status(state, "Unknown module")
-    Some(module) ->
+    Some(module) -> {
+      // Opening appends the tab; an already-open tab never moves.
+      let opened = case list.contains(state.opened, id) {
+        True -> state.opened
+        False -> list.append(state.opened, [id])
+      }
       State(
         ..state,
         active: id,
-        opened: list.unique([id, ..state.opened]),
+        opened: opened,
         view: FormView,
         selected: None,
         selection: [],
@@ -429,12 +481,16 @@ pub fn open_module(state: State, id: String) -> State {
         highlight: None,
         editing: None,
         editor: View,
+        completions: [],
+        completion_index: 0,
         status: "Opened " <> module.name,
       )
+    }
   }
 }
 
-// Switching tab keeps the current Form/Code view; only the module changes.
+// Switching tab keeps the current Form/Code view and the tab order; only the
+// module changes.
 pub fn activate_module(state: State, id: String) -> State {
   case project.find_module(state.project, id) {
     None -> state
@@ -442,7 +498,6 @@ pub fn activate_module(state: State, id: String) -> State {
       State(
         ..state,
         active: id,
-        opened: list.unique([id, ..state.opened]),
         selected: None,
         selection: [],
         selected_project: False,
@@ -450,6 +505,8 @@ pub fn activate_module(state: State, id: String) -> State {
         highlight: None,
         editing: None,
         editor: View,
+        completions: [],
+        completion_index: 0,
         status: "Switched to " <> module.name,
       )
   }
@@ -460,28 +517,67 @@ pub fn close_module(state: State, id: String) -> State {
     [] -> status(state, "Cannot close the last tab")
     remaining ->
       case state.active == id {
-        False -> State(..state, opened: remaining, status: "Closed tab")
-        True -> {
-          let next = case remaining {
-            [first, ..] -> first
-            [] -> ""
-          }
-          State(
-            ..state,
-            opened: remaining,
-            active: next,
-            view: FormView,
-            selected: None,
-            selection: [],
-            active_handler: None,
-            highlight: None,
-            editing: None,
-            editor: View,
-            status: "Closed tab",
-          )
-        }
+        // Closing the active tab removes the module from the workspace
+        // index; committed so undo restores it.
+        False ->
+          commit(state, State(..state, opened: remaining, status: "Closed tab"))
+        True -> remove_module(state, id, remaining, "Closed tab")
       }
   }
+}
+
+// Delete a module from the project (context menu), regardless of whether it
+// is the active tab. Committed so undo restores the module.
+pub fn delete_module(state: State, id: String) -> State {
+  case list.filter(state.opened, fn(open) { open != id }) {
+    [] -> status(state, "Cannot delete the last module")
+    remaining ->
+      case list.find(state.project.modules, fn(module) { module.id == id }) {
+        Error(_) -> state
+        Ok(module) ->
+          remove_module(
+            state,
+            id,
+            remaining,
+            "Deleted " <> module.name <> " (undo restores it)",
+          )
+      }
+  }
+}
+
+fn remove_module(
+  state: State,
+  id: String,
+  remaining: List(String),
+  note: String,
+) -> State {
+  let next = case remaining {
+    [first, ..] -> first
+    [] -> ""
+  }
+  let kept = list.filter(state.project.modules, fn(module) { module.id != id })
+  let project = project.Project(..state.project, modules: kept)
+  let was_active = state.active == id
+  commit(
+    state,
+    State(
+      ..state,
+      project: project,
+      opened: remaining,
+      active: case was_active {
+        True -> next
+        False -> state.active
+      },
+      view: FormView,
+      selected: None,
+      selection: [],
+      active_handler: None,
+      highlight: None,
+      editing: None,
+      editor: View,
+      status: note,
+    ),
+  )
 }
 
 pub fn new_module(state: State) -> State {
@@ -1375,6 +1471,10 @@ fn apply_control_prop(
         True -> commit_control_field(state, form, id, "name", value)
         False -> status(state, "Name applies to a single component")
       }
+    "color" ->
+      update_active_form(state, fn(_) {
+        campy_form.set_color_for(form, id, value)
+      })
     "enabled" | "visible" -> {
       let on = value == "true"
       change_control(state, form, id, fn(control) {
@@ -1400,7 +1500,25 @@ fn apply_control_prop(
           }
         None -> state
       }
-    _ -> commit_control_field(state, form, id, key, value)
+    _ ->
+      // Schema properties (placeholder-text, read-only, checked, minimum,
+      // maximum, current-index) live on the control itself.
+      case campy_form.find_control(form, id) {
+        Some(control) ->
+          case
+            list.any(
+              campy_ccl.properties(campy_form.kind_key(control.kind)),
+              fn(property: campy_ccl.Property) { property.key == key },
+            )
+          {
+            True ->
+              update_active_form(state, fn(_) {
+                campy_form.set_control_prop(form, id, key, value)
+              })
+            False -> commit_control_field(state, form, id, key, value)
+          }
+        None -> state
+      }
   }
 }
 
@@ -1441,6 +1559,8 @@ pub fn copy_selected(state: State) -> State {
             list.filter(form.transparencies, fn(entry) {
               list.contains(ids, entry.0)
             })
+          let colors =
+            list.filter(form.colors, fn(entry) { list.contains(ids, entry.0) })
           State(
             ..state,
             clipboard: Some(Clipboard(
@@ -1450,6 +1570,7 @@ pub fn copy_selected(state: State) -> State {
               layouts,
               borders,
               transparencies,
+              colors,
             )),
             status: case list.length(state.selection) {
               1 -> "Component copied"
@@ -1479,7 +1600,15 @@ pub fn cut_selected(state: State) -> State {
 
 pub fn paste(state: State) -> State {
   case state.clipboard, active_form(state) {
-    Some(Clipboard(controls, parents, aligns, layouts, borders, transparencies)),
+    Some(Clipboard(
+      controls,
+      parents,
+      aligns,
+      layouts,
+      borders,
+      transparencies,
+      colors,
+    )),
       Some(form)
     -> {
       let #(form, pasted) =
@@ -1491,6 +1620,7 @@ pub fn paste(state: State) -> State {
           layouts,
           borders,
           transparencies,
+          colors,
           adoption_target(state),
         )
       let next = update_active_form(state, fn(_) { form })
@@ -1526,22 +1656,23 @@ pub fn set_settings_open(state: State, open: Bool) -> State {
   State(..state, settings_open: open)
 }
 
-pub fn open_context_menu(state: State, id: String) -> State {
+pub fn open_context_menu(state: State, payload: String) -> State {
+  // The payload carries the click position in canvas coordinates:
+  // "id;px;py" (right-click on a control or the canvas background).
+  let #(id, x, y) = case string.split(payload, ";") {
+    [id, x_text, y_text, ..] -> #(id, int_or(x_text, 8), int_or(y_text, 8))
+    _ -> #(payload, 8, 8)
+  }
+  // Right-clicking a control that is already in the selection keeps the whole
+  // selection (so multi-selection commands like Align stay available);
+  // right-clicking elsewhere selects that control, or clears on the canvas.
   let picked = case id {
     "" -> select(state, "")
-    _ -> select(state, id)
-  }
-  let #(x, y) = case id, active_form(state) {
-    "", _ -> #(8, 8)
-    _, Some(form) ->
-      case campy_form.find_control(form, id) {
-        Some(control) -> {
-          let #(cx, cy, _, _) = campy_form.bounds(form, control)
-          #(cx + 8, cy + 8)
-        }
-        None -> #(8, 8)
+    _ ->
+      case list.contains(state.selection, id) {
+        True -> state
+        False -> select(state, id)
       }
-    _, None -> #(8, 8)
   }
   State(
     ..picked,
@@ -1679,91 +1810,613 @@ pub fn scheme_from_name(name: String) -> Scheme {
 }
 
 // Open the event handler in the code pane, creating a stub when required.
-pub fn open_event(state: State, _key: String) -> State {
+// `event_key` is the CCL event (clicked, edited, toggled, ...); the handler
+// name follows the Delphi convention <name>_<event>.
+pub fn open_event(state: State, event_key: String) -> State {
   case selected_control(state) {
     None -> status(state, "Select a control first")
     Some(control) ->
-      case campy_form.handler_name(control) {
-        None -> status(state, "This control has no events")
-        Some(handler) ->
-          case active_module(state) {
-            None -> status(state, "Open a module first")
-            Some(module) -> {
-              let #(source, start) =
-                campy_form.ensure_handler(module.source, handler)
-              case campy_form.handler_range(source, start) {
-                None -> status(state, "Cannot locate the handler")
-                Some(range) -> {
-                  let module = project.Module(..module, source: source)
-                  commit(
-                    state,
-                    State(
-                      ..state,
-                      project: project.update_module(state.project, module),
-                      view: CodeView,
-                      active_handler: Some(handler),
-                      highlight: Some(range),
-                      editing: Some(Editing(
-                        campy_form.handler_text(source, range),
-                        range,
-                      )),
-                      editor: Edit,
-                      status: "Editing " <> handler,
-                    ),
-                  )
-                }
-              }
-            }
-          }
+      case active_module(state) {
+        None -> status(state, "Open a module first")
+        Some(module) -> {
+          let handler = campy_form.handler_name(control, event_key)
+          // The handler's stub is ensured, but the editor always edits
+          // the module's whole source (ready for LSP and search).
+          let #(source, _) = campy_form.ensure_handler(module.source, handler)
+          let module = project.Module(..module, source: source)
+          commit(
+            state,
+            State(
+              ..state,
+              project: project.update_module(state.project, module),
+              view: CodeView,
+              active_handler: Some(handler),
+              highlight: None,
+              editing: None,
+              editor: Edit,
+              status: "Editing " <> handler,
+            ),
+          )
+        }
       }
   }
 }
 
 pub fn enter_edit(state: State) -> State {
-  case state.active_handler, state.highlight {
-    Some(_), Some(range) ->
-      case active_module(state) {
-        Some(module) ->
-          State(
-            ..state,
-            view: CodeView,
-            editing: Some(Editing(
-              campy_form.handler_text(module.source, range),
-              range,
-            )),
-            editor: Edit,
-          )
-        None -> state
-      }
-    _, _ -> status(state, "Select an event in the Inspector first")
-  }
+  state
 }
 
 pub fn leave_edit(state: State) -> State {
-  State(..state, editor: View, editing: None)
+  state
 }
 
-pub fn apply_code(state: State, text: String) -> State {
-  case state.editing, active_module(state) {
-    Some(Editing(_, range)), Some(module) -> {
-      let #(source, next) =
-        campy_form.replace_handler(module.source, range, text)
-      commit(
-        state,
-        State(
-          ..state,
-          project: project.update_module(
-            state.project,
-            project.Module(..module, source: source),
-          ),
-          highlight: Some(next),
-          editing: None,
-          editor: View,
-          status: "Handler updated",
+// ---------------------------------------------------------------------------
+// Code editor: auto-committed buffer, caret, completions, diagnostics
+// ---------------------------------------------------------------------------
+
+@external(erlang, "campy_lsp_ffi", "cwd")
+fn beem_cwd() -> String
+
+fn int_or(text: String, fallback: Int) -> Int {
+  case int.parse(text) {
+    Ok(value) -> value
+    Error(_) -> fallback
+  }
+}
+
+// The editor's live buffer IS the module source: every keystroke updates it
+// directly (no undo entry, no Apply), so F7/F5 always compile and run
+// whatever is on screen.
+pub fn code_edit(state: State, payload: String) -> State {
+  case string.split_once(payload, ";") {
+    Error(_) -> state
+    Ok(#(line_text, rest)) ->
+      case string.split_once(rest, ";") {
+        Error(_) -> state
+        Ok(#(col_text, text)) -> {
+          let caret = #(int_or(line_text, 0), int_or(col_text, 0))
+          let state = case active_module(state) {
+            Some(module) ->
+              State(
+                ..state,
+                project: project.update_module(
+                  state.project,
+                  project.Module(..module, source: text),
+                ),
+              )
+            None -> state
+          }
+          let state =
+            State(
+              ..state,
+              caret: caret,
+              lsp_uri: lsp_document_uri(state),
+              code_version: state.code_version + 1,
+            )
+          // An open popup stays in register with the new text; a bare
+          // identifier never opens one (it would cover the code being typed).
+          case run_at_caret(state) {
+            "" -> completion_close(state)
+            _ ->
+              State(
+                ..state,
+                completions: filtered_completions(
+                  state.completions,
+                  segment_of_run(run_at_caret(state)),
+                ),
+              )
+          }
+        }
+      }
+  }
+}
+
+// The virtual document the language server edits: one dedicated scratch
+// module hosts the live buffer (its content is replaced via
+// didOpen/didChange, so the server always analyzes the current text).
+// Windows returns backslash paths without a drive slash, so normalize to
+// file:///C:/... form.
+pub fn lsp_document_uri(_state: State) -> String {
+  let path = string.replace(beem_cwd(), "\\", "/")
+  "file:///" <> path <> "/src/campy_handlers.gleam"
+}
+
+pub fn completion_close(state: State) -> State {
+  State(..state, completions: [], completion_index: 0)
+}
+
+// Ctrl+Space: the next server response opens the popup regardless of the
+// typed word.
+pub fn completion_requested(state: State) -> State {
+  State(..state, completions_requested: True)
+}
+
+pub fn completion_move(state: State, delta: Int) -> State {
+  let count = list.length(state.completions)
+  case count {
+    0 -> state
+    _ ->
+      State(
+        ..state,
+        completion_index: int.clamp(
+          state.completion_index + delta,
+          0,
+          count - 1,
         ),
       )
+  }
+}
+
+fn buffer_text(state: State) -> String {
+  case active_module(state) {
+    Some(module) -> module.source
+    None -> ""
+  }
+}
+
+// The identifier run before the caret on its line (dots included, so
+// qualified names like io.pr stay in one run).
+fn run_at_caret(state: State) -> String {
+  identifier_run(buffer_text(state), state.caret)
+}
+
+fn identifier_run(text: String, caret: #(Int, Int)) -> String {
+  let #(line, col) = caret
+  let line_text =
+    text
+    |> string.split("\n")
+    |> list.drop(line)
+    |> list.first
+    |> result.unwrap("")
+  line_text
+  |> string.slice(0, int.clamp(col, 0, string.length(line_text)))
+  |> string.to_graphemes
+  |> list.reverse
+  |> list.take_while(is_identifier_char)
+  |> list.reverse
+  |> string.concat
+}
+
+// The part of the run a completion replaces: after the last dot for
+// qualified names, the whole run otherwise.
+fn segment_of_run(run: String) -> String {
+  run
+  |> string.split(".")
+  |> list.last
+  |> result.unwrap("")
+}
+
+fn is_identifier_char(grapheme: String) -> Bool {
+  case grapheme {
+    "_" | "." -> True
+    _ ->
+      string.contains(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        grapheme,
+      )
+  }
+}
+
+// Accept the selected completion: replace the segment before the caret with
+// the item's insert text (auto-committed) and move the caret past it. The
+// loop pushes the spliced buffer back to the shell and the tokenizer.
+pub fn completion_accept(state: State) -> State {
+  case list.drop(state.completions, state.completion_index) {
+    [selected, ..] -> {
+      let #(line, col) = state.caret
+      let segment = segment_of_run(run_at_caret(state))
+      let new_text =
+        splice_insert(buffer_text(state), state.caret, segment, selected.insert)
+      let state = case active_module(state) {
+        Some(module) ->
+          State(
+            ..state,
+            project: project.update_module(
+              state.project,
+              project.Module(..module, source: new_text),
+            ),
+          )
+        None -> state
+      }
+      State(
+        ..state,
+        caret: #(
+          line,
+          col - string.length(segment) + string.length(selected.insert),
+        ),
+        completions: [],
+        completion_index: 0,
+      )
     }
+    [] -> completion_close(state)
+  }
+}
+
+// A clicked row carries its index.
+pub fn completion_click(state: State, payload: String) -> State {
+  completion_accept(State(..state, completion_index: int_or(payload, 0)))
+}
+
+fn splice_insert(
+  draft: String,
+  caret: #(Int, Int),
+  prefix: String,
+  insert: String,
+) -> String {
+  let #(line, col) = caret
+  let lines = string.split(draft, "\n")
+  case list.drop(lines, line) {
+    [current, ..rest] -> {
+      let before =
+        string.slice(
+          current,
+          0,
+          int.clamp(col - string.length(prefix), 0, string.length(current)),
+        )
+      let tail =
+        string.drop_start(current, int.clamp(col, 0, string.length(current)))
+      let replaced = before <> insert <> tail
+      list.append(list.take(lines, line), [replaced, ..rest])
+      |> string.join("\n")
+    }
+    [] -> draft
+  }
+}
+
+// Campy's own completion context: the application, modules, forms,
+// components and their properties.
+pub fn campy_completions(state: State) -> List(Completion) {
+  let modules =
+    state.project.modules
+    |> list.map(fn(module) { Completion(module.name, "module", module.name) })
+  let forms =
+    state.project.modules
+    |> list.map(fn(module) {
+      Completion(module.form.title, "form", module.form.title)
+    })
+  let components = case active_form(state) {
+    Some(form) ->
+      campy_form.render_controls(form)
+      |> list.map(fn(control) {
+        Completion(control.name, "component", control.name)
+      })
+    None -> []
+  }
+  let properties =
+    [
+      "text",
+      "x",
+      "y",
+      "w",
+      "h",
+      "enabled",
+      "visible",
+      "transparency",
+      "border",
+      "align",
+      "layout",
+    ]
+    |> list.map(fn(name) { Completion(name, "property", name) })
+  list.flatten([
+    [Completion("application", "Campy application", "application")],
+    modules,
+    forms,
+    components,
+    properties,
+  ])
+}
+
+// What the popup shows for the run being typed: after a dot it is the
+// server's member list; a forced request (Ctrl+Space) or an already-open
+// popup merges the Campy context items with the server's results; a bare
+// identifier with no popup shows nothing (auto-popup would cover the code).
+fn completions_for_run(
+  state: State,
+  run: String,
+  server: List(Completion),
+) -> List(Completion) {
+  case run {
+    "" -> []
+    _ ->
+      case string.contains(run, ".") {
+        True -> filtered_completions(server, segment_of_run(run))
+        False ->
+          case state.completions_requested || state.completions != [] {
+            True ->
+              list.append(campy_completions(state), server)
+              |> dedupe_completions([])
+              |> filtered_completions(segment_of_run(run))
+            False -> []
+          }
+      }
+  }
+}
+
+// Server completions arrive as `label\tdetail\tinsert\tkind` rows.
+pub fn completions_arrived(state: State, payload: String) -> State {
+  let server =
+    payload
+    |> string.split("\n")
+    |> list.filter_map(fn(row) {
+      case string.split(row, "\t") {
+        [label, detail, insert, ..] -> Ok(Completion(label, detail, insert))
+        _ -> Error(Nil)
+      }
+    })
+  let run = run_at_caret(state)
+  State(
+    ..state,
+    completions: completions_for_run(state, run, server),
+    completion_index: 0,
+    completions_requested: False,
+  )
+}
+
+fn dedupe_completions(
+  seen: List(Completion),
+  items: List(Completion),
+) -> List(Completion) {
+  case items {
+    [] -> list.reverse(seen)
+    [item, ..rest] ->
+      case list.any(seen, fn(existing) { existing.label == item.label }) {
+        True -> dedupe_completions(seen, rest)
+        False -> dedupe_completions([item, ..seen], rest)
+      }
+  }
+}
+
+fn filtered_completions(
+  items: List(Completion),
+  prefix: String,
+) -> List(Completion) {
+  case prefix {
+    // An empty segment (just typed a dot) shows the whole member list.
+    "" -> items
+    _ ->
+      list.filter(items, fn(item) {
+        string.starts_with(
+          string.lowercase(item.label),
+          string.lowercase(prefix),
+        )
+      })
+  }
+}
+
+// Diagnostics arrive as `line\tseverity\tmessage` rows.
+pub fn diagnostics_arrived(state: State, payload: String) -> State {
+  let rows =
+    payload
+    |> string.split("\n")
+    |> list.filter_map(fn(row) {
+      case string.split(row, "\t") {
+        [line_text, severity_text, message] ->
+          Ok(#(int_or(line_text, 0), int_or(severity_text, 1), message))
+        _ -> Error(Nil)
+      }
+    })
+  State(..state, diagnostics: rows)
+}
+
+// ---------------------------------------------------------------------------
+// In-app file browser (generic dialog for every file operation)
+// ---------------------------------------------------------------------------
+
+pub type FileFilter {
+  All
+  Images
+}
+
+@external(erlang, "campy_fs_ffi", "list_dir")
+fn fs_list_dir(path: String) -> Result(List(#(String, Bool)), Nil)
+
+@external(erlang, "campy_fs_ffi", "home")
+fn fs_home() -> String
+
+@external(erlang, "campy_fs_ffi", "make_dir")
+fn fs_make_dir(path: String) -> Result(Nil, String)
+
+fn sort_entries(entries: List(#(String, Bool))) -> List(BrowserEntry) {
+  let dirs =
+    entries
+    |> list.filter(fn(entry) { { entry }.1 })
+    |> list.map(fn(entry) { BrowserEntry({ entry }.0, True) })
+    |> list.sort(fn(a, b) {
+      string.compare(string.lowercase(a.name), string.lowercase(b.name))
+    })
+  let files =
+    entries
+    |> list.filter(fn(entry) { !{ entry }.1 })
+    |> list.map(fn(entry) { BrowserEntry({ entry }.0, False) })
+    |> list.sort(fn(a, b) {
+      string.compare(string.lowercase(a.name), string.lowercase(b.name))
+    })
+  list.append(dirs, files)
+}
+
+fn read_entries(dir: String) -> List(BrowserEntry) {
+  case fs_list_dir(dir) {
+    Ok(entries) -> sort_entries(entries)
+    Error(_) -> []
+  }
+}
+
+// Open the browser for one of the Popup modes. Empty/relative start
+// directories resolve against the working directory.
+pub fn browser_open(
+  state: State,
+  mode: Popup,
+  dir: String,
+  name: String,
+) -> State {
+  let dir = case dir {
+    "" -> fs_home()
+    path ->
+      case string.starts_with(path, "/") {
+        True -> path
+        False -> beem_cwd()
+      }
+  }
+  State(
+    ..state,
+    popup: mode,
+    browser: Some(Browser(mode, dir, name, read_entries(dir))),
+  )
+}
+
+pub fn browser_navigate(state: State, dir: String) -> State {
+  case state.browser {
+    Some(browser) ->
+      State(
+        ..state,
+        browser: Some(Browser(..browser, dir: dir, entries: read_entries(dir))),
+      )
+    None -> state
+  }
+}
+
+pub fn browser_up(state: State) -> State {
+  case state.browser {
+    Some(browser) -> {
+      let parts =
+        browser.dir
+        |> string.split("/")
+        |> list.filter(fn(part) { part != "" })
+      let parent = case list.take(parts, list.length(parts) - 1) {
+        [] -> "/"
+        kept -> "/" <> string.join(kept, "/")
+      }
+      browser_navigate(state, parent)
+    }
+    None -> state
+  }
+}
+
+pub fn browser_home(state: State) -> State {
+  browser_navigate(state, fs_home())
+}
+
+// Create a directory named after the current Name field, then navigate in.
+pub fn browser_new_dir(state: State) -> State {
+  case state.browser {
+    Some(browser) ->
+      case string.trim(browser.name) {
+        "" -> status(state, "Type a name for the new folder first")
+        name -> {
+          let path = join_path(browser.dir, name)
+          case fs_make_dir(path) {
+            Ok(_) ->
+              browser_navigate(state, path)
+              |> status("Created folder " <> name)
+            Error(error) -> status(state, "Cannot create folder: " <> error)
+          }
+        }
+      }
+    None -> state
+  }
+}
+
+// A clicked row: directories navigate, files become the selected name.
+pub fn browser_pick(state: State, payload: String) -> State {
+  case string.split_once(payload, ";") {
+    Ok(#(name, is_dir_text)) ->
+      case state.browser, is_dir_text == "1" {
+        Some(browser), True ->
+          browser_navigate(state, join_path(browser.dir, name))
+        Some(browser), False ->
+          State(..state, browser: Some(Browser(..browser, name: name)))
+        None, _ -> state
+      }
+    Error(_) -> state
+  }
+}
+
+// Accept: the selected (or typed) name resolves against the current
+// directory; the caller dispatches it through the popup accept path.
+pub fn browser_close(state: State) -> State {
+  State(..state, browser: None)
+}
+
+pub fn browser_path(state: State) -> String {
+  case state.browser {
+    Some(browser) -> join_path(browser.dir, browser.name)
+    None -> ""
+  }
+}
+
+fn join_path(dir: String, name: String) -> String {
+  case string.ends_with(dir, "/") {
+    True -> dir <> name
+    False -> dir <> "/" <> name
+  }
+}
+
+pub fn browser_cancel(state: State) -> State {
+  State(..state, browser: None, popup: NoPopup)
+}
+
+// ---------------------------------------------------------------------------
+// Navigator context menu (projects / modules)
+// ---------------------------------------------------------------------------
+
+// Payload: "kind;id" where kind is "project" or "module".
+pub fn nav_context_menu(state: State, payload: String) -> State {
+  case string.split_once(payload, ";") {
+    Ok(#(kind, id)) ->
+      State(..state, nav_context_open: True, nav_kind: kind, nav_id: id)
+    Error(_) -> state
+  }
+}
+
+pub fn nav_context_close(state: State) -> State {
+  State(..state, nav_context_open: False)
+}
+
+// Delete the menu's target: projects leave the workspace (the file stays on
+// disk); modules are removed from the project (undo restores them).
+pub fn nav_delete(state: State) -> State {
+  let state = State(..state, nav_context_open: False)
+  case state.nav_kind, state.nav_id {
+    "project", path ->
+      case workspace.find(state.workspace, path) {
+        None -> state
+        Some(target) ->
+          case workspace.count(state.workspace) <= 1 {
+            True -> status(state, "A workspace needs at least one project")
+            False -> {
+              let removed = workspace.remove(state.workspace, path)
+              case workspace.active_project(removed) {
+                Some(next) ->
+                  with_project(state, removed, next)
+                  |> status("Removed " <> target.title <> " from the workspace")
+                None -> state
+              }
+            }
+          }
+      }
+    "module", id -> delete_module(state, id)
     _, _ -> state
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Console error navigation
+// ---------------------------------------------------------------------------
+
+// Clicking a console row that looks like "line N: msg" jumps to the code
+// view; the shell scrolls the editor to that line.
+pub fn console_goto(state: State, line: Int) -> State {
+  State(
+    ..set_view(state, CodeView),
+    code_jump: Some(line),
+    code_jump_nonce: state.code_jump_nonce + 1,
+  )
+}
+
+pub fn take_code_jump(state: State) -> #(State, Int) {
+  case state.code_jump {
+    Some(line) -> #(State(..state, code_jump: None), line)
+    None -> #(state, -1)
   }
 }
 

@@ -59,34 +59,42 @@ load_project(Path) ->
 %% v1: single form/source. v2: modules. v3: form layout. v4: parent map for
 %% container adoption. v5: per-control alignment. v6: per-container layouts.
 %% v7: project icon. v8: parent border margins. v9: picture transparency.
-%% Older files upgrade to v9.
+%% v10: per-control colors. v11: per-control property values (CCL schema).
+%% Older files upgrade to v11.
 upgrade({project, 1, Form, Source, Path}) ->
-    {ok, {project, 9, <<"Campy">>,
+    {ok, {project, 11, <<"Campy">>,
           [{module, <<"main">>, <<"Main">>, upgrade_v1_form(Form), Source}],
           Path, icon_for(<<"Campy">>, Path)}};
+
 upgrade({project, 2, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 9, Title, [upgrade_module(Module, v2) || Module <- Modules],
+    {ok, {project, 11, Title, [upgrade_module(Module, v2) || Module <- Modules],
           Path, icon_for(Title, Path)}};
 upgrade({project, 3, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 9, Title, [upgrade_module(Module, v3) || Module <- Modules],
+    {ok, {project, 11, Title, [upgrade_module(Module, v3) || Module <- Modules],
           Path, icon_for(Title, Path)}};
 upgrade({project, 4, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 9, Title, [upgrade_module(Module, v4) || Module <- Modules],
+    {ok, {project, 11, Title, [upgrade_module(Module, v4) || Module <- Modules],
           Path, icon_for(Title, Path)}};
 upgrade({project, 5, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 9, Title, [upgrade_module(Module, v5) || Module <- Modules],
+    {ok, {project, 11, Title, [upgrade_module(Module, v5) || Module <- Modules],
           Path, icon_for(Title, Path)}};
 upgrade({project, 6, Title, Modules, Path}) when is_list(Modules) ->
-    {ok, {project, 9, Title, [upgrade_module(Module, v6) || Module <- Modules],
+    {ok, {project, 11, Title, [upgrade_module(Module, v6) || Module <- Modules],
           Path, icon_for(Title, Path)}};
 upgrade({project, 7, Title, Modules, Path, Icon}) when is_list(Modules) ->
-    {ok, {project, 9, Title, [upgrade_module(Module, v6) || Module <- Modules],
+    {ok, {project, 11, Title, [upgrade_module(Module, v6) || Module <- Modules],
           Path, Icon}};
 upgrade({project, 8, Title, Modules, Path, Icon}) when is_list(Modules) ->
-    {ok, {project, 9, Title, [upgrade_module(Module, v6) || Module <- Modules],
+    {ok, {project, 11, Title, [upgrade_module(Module, v6) || Module <- Modules],
           Path, Icon}};
 upgrade({project, 9, Title, Modules, Path, Icon}) when is_list(Modules) ->
-    {ok, {project, 9, Title, [upgrade_module(Module, v9) || Module <- Modules],
+    {ok, {project, 11, Title, [upgrade_module(Module, v9) || Module <- Modules],
+          Path, Icon}};
+upgrade({project, 10, Title, Modules, Path, Icon}) when is_list(Modules) ->
+    {ok, {project, 11, Title, [upgrade_module(Module, v10) || Module <- Modules],
+          Path, Icon}};
+upgrade({project, 11, Title, Modules, Path, Icon}) when is_list(Modules) ->
+    {ok, {project, 11, Title, [upgrade_module(Module, v11) || Module <- Modules],
           Path, Icon}};
 upgrade(_) ->
     error.
@@ -99,24 +107,41 @@ icon_for(_Title, Path) ->
     end.
 
 upgrade_module({module, Id, Name, Form, Source}, Version) ->
-    {module, Id, Name, upgrade_form(Form, Version), Source}.
+    {module, Id, Name, upgrade_form(upgrade_controls(Form), Version), Source}.
+
+%% Applies the v11 control upgrade to every control of a form tuple.
+upgrade_controls(Form) when is_tuple(Form), element(1, Form) =:= form ->
+    Controls = [upgrade_control(C) || C <- element(7, Form)],
+    setelement(7, Form, Controls);
+upgrade_controls(Form) ->
+    Form.
+
+%% v11: controls gain per-control property values (CCL schema). Applied to
+%% every version so old control tuples without props pick up an empty list.
+upgrade_control({control, Id, Name, Kind, X, Y, W, H, Text, Enabled, Visible}) ->
+    {control, Id, Name, Kind, X, Y, W, H, Text, Enabled, Visible, []};
+upgrade_control(Control) ->
+    Control.
 
 upgrade_v1_form(Form) ->
-    upgrade_form(Form, v2).
+    upgrade_form(upgrade_controls(Form), v2).
 
 upgrade_form({form, Id, Title, Width, Height, Controls}, v2) ->
-    {form, Id, Title, Width, Height, 'free', Controls, [], [], [], [], []};
+    {form, Id, Title, Width, Height, 'free', Controls, [], [], [], [], [], []};
 upgrade_form({form, Id, Title, Width, Height, Layout, Controls}, v3) ->
-    {form, Id, Title, Width, Height, Layout, Controls, [], [], [], [], []};
+    {form, Id, Title, Width, Height, Layout, Controls, [], [], [], [], [], []};
 upgrade_form({form, Id, Title, Width, Height, Layout, Controls, Parents}, v4) ->
-    {form, Id, Title, Width, Height, Layout, Controls, Parents, [], [], [], []};
+    {form, Id, Title, Width, Height, Layout, Controls, Parents, [], [], [], [], []};
 upgrade_form({form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns}, v5) ->
-    {form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, [], [], []};
+    {form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, [], [], [], []};
 upgrade_form({form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, Layouts}, v6) ->
-    {form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, Layouts, [], []};
+    {form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, Layouts, [], [], []};
 upgrade_form({form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, Layouts, Borders}, _Version) ->
-    {form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, Layouts, Borders, []};
-upgrade_form({form, _, _, _, _, _, _, _, _, _, _, _} = Form, _Version) ->
+    {form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, Layouts, Borders, [], []};
+%% v9: per-control transparencies (12-element form, no colors yet).
+upgrade_form({form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, Layouts, Borders, Transparencies}, _Version) ->
+    {form, Id, Title, Width, Height, Layout, Controls, Parents, Aligns, Layouts, Borders, Transparencies, []};
+upgrade_form({form, _, _, _, _, _, _, _, _, _, _, _, _} = Form, _Version) ->
     Form.
 
 resolve(Path) ->

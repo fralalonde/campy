@@ -11,6 +11,9 @@ spin_on.workspace = true
 
 slint.workspace = true
 png.workspace = true
+tree-sitter = "0.25"
+tree-sitter-gleam = "1.0"
+tree-sitter-language = "0.1"
 
 [features]
 ui-testing = []

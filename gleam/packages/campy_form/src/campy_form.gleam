@@ -55,6 +55,7 @@ pub type Control {
     text: String,
     enabled: Bool,
     visible: Bool,
+    props: List(#(String, String)),
   )
 }
 
@@ -71,11 +72,12 @@ pub type Form {
     layouts: List(#(String, Layout)),
     borders: List(#(String, Int)),
     transparencies: List(#(String, Int)),
+    colors: List(#(String, String)),
   )
 }
 
 pub fn new_form() -> Form {
-  Form("campy.form", "Campy Form", 640, 420, Free, [], [], [], [], [], [])
+  Form("campy.form", "Campy Form", 640, 420, Free, [], [], [], [], [], [], [])
 }
 
 // Control coordinates and sizes are capped at 4095 so every control stays
@@ -106,8 +108,9 @@ pub fn demo_form() -> Form {
         "Campy form designer",
         True,
         True,
+        [],
       ),
-      Control("edit-1", "edit1", EditBox, 24, 64, 240, 32, "", True, True),
+      Control("edit-1", "edit1", EditBox, 24, 64, 240, 32, "", True, True, []),
       Control(
         "button-1",
         "button1",
@@ -119,8 +122,10 @@ pub fn demo_form() -> Form {
         "Click me",
         True,
         True,
+        [],
       ),
     ],
+    [],
     [],
     [],
     [],
@@ -257,6 +262,26 @@ pub fn set_transparency_for(form: Form, id: String, transparency: Int) -> Form {
     _ -> list.append(rest, [#(id, value)])
   }
   Form(..form, transparencies: transparencies)
+}
+
+// Per-control colors: a "#rrggbb" hex string; "" (absent) means the theme's
+// default. Applies to text of text-bearing controls and to panel/group
+// backgrounds in the generated form.
+pub fn color_of(form: Form, id: String) -> String {
+  case list.find(form.colors, fn(entry) { entry.0 == id }) {
+    Ok(entry) -> string.lowercase(entry.1)
+    Error(_) -> ""
+  }
+}
+
+pub fn set_color_for(form: Form, id: String, hex: String) -> Form {
+  let value = string.lowercase(hex)
+  let rest = list.filter(form.colors, fn(entry) { entry.0 != id })
+  let colors = case value {
+    "" -> rest
+    _ -> list.append(rest, [#(id, value)])
+  }
+  Form(..form, colors: colors)
 }
 
 fn inner_bounds(
@@ -642,6 +667,7 @@ pub fn add_control_rect(
       default_text(kind),
       True,
       True,
+      [],
     )
   let parents = list.append(form.parents, [#(control.id, parent_id)])
   #(
@@ -675,6 +701,7 @@ pub fn add_control(
       default_text(kind),
       True,
       True,
+      [],
     )
   let parents = list.append(form.parents, [#(control.id, parent_id)])
   #(
@@ -786,6 +813,7 @@ pub fn paste_controls(
   clipboard_layouts: List(#(String, Layout)),
   clipboard_borders: List(#(String, Int)),
   clipboard_transparencies: List(#(String, Int)),
+  clipboard_colors: List(#(String, String)),
   target_id: String,
 ) -> #(Form, Option(Control)) {
   case clipboard {
@@ -862,6 +890,14 @@ pub fn paste_controls(
             Error(_) -> Error(Nil)
           }
         })
+      let new_colors =
+        list.filter_map(mapping, fn(entry) {
+          let #(old_id, control) = entry
+          case list.find(clipboard_colors, fn(c) { c.0 == old_id }) {
+            Ok(color) -> Ok(#(control.id, color.1))
+            Error(_) -> Error(Nil)
+          }
+        })
       let next =
         Form(
           ..form,
@@ -871,6 +907,7 @@ pub fn paste_controls(
           layouts: list.append(form.layouts, new_layouts),
           borders: list.append(form.borders, new_borders),
           transparencies: list.append(form.transparencies, new_transparencies),
+          colors: list.append(form.colors, new_colors),
         )
       #(next, find_new(next, pasted_root.id))
     }
@@ -902,28 +939,32 @@ fn paste_position(form: Form, target_id: String) -> #(Int, Int) {
   }
 }
 
-// The handler a control owns, following the Delphi naming convention of
-// <name>_<event>. Derived, never stored, so renames stay consistent.
-pub fn handler_name(control: Control) -> Option(String) {
-  case campy_ccl.find(kind_key(control.kind)) {
-    Some(campy_ccl.Component(event: Some(event), ..)) ->
-      Some(control.name <> "_" <> event.key)
-    _ -> None
+// The handler a control owns for one event, following the Delphi naming
+// convention of <name>_<event>. Derived, never stored, so renames stay
+// consistent.
+pub fn handler_name(control: Control, event_key: String) -> String {
+  control.name <> "_" <> event_key
+}
+
+// Per-control property values (Slint component properties beyond the base
+// set). Lookup falls back to the caller-provided default.
+pub fn control_prop(control: Control, key: String, default: String) -> String {
+  case list.find(control.props, fn(entry) { entry.0 == key }) {
+    Ok(entry) -> entry.1
+    Error(_) -> default
   }
 }
 
-pub fn event_label(kind: Kind) -> String {
-  case campy_ccl.find(kind_key(kind)) {
-    Some(campy_ccl.Component(event: Some(event), ..)) -> event.label
-    _ -> ""
-  }
-}
-
-pub fn event_key(kind: Kind) -> String {
-  case campy_ccl.find(kind_key(kind)) {
-    Some(campy_ccl.Component(event: Some(event), ..)) -> event.key
-    _ -> ""
-  }
+pub fn set_control_prop(
+  form: Form,
+  id: String,
+  key: String,
+  value: String,
+) -> Form {
+  update_selected(form, id, fn(control: Control) {
+    let rest = list.filter(control.props, fn(entry) { entry.0 != key })
+    Control(..control, props: list.append(rest, [#(key, value)]))
+  })
 }
 
 pub fn valid_name(name: String) -> Bool {

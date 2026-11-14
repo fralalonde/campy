@@ -9,6 +9,7 @@ import campy_ide/state
 import gleam/io
 import gleam/list
 import gleam/option.{Some}
+import gleam/string
 
 @external(erlang, "campy_host_ffi", "generated_path")
 fn generated_path(name: String) -> String
@@ -234,13 +235,23 @@ fn apply(
       )
     True -> Nil
   }
-  case next.code == last.code {
-    False ->
-      submit_retry(
-        session,
-        bridge.SetModel(1, "code-lines", ide_ui.code_wire(next.code)),
-      )
-    True -> Nil
+  // The code editor's buffer: pushed when the editor surface first appears
+  // or when the active module changes. The source is reconstructed from the
+  // token model, which mirrors the module source.
+  case
+    next.code_view != last.code_view || next.code_module != last.code_module
+  {
+    True -> {
+      let source =
+        next.code
+        |> list.map(fn(line) {
+          line.tokens |> list.map(fn(token) { token.text }) |> string.concat
+        })
+        |> string.join("\n")
+      submit_retry(session, bridge.SetText(1, "code-text", source))
+      submit_retry(session, bridge.SetCode(1, source))
+    }
+    False -> Nil
   }
   case next.props == last.props {
     False ->

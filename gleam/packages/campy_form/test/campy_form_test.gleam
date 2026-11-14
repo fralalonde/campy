@@ -5,7 +5,7 @@ import campy_form/syntax
 import campy_form/workspace
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{Some}
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -45,6 +45,7 @@ pub fn rejects_duplicate_and_invalid_names_test() {
           "x",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "b",
@@ -57,8 +58,10 @@ pub fn rejects_duplicate_and_invalid_names_test() {
           "y",
           True,
           True,
+          [],
         ),
       ],
+      [],
       [],
       [],
       [],
@@ -85,8 +88,10 @@ pub fn rejects_duplicate_and_invalid_names_test() {
           "x",
           True,
           True,
+          [],
         ),
       ],
+      [],
       [],
       [],
       [],
@@ -108,9 +113,10 @@ pub fn handler_names_follow_control_names_test() {
     "x",
     True,
     True,
+    [],
   )
-  |> campy_form.handler_name
-  |> should.equal(Some("save_button_clicked"))
+  |> campy_form.handler_name("clicked")
+  |> should.equal("save_button_clicked")
   campy_form.Control(
     "e",
     "email",
@@ -122,9 +128,10 @@ pub fn handler_names_follow_control_names_test() {
     "",
     True,
     True,
+    [],
   )
-  |> campy_form.handler_name
-  |> should.equal(Some("email_changed"))
+  |> campy_form.handler_name("edited")
+  |> should.equal("email_edited")
   campy_form.Control(
     "l",
     "caption",
@@ -136,9 +143,10 @@ pub fn handler_names_follow_control_names_test() {
     "x",
     True,
     True,
+    [],
   )
-  |> campy_form.handler_name
-  |> should.equal(None)
+  |> campy_form.handler_name("clicked")
+  |> should.equal("caption_clicked")
 }
 
 pub fn ensure_handler_is_idempotent_test() {
@@ -217,6 +225,7 @@ pub fn preview_emits_window_controls_and_callbacks_test() {
           "Save \"now\"",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "edit-1",
@@ -229,6 +238,7 @@ pub fn preview_emits_window_controls_and_callbacks_test() {
           "",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "label-1",
@@ -241,8 +251,10 @@ pub fn preview_emits_window_controls_and_callbacks_test() {
           "Hi",
           True,
           True,
+          [],
         ),
       ],
+      [],
       [],
       [],
       [],
@@ -253,7 +265,12 @@ pub fn preview_emits_window_controls_and_callbacks_test() {
   string.contains(source, "export component CampyPreview inherits Window")
   |> should.be_true
   string.contains(source, "callback save_clicked();") |> should.be_true
-  string.contains(source, "callback email_changed(string);") |> should.be_true
+  string.contains(source, "callback email_edited(string);")
+  |> should.be_true
+  string.contains(source, "callback email_accepted(string);")
+  |> should.be_true
+  string.contains(source, "edited(text) => { root.email_edited(text); }")
+  |> should.be_true
   string.contains(source, "clicked => { root.save_clicked(); }")
   |> should.be_true
   string.contains(source, "title: \"A \\\"title\\\" \\\\{x}\";")
@@ -294,6 +311,7 @@ pub fn render_order_puts_containers_before_children_test() {
           "B",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "panel-1",
@@ -306,9 +324,11 @@ pub fn render_order_puts_containers_before_children_test() {
           "P",
           True,
           True,
+          [],
         ),
       ],
       [#("button-1", "panel-1")],
+      [],
       [],
       [],
       [],
@@ -339,6 +359,7 @@ pub fn set_parent_refuses_cycles_and_missing_parents_test() {
           "P",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "panel-2",
@@ -351,9 +372,11 @@ pub fn set_parent_refuses_cycles_and_missing_parents_test() {
           "P2",
           True,
           True,
+          [],
         ),
       ],
       [#("panel-2", "panel-1")],
+      [],
       [],
       [],
       [],
@@ -387,10 +410,12 @@ pub fn aligned_controls_follow_the_window_test() {
           "Save",
           True,
           True,
+          [],
         ),
       ],
       [],
       [#("button-1", campy_form.Bottom)],
+      [],
       [],
       [],
       [],
@@ -406,7 +431,7 @@ pub fn project_roundtrip_preserves_modules_test() {
   let assert Ok(saved) = project.save(original, path)
   saved.path |> should.equal(path)
   let assert Ok(loaded) = project.load(path)
-  loaded.version |> should.equal(9)
+  loaded.version |> should.equal(11)
   loaded.icon |> should.equal("assets/camping-tent.png")
   loaded.title |> should.equal("Campy")
   loaded.modules
@@ -485,6 +510,7 @@ pub fn container_layout_arranges_children_test() {
           "P",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "a",
@@ -497,6 +523,7 @@ pub fn container_layout_arranges_children_test() {
           "A",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "b",
@@ -509,12 +536,14 @@ pub fn container_layout_arranges_children_test() {
           "B",
           True,
           True,
+          [],
         ),
       ],
       [#("a", "panel-1"), #("b", "panel-1")],
       [],
       [#("panel-1", campy_form.Column)],
       [#("panel-1", 8)],
+      [],
       [],
     )
   let #(ax, ay, aw, ah) =
@@ -531,6 +560,7 @@ pub fn container_layout_arranges_children_test() {
         "A",
         True,
         True,
+        [],
       ),
     )
   ax |> should.equal(28)
@@ -551,6 +581,7 @@ pub fn container_layout_arranges_children_test() {
         "B",
         True,
         True,
+        [],
       ),
     )
   bx |> should.equal(28)
@@ -572,6 +603,7 @@ pub fn container_layout_arranges_children_test() {
         "B",
         True,
         True,
+        [],
       ),
     )
   bx2 |> should.equal(84)
@@ -599,6 +631,7 @@ pub fn border_insets_aligned_children_test() {
           "P",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "client",
@@ -611,6 +644,7 @@ pub fn border_insets_aligned_children_test() {
           "C",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "bottom",
@@ -623,12 +657,14 @@ pub fn border_insets_aligned_children_test() {
           "B",
           True,
           True,
+          [],
         ),
       ],
       [#("client", "panel-1"), #("bottom", "panel-1")],
       [#("client", campy_form.Client), #("bottom", campy_form.Bottom)],
       [],
       [#("panel-1", 10)],
+      [],
       [],
     )
   let #(cx, cy, cw, ch) =
@@ -645,6 +681,7 @@ pub fn border_insets_aligned_children_test() {
         "C",
         True,
         True,
+        [],
       ),
     )
   #(cx, cy, cw, ch) |> should.equal(#(30, 30, 280, 180))
@@ -662,6 +699,7 @@ pub fn border_insets_aligned_children_test() {
         "B",
         True,
         True,
+        [],
       ),
     )
   #(bx, by, bw, bh) |> should.equal(#(30, 190, 280, 20))
@@ -687,6 +725,7 @@ pub fn fill_uses_space_between_siblings_test() {
           "P",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "header",
@@ -699,6 +738,7 @@ pub fn fill_uses_space_between_siblings_test() {
           "H",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "footer",
@@ -711,6 +751,7 @@ pub fn fill_uses_space_between_siblings_test() {
           "F",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "fill",
@@ -723,6 +764,7 @@ pub fn fill_uses_space_between_siblings_test() {
           "Fill",
           True,
           True,
+          [],
         ),
       ],
       [
@@ -737,6 +779,7 @@ pub fn fill_uses_space_between_siblings_test() {
       ],
       [],
       [#("panel-1", 10)],
+      [],
       [],
     )
   let #(x, y, w, h) =
@@ -753,6 +796,7 @@ pub fn fill_uses_space_between_siblings_test() {
         "Fill",
         True,
         True,
+        [],
       ),
     )
   #(x, y, w, h) |> should.equal(#(10, 30, 280, 140))
@@ -843,8 +887,10 @@ fn picture_form() -> campy_form.Form {
         "assets/cat.png",
         True,
         True,
+        [],
       ),
     ],
+    [],
     [],
     [],
     [],
@@ -872,6 +918,7 @@ fn overlapping_form() -> campy_form.Form {
         "P",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "under",
@@ -884,6 +931,7 @@ fn overlapping_form() -> campy_form.Form {
         "Under",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "over",
@@ -896,9 +944,11 @@ fn overlapping_form() -> campy_form.Form {
         "Over",
         True,
         True,
+        [],
       ),
     ],
     [#("under", "panel-1"), #("over", "panel-1")],
+    [],
     [],
     [],
     [],
@@ -932,7 +982,7 @@ pub fn v8_project_upgrades_and_renders_test() {
   let path = "/tmp/campy-v8-upgrade-test.campy"
   write_v8_project(path)
   let assert Ok(loaded) = project.load(path)
-  loaded.version |> should.equal(9)
+  loaded.version |> should.equal(11)
   let assert [module] = loaded.modules
   let assert Ok(source) = preview.to_slint(module.form)
   string.contains(source, "@image-url") |> should.be_true

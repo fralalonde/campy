@@ -1,7 +1,8 @@
 -module(campy_bridge_ffi).
 -on_load(init/0).
 -export([protocol_version/0, validate_ui/1, open_session/0, session_id/1,
-         submit/2, close_session/1, poll/1, active_sessions/0, test_input/3]).
+         submit/2, close_session/1, poll/1, active_sessions/0, test_input/3,
+         lsp_start/1, lsp_open/3, lsp_change/4, lsp_completions/4, lsp_stop/1]).
 
 init() ->
     case os:getenv("CAMPY_NIF_DIR") of
@@ -17,6 +18,11 @@ open_session() -> erlang:nif_error(nif_not_loaded).
 session_id(_Session) -> erlang:nif_error(nif_not_loaded).
 submit(_Session, _Command) -> erlang:nif_error(nif_not_loaded).
 close_session(_Session) -> erlang:nif_error(nif_not_loaded).
+lsp_start(_Root) -> erlang:nif_error(nif_not_loaded).
+lsp_open(_Lsp, _Uri, _Text) -> erlang:nif_error(nif_not_loaded).
+lsp_change(_Lsp, _Uri, _Version, _Text) -> erlang:nif_error(nif_not_loaded).
+lsp_completions(_Lsp, _Uri, _Line, _Character) -> erlang:nif_error(nif_not_loaded).
+lsp_stop(_Lsp) -> erlang:nif_error(nif_not_loaded).
 
 poll(Timeout) when is_integer(Timeout), Timeout >= 0, Timeout =< 1000 ->
     receive

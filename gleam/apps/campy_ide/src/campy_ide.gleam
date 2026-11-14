@@ -15,6 +15,7 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 
 @external(erlang, "campy_host_ffi", "headless_enabled")
@@ -31,6 +32,12 @@ fn native_dialog(
 
 @external(erlang, "campy_hot_ffi", "reload")
 fn hot_reload() -> Result(Int, String)
+
+@external(erlang, "campy_lsp_ffi", "put")
+fn lsp_put(lsp: bridge.Lsp) -> Nil
+
+@external(erlang, "campy_lsp_ffi", "get")
+fn lsp_get() -> Result(bridge.Lsp, Nil)
 
 // Re-enter the loop through a stable external call so a hot-loaded loop is used.
 @external(erlang, "campy_hot_ffi", "continue")
@@ -57,6 +64,12 @@ fn native_main() {
   let model = state.initial_workspace(workspace)
   let assert Ok(native) = bridge.open_session()
   let assert Ok(session) = bridge.session_id(native)
+  // The handler-code language server starts with the IDE; failures degrade
+  // gracefully (Campy's own completion items still work).
+  let _ = case bridge.lsp_start(".") {
+    Ok(lsp) -> lsp_put(lsp)
+    Error(_) -> Nil
+  }
   let #(model, submitted) = redraw(native, model, 0)
   let last = ide_ui.without_models(ide_ui.snapshot(model))
   case submitted {
@@ -168,7 +181,7 @@ pub fn loop(
         None ->
           continue(native, session, model, submitted, accepted, last, heartbeat)
         Some(bridge.NativeEvent(event_session, generation, kind, payload)) ->
-          case event_session == session {
+          case event_session == session || string.starts_with(kind, "lsp:") {
             True ->
               case
                 loop_ide_event(
@@ -436,6 +449,17 @@ fn loop_ide_event(
       io.println("Campy window closed: " <> payload)
       IdeStop
     }
+    "lsp:completions" -> {
+      let next = state.completions_arrived(model, payload)
+      let last = sync(native, accepted, next, last)
+      IdeContinue(next, accepted, last)
+    }
+    "lsp:diagnostics" -> {
+      let next = state.diagnostics_arrived(model, payload)
+      let last = sync(native, accepted, next, last)
+      IdeContinue(next, accepted, last)
+    }
+    "lsp:ready" -> IdeContinue(model, accepted, last)
     "runtime-failed" -> {
       io.println("Native runtime failed: " <> payload)
       IdeStop
@@ -474,17 +498,140 @@ fn loop_ide_event(
                 True ->
                   case name == "reload-code" {
                     True -> reload_native(native, model, accepted)
-                    False -> {
-                      let next = dispatch(model, name, payload)
-                      let _ = persist_workspace(model, next)
-                      let last = sync(native, accepted, next, last)
-                      IdeContinue(next, accepted, last)
-                    }
+                    False ->
+                      case name == "code-edit" {
+                        // Keystrokes auto-commit the buffer into the module
+                        // source, retokenize, sync the language server, and
+                        // request completions at the caret.
+                        True ->
+                          on_code_edit(native, model, accepted, last, payload)
+                        False ->
+                          case name == "completion-accept" {
+                            True ->
+                              on_completion_accept(
+                                native,
+                                dispatch(model, name, payload),
+                                accepted,
+                                last,
+                              )
+                            False ->
+                              case name == "completion-click" {
+                                True ->
+                                  on_completion_accept(
+                                    native,
+                                    state.completion_click(model, payload),
+                                    accepted,
+                                    last,
+                                  )
+                                False ->
+                                  case name == "completion-request" {
+                                    True -> {
+                                      let next = dispatch(model, name, payload)
+                                      let #(line, col) = next.caret
+                                      let _ =
+                                        request_completions(next, line, col)
+                                      IdeContinue(next, accepted, last)
+                                    }
+                                    False -> {
+                                      let next = dispatch(model, name, payload)
+                                      let _ = persist_workspace(model, next)
+                                      let last =
+                                        sync(native, accepted, next, last)
+                                      IdeContinue(next, accepted, last)
+                                    }
+                                  }
+                              }
+                          }
+                      }
                   }
               }
           }
         }
       }
+  }
+}
+
+// Keystroke flow: update caret and draft, retokenize, keep the language
+// server's buffer in sync (didOpen on module change, didChange otherwise),
+// and ask for completions at the caret.
+fn on_code_edit(
+  native: bridge.Session,
+  model: State,
+  accepted: Int,
+  last: ide_ui.Snapshot,
+  payload: String,
+) -> IdeStep {
+  let next = dispatch(model, "code-edit", payload)
+  case state.active_module(next) {
+    Some(module) -> {
+      // The keystroke already committed the buffer to the module source;
+      // retokenize and keep the language server in sync (didOpen on the
+      // first edit of a session, didChange after that), then ask for
+      // completions at the caret.
+      let _ = bridge.submit(native, bridge.SetCode(accepted, module.source))
+      let uri = next.lsp_uri
+      case uri != "", lsp_get() {
+        True, Ok(lsp) -> {
+          case model.lsp_uri == uri {
+            True -> {
+              let _ =
+                bridge.lsp_change(lsp, uri, next.code_version, module.source)
+              Nil
+            }
+            False -> {
+              let _ = bridge.lsp_open(lsp, uri, module.source)
+              Nil
+            }
+          }
+          let #(line, col) = next.caret
+          let _ = bridge.lsp_completions(lsp, uri, line, col)
+          Nil
+        }
+        _, _ -> Nil
+      }
+      let last = sync(native, accepted, next, last)
+      IdeContinue(next, accepted, last)
+    }
+    None -> IdeContinue(next, accepted, last)
+  }
+}
+
+// Apply commits the draft to the module; also push it to the language server.
+// The spliced buffer was auto-committed by the state; push it back to the
+// editor surface (SetText) and the tokenizer (SetCode).
+fn on_completion_accept(
+  native: bridge.Session,
+  next: State,
+  accepted: Int,
+  last: ide_ui.Snapshot,
+) -> IdeStep {
+  case state.active_module(next) {
+    Some(module) -> {
+      let _ =
+        bridge.submit(
+          native,
+          bridge.SetText(accepted, "code-text", module.source),
+        )
+      let _ = bridge.submit(native, bridge.SetCode(accepted, module.source))
+      Nil
+    }
+    None -> Nil
+  }
+  let last = sync(native, accepted, next, last)
+  IdeContinue(next, accepted, last)
+}
+
+fn request_completions(model: State, line: Int, col: Int) -> Nil {
+  case lsp_get(), state.lsp_document_uri(model) {
+    Ok(lsp), uri ->
+      case uri != "" {
+        True -> {
+          let _ = bridge.lsp_completions(lsp, uri, line, col)
+          Nil
+        }
+        False -> Nil
+      }
+    Error(_), _ -> Nil
   }
 }
 
@@ -504,21 +651,19 @@ fn preview_event_label(
   module_id: String,
   payload: String,
 ) -> String {
-  let control_id = case string.split(payload, ":") {
-    [id, ..] -> id
-    [] -> payload
-  }
-  case project.find_module(model.project, module_id) {
-    Some(module) ->
-      case campy_form.find_control(module.form, control_id) {
-        Some(control) ->
-          case campy_form.handler_name(control) {
-            Some(handler) -> "Event: " <> handler
+  // Payload is "<control-id>:<event-key>" from the live preview shell.
+  case string.split(payload, ":") {
+    [control_id, event_key] ->
+      case project.find_module(model.project, module_id) {
+        Some(module) ->
+          case campy_form.find_control(module.form, control_id) {
+            Some(control) ->
+              "Event: " <> campy_form.handler_name(control, event_key)
             None -> "Event: " <> payload
           }
         None -> "Event: " <> payload
       }
-    None -> "Event: " <> payload
+    _ -> "Event: " <> payload
   }
 }
 
@@ -624,15 +769,27 @@ fn sync(
       )
     True -> Nil
   }
-  case next.code == last.code {
-    False ->
-      submit_model(
-        native,
-        generation,
-        "code-lines",
-        ide_ui.code_wire(next.code),
-      )
-    True -> Nil
+  // The code editor's buffer: pushed when the editor surface first appears
+  // or when the active module changes — never per keystroke (the shell's
+  // TextInput owns the live content while typing).
+  case
+    next.code_view != last.code_view || next.code_module != last.code_module
+  {
+    True ->
+      case state.active_module(model) {
+        Some(module) -> {
+          let _ =
+            bridge.submit(
+              native,
+              bridge.SetText(generation, "code-text", module.source),
+            )
+          let _ =
+            bridge.submit(native, bridge.SetCode(generation, module.source))
+          Nil
+        }
+        None -> Nil
+      }
+    False -> Nil
   }
   case next.props == last.props {
     False ->
@@ -651,6 +808,46 @@ fn sync(
         generation,
         "event-items",
         ide_ui.props_wire(next.events),
+      )
+    True -> Nil
+  }
+  case next.completions == last.completions {
+    False ->
+      submit_model(
+        native,
+        generation,
+        "completion-items",
+        ide_ui.completions_wire(next.completions),
+      )
+    True -> Nil
+  }
+  case next.diagnostics == last.diagnostics {
+    False ->
+      submit_model(
+        native,
+        generation,
+        "diag-items",
+        ide_ui.diagnostics_wire(next.diagnostics),
+      )
+    True -> Nil
+  }
+  case next.browser_items == last.browser_items {
+    False ->
+      submit_model(
+        native,
+        generation,
+        "browser-items",
+        ide_ui.browser_wire(next.browser_items),
+      )
+    True -> Nil
+  }
+  case next.console_lines == last.console_lines {
+    False ->
+      submit_model(
+        native,
+        generation,
+        "console-lines",
+        ide_ui.console_wire(next.console_lines),
       )
     True -> Nil
   }
@@ -791,9 +988,14 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "tab-events" -> state.set_tab(model, Events)
     "edit-event" -> state.open_event(model, payload)
     "delete-selected" -> state.delete_selected(model)
+    "code-edit" -> state.code_edit(model, payload)
     "editor-view" -> state.leave_edit(model)
+
+    "completion-move" -> state.completion_move(model, delta(payload))
+    "completion-close" -> state.completion_close(model)
+    "completion-accept" -> state.completion_accept(model)
+    "completion-request" -> state.completion_requested(model)
     "editor-edit" -> state.enter_edit(model)
-    "code-apply" -> state.apply_code(model, payload)
     "view-form" -> state.set_view(model, state.FormView)
     "view-code" -> state.set_view(model, state.CodeView)
     "open-module" -> state.open_module(model, payload)
@@ -808,7 +1010,28 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "file-save" -> save_current(model)
     "file-save-as" -> save_as_with_dialog(model)
     "popup-accept" -> popup_accept(model, payload)
-    "file-cancel" -> state.set_popup(model, NoPopup)
+    "file-cancel" -> state.browser_cancel(model)
+    "browser-navigate" -> state.browser_navigate(model, payload)
+    "browser-up" -> state.browser_up(model)
+    "browser-pick" -> state.browser_pick(model, payload)
+    "browser-home" -> state.browser_home(model)
+    "browser-new-dir" -> state.browser_new_dir(model)
+    "nav-context-menu" -> state.nav_context_menu(model, payload)
+    "nav-context-close" -> state.nav_context_close(model)
+    "nav-delete" -> state.nav_delete(model)
+    // Close tab acts on the right-clicked module (nav_id), like nav-delete.
+    "nav-close-tab" -> state.close_module(model, model.nav_id)
+    "console-goto-line" ->
+      case string.split_once(payload, ";") {
+        Ok(#(line_text, _)) ->
+          state.console_goto(model, case int.parse(line_text) {
+            Ok(n) -> n
+            Error(_) -> 0
+          })
+        Error(_) -> model
+      }
+    "browser-accept" ->
+      popup_accept(state.browser_close(model), state.browser_path(model))
     "run-app" -> run_form(model)
     "update-app" -> update_app(model)
     "stop-app" -> stop_form(model)
@@ -841,7 +1064,13 @@ fn open_with_dialog(model: State) -> State {
   case native_dialog("open", model.project.path) {
     Ok(Some(path)) -> open_path(model, path)
     Ok(None) -> state.set_status(model, "Open cancelled")
-    Error(_) -> state.set_popup(model, OpenFile)
+    Error(_) ->
+      state.browser_open(
+        model,
+        state.OpenFile,
+        "",
+        base_name(model.project.path),
+      )
   }
 }
 
@@ -849,7 +1078,8 @@ fn save_as_with_dialog(model: State) -> State {
   case native_dialog("save", model.project.path) {
     Ok(Some(path)) -> save_path(model, path)
     Ok(None) -> state.set_status(model, "Save cancelled")
-    Error(_) -> state.set_popup(model, SaveAs)
+    Error(_) ->
+      state.browser_open(model, state.SaveAs, "", base_name(model.project.path))
   }
 }
 
@@ -876,7 +1106,7 @@ fn pick_project_icon(model: State) -> State {
 fn pick_image(
   model: State,
   initial: String,
-  fallback: Popup,
+  _fallback: Popup,
   label: String,
   apply: fn(State, String) -> State,
 ) -> State {
@@ -884,8 +1114,15 @@ fn pick_image(
     Ok(Some(path)) ->
       apply(model, path) |> state.set_status(label <> " set to " <> path)
     Ok(None) -> state.set_status(model, label <> " selection cancelled")
-    Error(_) -> state.set_popup(model, fallback)
+    Error(_) -> state.browser_open(model, PickPicture, "", base_name(initial))
   }
+}
+
+fn base_name(path: String) -> String {
+  path
+  |> string.split("/")
+  |> list.last
+  |> result.unwrap("")
 }
 
 fn open_path(model: State, path: String) -> State {
@@ -934,17 +1171,79 @@ fn popup_accept(model: State, path: String) -> State {
   }
 }
 
+// Handler-code compile errors (from the language server) block running and
+// are reported to the console.
+// Handler-code gate: errors block, warnings are logged but never block.
+// Returns the model with warnings already emitted to the console, so callers
+// continue from that state.
+fn gate_compile_errors(model: State, verb: String) -> Result(State, State) {
+  let #(errors, warnings) =
+    model.diagnostics
+    |> list.partition(fn(diagnostic) {
+      let #(_, severity, _) = diagnostic
+      severity <= 1
+    })
+  let model = case warnings {
+    [] -> model
+    _ ->
+      model
+      |> state.log_console(
+        "⚠ handler code has "
+        <> int.to_string(list.length(warnings))
+        <> " warning(s)",
+      )
+      |> list_fold_log(
+        list.map(warnings, fn(diagnostic) {
+          let #(line, _, message) = diagnostic
+          "line " <> int.to_string(line + 1) <> ": " <> message
+        }),
+      )
+  }
+  case errors {
+    [] -> Ok(model)
+    _ -> {
+      let logged =
+        model
+        |> state.log_console(
+          "✗ "
+          <> verb
+          <> " failed: handler code has "
+          <> int.to_string(list.length(errors))
+          <> " error(s)",
+        )
+        |> list_fold_log(
+          list.map(errors, fn(diagnostic) {
+            let #(line, _, message) = diagnostic
+            "line " <> int.to_string(line + 1) <> ": " <> message
+          }),
+        )
+      Error(state.set_status(logged, "Fix handler code before running"))
+    }
+  }
+}
+
+fn list_fold_log(model: State, errors: List(String)) -> State {
+  list.fold(errors, model, fn(acc, error) { state.log_console(acc, error) })
+}
+
 fn run_form(model: State) -> State {
-  case model.preview {
-    Some(_) ->
-      state.set_status(model, "App is already running; press F6 to update it")
-    None ->
-      case state.active_module(model) {
-        None -> state.set_status(model, "Open a module first")
-        Some(module) ->
-          case campy_form.validate(module.form) {
-            Error(error) -> state.set_status(model, "Cannot run: " <> error)
-            Ok(_) -> open_preview(model, module)
+  case gate_compile_errors(model, "Run") {
+    Error(blocked) -> blocked
+    Ok(model) ->
+      case model.preview {
+        Some(_) ->
+          state.set_status(
+            model,
+            "App is already running; press F6 to update it",
+          )
+        None ->
+          case state.active_module(model) {
+            None -> state.set_status(model, "Open a module first")
+            Some(module) ->
+              case campy_form.validate(module.form) {
+                Error(error) -> state.set_status(model, "Cannot run: " <> error)
+                Ok(_) -> open_preview(model, module)
+              }
           }
       }
   }
@@ -997,35 +1296,40 @@ fn open_preview(model: State, module: project.Module) -> State {
 // F6: push the active module's form into the already-running app window. The
 // Slint shell and session stay; only the model/properties change.
 fn update_app(model: State) -> State {
-  case model.preview {
-    None -> run_form(model)
-    Some(preview) ->
-      case state.active_module(model) {
-        None -> state.set_status(model, "Open a module first")
-        Some(module) ->
-          case campy_form.validate(module.form) {
-            Error(error) -> state.set_status(model, "Cannot update: " <> error)
-            Ok(_) ->
-              case
-                live_preview_ui.apply(
-                  preview.session,
-                  live_preview.snapshot(module.form),
-                )
-              {
+  case gate_compile_errors(model, "Update") {
+    Error(blocked) -> blocked
+    Ok(model) ->
+      case model.preview {
+        None -> run_form(model)
+        Some(preview) ->
+          case state.active_module(model) {
+            None -> state.set_status(model, "Open a module first")
+            Some(module) ->
+              case campy_form.validate(module.form) {
+                Error(error) ->
+                  state.set_status(model, "Cannot update: " <> error)
                 Ok(_) ->
-                  state.set_preview(
-                    model,
-                    Some(Preview(preview.session, preview.id, module.id)),
-                  )
-                  |> state.set_status("App updated — " <> module.name)
-                  |> state.log_console("⟳ Updated " <> module.name)
-                Error(_) -> {
-                  let _ = bridge.close_session(preview.session)
-                  state.set_preview(model, None)
-                  |> state.set_status(
-                    "App window is gone; press F6 to start it",
-                  )
-                }
+                  case
+                    live_preview_ui.apply(
+                      preview.session,
+                      live_preview.snapshot(module.form),
+                    )
+                  {
+                    Ok(_) ->
+                      state.set_preview(
+                        model,
+                        Some(Preview(preview.session, preview.id, module.id)),
+                      )
+                      |> state.set_status("App updated — " <> module.name)
+                      |> state.log_console("⟳ Updated " <> module.name)
+                    Error(_) -> {
+                      let _ = bridge.close_session(preview.session)
+                      state.set_preview(model, None)
+                      |> state.set_status(
+                        "App window is gone; press F6 to start it",
+                      )
+                    }
+                  }
               }
           }
       }

@@ -1,14 +1,14 @@
 import campy_bridge as bridge
+import campy_ccl
 import campy_form.{type Form}
 import campy_form/preview.{quote}
 import campy_form/project
 import campy_form/syntax
 import campy_ide/shell
 import campy_ide/state.{
-  type Popup, type Scheme, type State, CodeView, Dark, Edit, Editing, FormView,
-  Light, NoPopup, OpenFile, PickPicture, PickProjectIcon, SaveAs, Solarized,
-  View, active_form, active_module, active_name, can_redo, can_undo,
-  is_events_tab, selection_label,
+  type Popup, type Scheme, type State, CodeView, Dark, FormView, Light, NoPopup,
+  OpenFile, PickPicture, PickProjectIcon, SaveAs, Solarized, active_form,
+  active_module, active_name, can_redo, can_undo, is_events_tab, selection_label,
 }
 import gleam/int
 import gleam/list
@@ -61,11 +61,30 @@ pub type ControlItem {
     value: Int,
     transparency: Int,
     arranged: Bool,
+    checked: Bool,
+    placeholder: String,
+    read_only: Bool,
+    minimum: Int,
+    maximum: Int,
+    current_index: Int,
+    items: List(String),
   )
 }
 
 pub type TokenItem {
   TokenItem(text: String, kind: String)
+}
+
+pub type CompletionItem {
+  CompletionItem(label: String, detail: String, insert: String)
+}
+
+pub type DiagItem {
+  DiagItem(line: Int, severity: Int, message: String)
+}
+
+pub type BrowserItem {
+  BrowserItem(name: String, is_dir: Bool)
 }
 
 pub type LineItem {
@@ -86,6 +105,7 @@ pub type PropItem {
     checked: Bool,
     index: Int,
     options: List(String),
+    hint: String,
   )
 }
 
@@ -99,6 +119,12 @@ pub type Snapshot {
     code: List(LineItem),
     props: List(PropItem),
     events: List(PropItem),
+    completions: List(CompletionItem),
+    diagnostics: List(DiagItem),
+    code_module: String,
+    code_view: Bool,
+    browser_items: List(BrowserItem),
+    console_lines: List(String),
   )
 }
 
@@ -122,6 +148,12 @@ pub fn snapshot(model: State) -> Snapshot {
     code: code(model),
     props: prop_items(model),
     events: event_items(model),
+    completions: completions(model),
+    diagnostics: diagnostics(model),
+    code_module: model.active,
+    code_view: is_code_view(model),
+    browser_items: browser_items(model),
+    console_lines: console_lines(model),
   )
 }
 
@@ -137,6 +169,12 @@ pub fn without_models(snapshot: Snapshot) -> Snapshot {
     code: [],
     props: [],
     events: [],
+    completions: [],
+    diagnostics: [],
+    code_module: "",
+    code_view: False,
+    browser_items: [],
+    console_lines: [],
   )
 }
 
@@ -151,6 +189,12 @@ pub fn empty_snapshot() -> Snapshot {
     code: [],
     props: [],
     events: [],
+    completions: [],
+    diagnostics: [],
+    code_module: "",
+    code_view: False,
+    browser_items: [],
+    console_lines: [],
   )
 }
 
@@ -185,7 +229,6 @@ fn scalars(model: State) -> List(Update) {
       BoolUpdate("layout-row", layout_is(form, campy_form.Row)),
       BoolUpdate("has-selection", !list.is_empty(model.selection)),
       TextUpdate("insp-selection", selection_label(model)),
-      TextUpdate("module-count", module_count_text(model)),
       IntUpdate("canvas-w", form_width(form)),
       IntUpdate("canvas-h", form_height(form)),
       IntUpdate("form-border-size", form_border_size(model)),
@@ -199,17 +242,11 @@ fn scalars(model: State) -> List(Update) {
         "surface-h",
         int.max(window_y(model) + form_height(form) + 28 + 80, 700),
       ),
-      BoolUpdate("code-editing", is_editing_code(model)),
-      BoolUpdate("has-handler", is_some(model.active_handler)),
       TextUpdate("code-handler", code_handler_label(model)),
-      TextUpdate("code-text", code_text(model)),
-      IntUpdate("code-scroll", highlight_scroll(model)),
-      IntUpdate("hl-top", highlight_top(model)),
-      IntUpdate("hl-height", highlight_height(model)),
-      IntUpdate("code-height", code_height(model)),
+      TextUpdate("browser-dir", browser_dir(model)),
+      TextUpdate("browser-name", browser_name(model)),
       TextUpdate("slint-source", slint_source),
       TextUpdate("console-text", state.console_text(model)),
-      TextUpdate("popup-path", model.project.path),
       TextUpdate("popup-title", popup_title(model.popup)),
       TextUpdate("popup-action", popup_action(model.popup)),
       BoolUpdate("popup-open", popup_open(model.popup)),
@@ -226,7 +263,6 @@ fn scalars(model: State) -> List(Update) {
       BoolUpdate("project-dialog-open", model.project_dialog_open),
       TextUpdate("project-title", model.project.title),
       TextUpdate("project-path", model.project.path),
-      TextUpdate("project-module-count", module_count_text(model)),
       BoolUpdate("context-open", model.context_open),
       IntUpdate("context-x", model.context_x),
       IntUpdate("context-y", model.context_y),
@@ -248,6 +284,13 @@ fn scalars(model: State) -> List(Update) {
       ScalarIntUpdate("scheme-index", scheme_index(model.scheme)),
       TextUpdate("form-title", title),
       BoolUpdate("context-align", model.context_align),
+      BoolUpdate("nav-context-open", model.nav_context_open),
+      BoolUpdate("nav-context-project", model.nav_kind == "project"),
+      IntUpdate("code-scroll-y", code_scroll_y(model)),
+      IntUpdate("code-jump-line", code_jump_line(model)),
+      ScalarIntUpdate("code-jump-nonce", model.code_jump_nonce),
+      BoolUpdate("completions-open", !list.is_empty(model.completions)),
+      ScalarIntUpdate("completion-index", model.completion_index),
     ],
     theme_colors(model.scheme),
   )
@@ -289,6 +332,15 @@ fn controls(model: State) -> List(ControlItem) {
           campy_form.transparency_of(form, control.id),
           campy_form.layout_of(form, campy_form.parent_of(form, control.id))
             != campy_form.Free,
+          prop_bool(control, "checked"),
+          prop(control, "placeholder-text"),
+          prop_bool(control, "read-only"),
+          prop_int(control, "minimum", 0),
+          prop_int(control, "maximum", 100),
+          prop_int(control, "current-index", 0),
+          string.split(control.text, ",")
+            |> list.map(string.trim)
+            |> list.filter(fn(item) { item != "" }),
         )
       })
   }
@@ -411,13 +463,33 @@ fn control_rows(form: Form, id: String) -> List(PropItem) {
         ]
         False -> []
       }
+      let color = case campy_form.color_of(form, id) {
+        "" -> color_row("color", "Color", "")
+        hex -> color_row("color", "Color", hex)
+      }
+      // Component properties from the CCL schema (Slint semantics): one row
+      // per declared property, edited per its declared type.
+      let schema =
+        campy_ccl.properties(campy_form.kind_key(control.kind))
+        |> list.map(fn(property: campy_ccl.Property) {
+          let value =
+            campy_form.control_prop(control, property.key, property.default)
+          case property.kind {
+            campy_ccl.Text -> text_row(property.key, property.label, value)
+            campy_ccl.Number -> number_row(property.key, property.label, value)
+            campy_ccl.Bool ->
+              bool_row(property.key, property.label, value == "true")
+          }
+        })
       list.flatten([
         [
           text_row("name", "Name", control.name),
           text_row("text", "Text", control.text),
         ],
+        schema,
         picture,
         geometry,
+        [color],
         align,
         container,
         [
@@ -433,20 +505,19 @@ fn control_event_rows(form: Form, id: String) -> List(PropItem) {
   case campy_form.find_control(form, id) {
     None -> []
     Some(control) ->
-      case campy_form.handler_name(control) {
-        Some(handler) -> [
-          PropItem(
-            campy_form.event_key(control.kind),
-            campy_form.event_label(control.kind),
-            "event",
-            handler,
-            False,
-            0,
-            [],
-          ),
-        ]
-        None -> []
-      }
+      campy_ccl.events(campy_form.kind_key(control.kind))
+      |> list.map(fn(event: campy_ccl.Event) {
+        PropItem(
+          event.key,
+          event.label,
+          "event",
+          campy_form.handler_name(control, event.key),
+          False,
+          0,
+          [],
+          "Opens handler code",
+        )
+      })
   }
 }
 
@@ -481,15 +552,15 @@ fn layout_index_of(layout: campy_form.Layout) -> Int {
 }
 
 fn text_row(key: String, label: String, value: String) -> PropItem {
-  PropItem(key, label, "text", value, False, 0, [])
+  PropItem(key, label, "text", value, False, 0, [], hint_of(key))
 }
 
 fn number_row(key: String, label: String, value: String) -> PropItem {
-  PropItem(key, label, "number", value, False, 0, [])
+  PropItem(key, label, "number", value, False, 0, [], hint_of(key))
 }
 
 fn bool_row(key: String, label: String, checked: Bool) -> PropItem {
-  PropItem(key, label, "bool", "", checked, 0, [])
+  PropItem(key, label, "bool", "", checked, 0, [], hint_of(key))
 }
 
 fn choice_row(
@@ -498,11 +569,45 @@ fn choice_row(
   options: List(String),
   index: Int,
 ) -> PropItem {
-  PropItem(key, label, "choice", "", False, index, options)
+  PropItem(key, label, "choice", "", False, index, options, hint_of(key))
 }
 
 fn open_row(key: String, label: String, value: String) -> PropItem {
-  PropItem(key, label, "picture", value, False, 0, [])
+  PropItem(key, label, "picture", value, False, 0, [], hint_of(key))
+}
+
+fn color_row(key: String, label: String, value: String) -> PropItem {
+  PropItem(key, label, "color", value, False, 0, [], hint_of(key))
+}
+
+// Terse per-property hints shown as tooltips in the inspector.
+fn hint_of(key: String) -> String {
+  case key {
+    "name" -> "Unique component name"
+    "text" -> "Caption or content"
+    "x" -> "Left edge, px"
+    "y" -> "Top edge, px"
+    "w" -> "Width, px"
+    "h" -> "Height, px"
+    "color" -> "Component color"
+    "align" -> "Alignment in parent"
+    "layout" -> "Child layout"
+    "border" -> "Inner padding, px"
+    "enabled" -> "Accepts input"
+    "visible" -> "Shown when running"
+    "transparency" -> "Image opacity, %"
+    "picture" -> "Image file path"
+    "title" -> "Window title"
+    "width" -> "Window width, px"
+    "height" -> "Window height, px"
+    "placeholder-text" -> "Text when empty"
+    "read-only" -> "Blocks editing"
+    "checked" -> "Selected state"
+    "minimum" -> "Slider low end"
+    "maximum" -> "Slider high end"
+    "current-index" -> "Selected item, 0-based"
+    _ -> ""
+  }
 }
 
 // Both inspector models share the same wire shape.
@@ -516,6 +621,45 @@ pub fn props_wire(items: List(PropItem)) -> List(bridge.WireValue) {
       #("checked", bridge.WireBool(item.checked)),
       #("index", bridge.WireInt(item.index)),
       #("options", bridge.WireList(list.map(item.options, bridge.WireText))),
+      #("hint", bridge.WireText(item.hint)),
+    ])
+  })
+}
+
+// The completion popup rows (Campy model items merged with LSP results).
+pub fn completions(model: State) -> List(CompletionItem) {
+  list.map(model.completions, fn(item) {
+    CompletionItem(item.label, item.detail, item.insert)
+  })
+}
+
+pub fn console_lines(model: State) -> List(String) {
+  model.console
+}
+
+pub fn diagnostics(model: State) -> List(DiagItem) {
+  list.map(model.diagnostics, fn(diagnostic) {
+    let #(line, severity, message) = diagnostic
+    DiagItem(line, severity, message)
+  })
+}
+
+pub fn completions_wire(items: List(CompletionItem)) -> List(bridge.WireValue) {
+  list.map(items, fn(item) {
+    bridge.WireStruct([
+      #("label", bridge.WireText(item.label)),
+      #("detail", bridge.WireText(item.detail)),
+      #("insert", bridge.WireText(item.insert)),
+    ])
+  })
+}
+
+pub fn diagnostics_wire(items: List(DiagItem)) -> List(bridge.WireValue) {
+  list.map(items, fn(item) {
+    bridge.WireStruct([
+      #("line", bridge.WireInt(item.line)),
+      #("severity", bridge.WireInt(item.severity)),
+      #("message", bridge.WireText(item.message)),
     ])
   })
 }
@@ -767,14 +911,6 @@ fn pending_kind_key(model: State) -> String {
   }
 }
 
-fn module_count_text(model: State) -> String {
-  let count = list.length(model.project.modules)
-  case count {
-    1 -> "1 module"
-    _ -> int.to_string(count) <> " modules"
-  }
-}
-
 fn is_running(model: State) -> Bool {
   case model.preview {
     Some(_) -> True
@@ -791,20 +927,6 @@ fn is_code_view(model: State) -> Bool {
 
 fn is_slint_tab(model: State) -> Bool {
   model.slint_tab
-}
-
-fn is_editing_code(model: State) -> Bool {
-  case model.editor {
-    Edit -> True
-    View -> False
-  }
-}
-
-fn is_some(option: Option(a)) -> Bool {
-  case option {
-    Some(_) -> True
-    None -> False
-  }
 }
 
 fn layout_is(form: Option(Form), layout: campy_form.Layout) -> Bool {
@@ -835,39 +957,56 @@ fn code_handler_label(model: State) -> String {
   }
 }
 
-fn code_text(model: State) -> String {
-  case model.editing {
-    Some(Editing(text, _)) -> text
+fn browser_dir(model: State) -> String {
+  case model.browser {
+    Some(browser) -> browser.dir
     None -> ""
   }
 }
 
-fn highlight_scroll(model: State) -> Int {
-  case model.highlight {
-    Some(#(start, _)) -> start * 18
+fn browser_name(model: State) -> String {
+  case model.browser {
+    Some(browser) -> browser.name
+    None -> ""
+  }
+}
+
+// Scroll position that lands the jump target a few lines from the top.
+fn code_scroll_y(model: State) -> Int {
+  case model.code_jump {
+    Some(line) -> int.max(0, { line - 3 } * { model.font_size + 6 })
     None -> 0
   }
 }
 
-fn highlight_top(model: State) -> Int {
-  case model.highlight {
-    Some(#(start, _)) -> 4 + start * 18
+fn code_jump_line(model: State) -> Int {
+  case model.code_jump {
+    Some(line) -> line
     None -> 0
   }
 }
 
-fn highlight_height(model: State) -> Int {
-  case model.highlight {
-    Some(#(start, end)) -> end * 18 - start * 18 + 18
-    None -> 0
+fn browser_items(model: State) -> List(BrowserItem) {
+  case model.browser {
+    Some(browser) ->
+      list.map(browser.entries, fn(entry) {
+        BrowserItem(entry.name, entry.is_dir)
+      })
+    None -> []
   }
 }
 
-fn code_height(model: State) -> Int {
-  case active_module(model) {
-    Some(module) -> list.length(string.split(module.source, "\n")) * 18 + 8
-    None -> 0
-  }
+pub fn browser_wire(items: List(BrowserItem)) -> List(bridge.WireValue) {
+  list.map(items, fn(item) {
+    bridge.WireStruct([
+      #("name", bridge.WireText(item.name)),
+      #("is-dir", bridge.WireBool(item.is_dir)),
+    ])
+  })
+}
+
+pub fn console_wire(items: List(String)) -> List(bridge.WireValue) {
+  list.map(items, bridge.WireText)
 }
 
 fn popup_open(popup: Popup) -> Bool {
@@ -901,6 +1040,26 @@ fn control_value(control: campy_form.Control) -> Int {
   case int.parse(control.text) {
     Ok(value) -> int.max(0, int.min(100, value))
     Error(_) -> 50
+  }
+}
+
+// Schema property values with CCL defaults for the designer preview wire.
+fn prop(control: campy_form.Control, key: String) -> String {
+  campy_form.control_prop(
+    control,
+    key,
+    campy_ccl.prop_default(campy_form.kind_key(control.kind), key),
+  )
+}
+
+fn prop_bool(control: campy_form.Control, key: String) -> Bool {
+  prop(control, key) == "true"
+}
+
+fn prop_int(control: campy_form.Control, key: String, default: Int) -> Int {
+  case int.parse(prop(control, key)) {
+    Ok(value) -> value
+    Error(_) -> default
   }
 }
 

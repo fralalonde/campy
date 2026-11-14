@@ -1,3 +1,4 @@
+import campy_ccl
 import campy_form.{
   type Control, type Form, Button, CheckBox, ComboBox, EditBox, GroupBox, Label,
   ListBox, Memo, Menu, Panel, Picture, Progress, RadioButton, Slider,
@@ -5,7 +6,7 @@ import campy_form.{
 import gleam/float
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+
 import gleam/string
 
 // Emits the standalone window shown when the IDE runs the module. Free forms
@@ -78,24 +79,26 @@ fn content(form: Form) -> String {
 
 fn callbacks(form: Form) -> String {
   form.controls
-  |> list.filter_map(callback)
+  |> list.flat_map(callbacks_for)
   |> string.join("")
 }
 
-fn callback(control: Control) -> Result(String, Nil) {
-  case control.kind {
-    Label | ListBox | Panel | GroupBox | Picture | Progress -> Error(Nil)
-    EditBox ->
-      case campy_form.handler_name(control) {
-        Some(handler) -> Ok("  callback " <> handler <> "(string);\n")
-        None -> Error(Nil)
-      }
-    Memo | Button | CheckBox | RadioButton | ComboBox | Slider | Menu ->
-      case campy_form.handler_name(control) {
-        Some(handler) -> Ok("  callback " <> handler <> "();\n")
-        None -> Error(Nil)
-      }
-  }
+// One Slint callback per declared event. Edit-like widgets pass the new
+// text; the rest are plain notifications.
+fn callbacks_for(control: Control) -> List(String) {
+  let kind = kind_key(control)
+  campy_ccl.events(kind)
+  |> list.map(fn(event: campy_ccl.Event) {
+    let handler = campy_form.handler_name(control, event.key)
+    case kind {
+      "edit" -> "  callback " <> handler <> "(string);\n"
+      _ -> "  callback " <> handler <> "();\n"
+    }
+  })
+}
+
+fn kind_key(control: Control) -> String {
+  campy_form.kind_key(control.kind)
 }
 
 fn control_element(form: Form, control: Control, free: Bool) -> String {
@@ -115,16 +118,22 @@ fn control_element(form: Form, control: Control, free: Bool) -> String {
     False -> "width: 100%; height: " <> px(control.height) <> "; clip: true;"
   }
   case control.kind {
-    Panel | GroupBox ->
+    Panel | GroupBox -> {
+      let color = campy_form.color_of(form, control.id)
       "    Rectangle { "
       <> geometry
       <> " visible: "
       <> bool(control.visible)
-      <> "; background: #20242c; border-width: 1px; border-color: #3a3f4b; border-radius: 4px;\n"
+      <> "; background: "
+      <> color_value(color, "#20242c")
+      <> "; border-width: 1px; border-color: #3a3f4b; border-radius: 4px;\n"
       <> "      Text { x: 8px; y: 6px; text: "
       <> quote(control.text)
-      <> "; color: Palette.foreground; font-weight: 600; }\n"
+      <> "; color: "
+      <> text_color(color)
+      <> "; font-weight: 600; }\n"
       <> "    }\n"
+    }
     _ ->
       "    Rectangle { "
       <> geometry
@@ -141,14 +150,34 @@ fn outer_inner(form: Form, control: Control) -> String {
     Label ->
       "      Text { x: 0; y: 0; width: parent.width; height: parent.height; text: "
       <> quote(control.text)
-      <> "; color: Palette.foreground; vertical-alignment: center; }\n"
+      <> "; color: "
+      <> text_color(campy_form.color_of(form, control.id))
+      <> "; vertical-alignment: center; }\n"
     EditBox ->
       "      LineEdit { x: 0; y: 0; width: parent.width; height: parent.height; text: "
       <> quote(control.text)
+      <> "; placeholder-text: "
+      <> quote(campy_form.control_prop(
+        control,
+        "placeholder-text",
+        campy_ccl.prop_default(kind_of(control), "placeholder-text"),
+      ))
+      <> "; read-only: "
+      <> bool(
+        campy_form.control_prop(
+          control,
+          "read-only",
+          campy_ccl.prop_default(kind_of(control), "read-only"),
+        )
+        == "true",
+      )
       <> "; enabled: "
       <> bool(control.enabled)
       <> "; edited(text) => { root."
-      <> handler_or(control, "changed")
+      <> handler_or(control, "edited")
+      <> "(text); }\n"
+      <> "        accepted(text) => { root."
+      <> handler_or(control, "accepted")
       <> "(text); } }\n"
     Button ->
       "      Button { x: 0; y: 0; width: parent.width; height: parent.height; text: "
@@ -177,14 +206,18 @@ fn outer_inner(form: Form, control: Control) -> String {
     Memo ->
       "      TextEdit { x: 0; y: 0; width: parent.width; height: parent.height; text: "
       <> quote(control.text)
+      <> "; read-only: "
+      <> bool(campy_form.control_prop(control, "read-only", "false") == "true")
       <> "; enabled: "
       <> bool(control.enabled)
       <> "; edited => { root."
-      <> handler_or(control, "changed")
+      <> handler_or(control, "edited")
       <> "(); } }\n"
     CheckBox ->
       "      CheckBox { x: 0; y: 0; width: parent.width; height: parent.height; text: "
       <> quote(control.text)
+      <> "; checked: "
+      <> checked_of(control)
       <> "; enabled: "
       <> bool(control.enabled)
       <> "; toggled => { root."
@@ -192,22 +225,47 @@ fn outer_inner(form: Form, control: Control) -> String {
       <> "(); } }\n"
     RadioButton ->
       "      Rectangle { x: 0; y: (parent.height - 18px) / 2; width: 18px; height: 18px; border-radius: 9px; border-width: 1px; border-color: Palette.foreground; background: transparent; }\n"
-      <> "      Rectangle { x: 5px; y: (parent.height - 8px) / 2; width: 8px; height: 8px; border-radius: 4px; background: Palette.accent-background; }\n"
+      <> "      Rectangle { x: 5px; y: (parent.height - 8px) / 2; width: 8px; height: 8px; border-radius: 4px; background: Palette.accent-background; visible: "
+      <> checked_of(control)
+      <> "; }\n"
       <> "      Text { x: 26px; y: 0; height: parent.height; text: "
       <> quote(control.text)
       <> "; color: Palette.foreground; vertical-alignment: center; }\n"
       <> "      TouchArea { clicked => { root."
-      <> handler_or(control, "clicked")
+      <> handler_or(control, "toggled")
       <> "(); } }\n"
     ComboBox ->
-      "      ComboBox { x: 0; y: 0; width: parent.width; height: parent.height; model: [\"First\", \"Second\", \"Third\"]; current-index: 0; selected => { root."
+      "      ComboBox { x: 0; y: 0; width: parent.width; height: parent.height; model: "
+      <> combo_model(control)
+      <> "; current-index: "
+      <> int.to_string(int.max(
+        0,
+        int_prop(
+          control,
+          "current-index",
+          case
+            int.parse(campy_ccl.prop_default(kind_of(control), "current-index"))
+          {
+            Ok(value) -> value
+            Error(_) -> 0
+          },
+        ),
+      ))
+      <> "; selected => { root."
       <> handler_or(control, "selected")
       <> "(); } }\n"
     Slider ->
-      "      Slider { x: 0; y: 0; width: parent.width; height: parent.height; minimum: 0.0; maximum: 100.0; value: "
+      "      Slider { x: 0; y: 0; width: parent.width; height: parent.height; minimum: "
+      <> int.to_string(slider_minimum(control))
+      <> ".0; maximum: "
+      <> int.to_string(slider_maximum(control))
+      <> ".0; value: "
       <> int.to_string(value_of(control))
       <> ".0; changed => { root."
       <> handler_or(control, "changed")
+      <> "(); }"
+      <> " released => { root."
+      <> handler_or(control, "released")
       <> "(); } }\n"
     Progress ->
       "      ProgressIndicator { x: 0; y: (parent.height - 6px) / 2; width: parent.width; height: 6px; progress: "
@@ -239,6 +297,21 @@ fn outer_inner(form: Form, control: Control) -> String {
   }
 }
 
+// A per-control color: empty means the theme default.
+fn text_color(hex: String) -> String {
+  case hex {
+    "" -> "Palette.foreground"
+    _ -> hex
+  }
+}
+
+fn color_value(hex: String, default: String) -> String {
+  case hex {
+    "" -> default
+    _ -> hex
+  }
+}
+
 fn menu_area(id: String) -> String {
   "context_menu_"
   <> {
@@ -267,11 +340,51 @@ fn opacity_suffix(form: campy_form.Form, id: String) -> String {
   }
 }
 
-fn handler_or(control: Control, fallback: String) -> String {
-  case campy_form.handler_name(control) {
-    Some(handler) -> handler
-    None -> fallback
+fn handler_or(control: Control, event_key: String) -> String {
+  campy_form.handler_name(control, event_key)
+}
+
+// Property helpers: values come from the control's props with CCL defaults.
+fn kind_of(control: Control) -> String {
+  campy_form.kind_key(control.kind)
+}
+
+fn checked_of(control: Control) -> String {
+  bool(
+    campy_form.control_prop(
+      control,
+      "checked",
+      campy_ccl.prop_default(kind_of(control), "checked"),
+    )
+    == "true",
+  )
+}
+
+fn int_prop(control: Control, key: String, default: Int) -> Int {
+  case
+    int.parse(campy_form.control_prop(control, key, int.to_string(default)))
+  {
+    Ok(value) -> value
+    Error(_) -> default
   }
+}
+
+fn slider_minimum(control: Control) -> Int {
+  int_prop(control, "minimum", 0)
+}
+
+fn slider_maximum(control: Control) -> Int {
+  int_prop(control, "maximum", 100)
+}
+
+// The combo's items are its text, comma separated, like the designer's editor.
+fn combo_model(control: Control) -> String {
+  let items =
+    control.text
+    |> string.split(",")
+    |> list.map(fn(item) { quote(string.trim(item)) })
+    |> string.join(", ")
+  "[" <> items <> "]"
 }
 
 fn indent(text: String) -> String {

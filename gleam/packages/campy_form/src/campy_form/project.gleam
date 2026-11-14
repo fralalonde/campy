@@ -22,7 +22,7 @@ pub type Project {
   )
 }
 
-pub const version = 9
+pub const version = 11
 
 pub const camping_icon = "assets/camping-tent.png"
 
@@ -72,6 +72,7 @@ fn cat_cafe_form() -> Form {
         "Cat Café",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "picture-1",
@@ -84,6 +85,7 @@ fn cat_cafe_form() -> Form {
         "assets/cat.png",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "label-1",
@@ -96,6 +98,7 @@ fn cat_cafe_form() -> Form {
         "Mochi says hello!",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "list-1",
@@ -108,6 +111,7 @@ fn cat_cafe_form() -> Form {
         "Resident cats",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "search-edit",
@@ -120,6 +124,7 @@ fn cat_cafe_form() -> Form {
         "",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "pet-button",
@@ -132,6 +137,7 @@ fn cat_cafe_form() -> Form {
         "Pet the cat",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "feed-button",
@@ -144,6 +150,7 @@ fn cat_cafe_form() -> Form {
         "Feed the cat",
         True,
         True,
+        [],
       ),
     ],
     [
@@ -154,6 +161,7 @@ fn cat_cafe_form() -> Form {
       #("pet-button", "panel-1"),
       #("feed-button", "panel-1"),
     ],
+    [],
     [],
     [],
     [],
@@ -180,6 +188,7 @@ fn widgets_form() -> Form {
         "CCL · Campy Component Library",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "panel-1",
@@ -192,6 +201,7 @@ fn widgets_form() -> Form {
         "CCL widgets",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "label-1",
@@ -204,6 +214,7 @@ fn widgets_form() -> Form {
         "Campy Component Library",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "checkbox-1",
@@ -216,6 +227,7 @@ fn widgets_form() -> Form {
         "Purr mode",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "radio-1",
@@ -228,6 +240,7 @@ fn widgets_form() -> Form {
         "Cat person",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "radio-2",
@@ -240,6 +253,7 @@ fn widgets_form() -> Form {
         "Dog person",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "combo-1",
@@ -252,6 +266,7 @@ fn widgets_form() -> Form {
         "",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "slider-1",
@@ -264,6 +279,7 @@ fn widgets_form() -> Form {
         "70",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "progress-1",
@@ -276,6 +292,7 @@ fn widgets_form() -> Form {
         "80",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "memo-1",
@@ -288,6 +305,7 @@ fn widgets_form() -> Form {
         "Meow!\nPurr purr.",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "button-1",
@@ -300,6 +318,7 @@ fn widgets_form() -> Form {
         "Feed",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "footer",
@@ -312,6 +331,7 @@ fn widgets_form() -> Form {
         "Free layout · Top/Bottom aligned labels",
         True,
         True,
+        [],
       ),
     ],
     [
@@ -329,11 +349,12 @@ fn widgets_form() -> Form {
     [],
     [],
     [],
+    [],
   )
 }
 
 fn widgets_source() -> String {
-  "// CCL widget handlers.\n\npub fn checkbox1_toggled() -> Nil {\n  Nil\n}\n\npub fn radio1_clicked() -> Nil {\n  Nil\n}\n\npub fn radio2_clicked() -> Nil {\n  Nil\n}\n\npub fn combo1_selected() -> Nil {\n  Nil\n}\n\npub fn slider1_changed() -> Nil {\n  Nil\n}\n\npub fn memo1_changed() -> Nil {\n  Nil\n}\n\npub fn button1_clicked() -> Nil {\n  Nil\n}\n"
+  "// CCL widget handlers.\n\npub fn checkbox1_toggled() -> Nil {\n  Nil\n}\n\npub fn radio1_toggled() -> Nil {\n  Nil\n}\n\npub fn radio2_toggled() -> Nil {\n  Nil\n}\n\npub fn combo1_selected() -> Nil {\n  Nil\n}\n\npub fn slider1_changed() -> Nil {\n  Nil\n}\n\npub fn memo1_edited() -> Nil {\n  Nil\n}\n\npub fn button1_clicked() -> Nil {\n  Nil\n}\n"
 }
 
 fn cat_cafe_source() -> String {
@@ -359,6 +380,7 @@ fn welcome_form() -> Form {
         "File",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "label-1",
@@ -371,6 +393,7 @@ fn welcome_form() -> Form {
         "Welcome to Campy",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "edit-1",
@@ -383,6 +406,7 @@ fn welcome_form() -> Form {
         "",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "button-1",
@@ -395,8 +419,10 @@ fn welcome_form() -> Form {
         "Start",
         True,
         True,
+        [],
       ),
     ],
+    [],
     [],
     [],
     [],
@@ -428,6 +454,7 @@ fn search_form() -> Form {
         "Search documents",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "edit-1",
@@ -440,6 +467,7 @@ fn search_form() -> Form {
         "",
         True,
         True,
+        [],
       ),
       campy_form.Control(
         "button-1",
@@ -452,8 +480,10 @@ fn search_form() -> Form {
         "Search",
         True,
         True,
+        [],
       ),
     ],
+    [],
     [],
     [],
     [],

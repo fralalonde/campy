@@ -5,6 +5,7 @@ pub type Session
 
 pub type Command {
   LoadUi(generation: Int, source: String)
+  SetCode(generation: Int, text: String)
   SetText(generation: Int, property: String, value: String)
   SetBool(generation: Int, property: String, value: Bool)
   SetInt(generation: Int, property: String, value: Int)
@@ -49,6 +50,35 @@ pub fn submit(session: Session, command: Command) -> Result(Nil, String)
 
 @external(erlang, "campy_bridge_ffi", "close_session")
 pub fn close_session(session: Session) -> Result(Nil, String)
+
+// The handler-code language server (`gleam lsp`). Results travel through the
+// regular event stream as `lsp:completions` / `lsp:diagnostics` events.
+pub type Lsp
+
+@external(erlang, "campy_bridge_ffi", "lsp_start")
+pub fn lsp_start(root: String) -> Result(Lsp, String)
+
+@external(erlang, "campy_bridge_ffi", "lsp_open")
+pub fn lsp_open(lsp: Lsp, uri: String, text: String) -> Result(Nil, String)
+
+@external(erlang, "campy_bridge_ffi", "lsp_change")
+pub fn lsp_change(
+  lsp: Lsp,
+  uri: String,
+  version: Int,
+  text: String,
+) -> Result(Nil, String)
+
+@external(erlang, "campy_bridge_ffi", "lsp_completions")
+pub fn lsp_completions(
+  lsp: Lsp,
+  uri: String,
+  line: Int,
+  character: Int,
+) -> Result(Nil, String)
+
+@external(erlang, "campy_bridge_ffi", "lsp_stop")
+pub fn lsp_stop(lsp: Lsp) -> Result(Nil, String)
 
 @external(erlang, "campy_bridge_ffi", "poll")
 pub fn poll(timeout_ms: Int) -> Option(NativeEvent)

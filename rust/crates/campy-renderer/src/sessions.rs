@@ -22,6 +22,7 @@ pub enum Command {
     SetBool(u64, String, bool),
     SetInt(u64, String, i64),
     SetModel(u64, String, Vec<PropValue>),
+    SetCode(u64, String),
     SetColor(u64, String, String),
     ReadText(u64, String),
     Resize(u64, u32, u32),
@@ -62,6 +63,7 @@ impl Command {
             | Self::SetBool(g, _, _)
             | Self::SetInt(g, _, _)
             | Self::SetModel(g, _, _)
+            | Self::SetCode(g, _)
             | Self::SetColor(g, _, _)
             | Self::ReadText(g, _)
             | Self::Resize(g, _, _)
@@ -85,6 +87,9 @@ impl Command {
             Self::SetInt(_, name, _) if name.len() > 256 => Err("Property name is too long".into()),
             Self::SetModel(_, name, _) if name.len() > 256 => {
                 Err("Property name is too long".into())
+            }
+            Self::SetCode(_, text) if text.len() > MAX_SOURCE_BYTES => {
+                Err("Code buffer exceeds 256 KiB".into())
             }
             Self::SetColor(_, name, _) if name.len() > 256 => {
                 Err("Property name is too long".into())
@@ -436,6 +441,21 @@ impl LiveSession {
                     .collect::<Result<_, String>>()?;
                 instance
                     .set_property(&name, Value::Model(ModelRc::new(VecModel::from(values))))
+                    .map_err(|e| e.to_string())?
+            }
+            Command::SetCode(_, source) => {
+                // Tokenize on the UI thread (editor-size buffers parse in
+                // microseconds) and publish the highlight model directly.
+                let lines = crate::highlight::highlight(&source);
+                let values: Vec<Value> = lines
+                    .into_iter()
+                    .map(prop_value)
+                    .collect::<Result<_, String>>()?;
+                instance
+                    .set_property(
+                        "code-lines",
+                        Value::Model(ModelRc::new(VecModel::from(values))),
+                    )
                     .map_err(|e| e.to_string())?
             }
             Command::SetColor(_, name, color) => instance

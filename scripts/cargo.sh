@@ -30,9 +30,23 @@ if [ "$(uname -s)" = "Linux" ] && [ -x "$GCC" ]; then
     export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$GCC"
     export CC="$GCC"
     [ -x "$GXX" ] && export CXX="$GXX"
+    # cc-rs build scripts (tree-sitter grammars) archive static libs; the
+    # system has no ar, so point it at the toolchain's.
+    if [ -x "$TC/bin/x86_64-linux-ar" ]; then
+        export AR="$TC/bin/x86_64-linux-ar"
+        export AR_x86_64_unknown_linux_gnu="$AR"
+        case ":$PATH:" in
+            *":$TC/bin:"*) ;;
+            *) export PATH="$TC/bin:$PATH" ;;
+        esac
+    fi
     # The Bootlin sysroot glibc is older than the runtime glibc; allow undefined
     # symbols from host shared libraries at link time (they resolve at runtime).
     export RUSTFLAGS="-Clink-arg=-Wl,--allow-shlib-undefined"
+    # Always use the pkg-config shim on Linux: a real pkg-config emits system
+    # library paths (e.g. -L/usr/lib64) that the Bootlin cross-GCC rejects as
+    # unsafe in cross-compilation, while the shim keeps link paths inside $HOME
+    # and resolves the fontconfig runtime library on any host.
     SHIM="$HOME/.local/share/campy-sandbox/bin/campy-pkg-config"
     [ -x "$SHIM" ] && export PKG_CONFIG="$SHIM"
     # The linker may emit -lfontconfig before its -L search path, so make the

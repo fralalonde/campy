@@ -84,6 +84,24 @@ pub fn last_module_tab_cannot_close_test() {
   closed.status |> should.equal("Cannot close the last tab")
 }
 
+// The navigator context menu's Delete removes a module from the project even
+// when it is not the active tab; undo restores it.
+pub fn module_context_delete_removes_inactive_module_test() {
+  let model = demo_state() |> state.open_module("search-box")
+  let menu =
+    state.nav_context_menu(model, "module;cat-cafe") |> state.nav_delete
+  let assert Some(module) = state.active_module(menu)
+  module.id |> should.equal("search-box")
+  list.any(menu.project.modules, fn(module) { module.id == "cat-cafe" })
+  |> should.be_false
+  state.can_undo(menu) |> should.be_true
+
+  // The last remaining module cannot be deleted.
+  let last =
+    menu |> state.nav_context_menu("module;search-box") |> state.nav_delete
+  last.status |> should.equal("Cannot delete the last module")
+}
+
 pub fn form_preview_compiles_through_the_real_bridge_test() {
   let assert Ok(source) = preview.to_slint(campy_form.demo_form())
   campy_bridge.validate_ui(source) |> should.equal(Ok(1))
@@ -127,7 +145,8 @@ pub fn structural_edits_change_models_not_the_shell_test() {
   // edited state (only baked scalar defaults differ). Opened modules render
   // as tabs of the TabPanel, each closable.
   let assert Ok(shell) = ide_ui.to_slint(model)
-  string.contains(shell, "for module in root.module-items") |> should.be_true
+  string.contains(shell, "for module[index] in root.module-items")
+  |> should.be_true
   string.contains(shell, "TabPanel {") |> should.be_true
   string.contains(shell, "model: root.tab-items;") |> should.be_true
   string.contains(shell, "for tab in root.model:") |> should.be_true
@@ -136,7 +155,12 @@ pub fn structural_edits_change_models_not_the_shell_test() {
   string.contains(shell, "close-tab(id) => { root.close-module(id); }")
   |> should.be_true
   string.contains(shell, "for control in root.control-items") |> should.be_true
-  string.contains(shell, "for line in root.code-lines") |> should.be_true
+  // The code pane is an editable transparent TextInput over the highlight
+  // layer the renderer tokenizes natively.
+  string.contains(shell, "code-input := TextInput {") |> should.be_true
+  string.contains(shell, "text <=> root.code-text;") |> should.be_true
+  string.contains(shell, "for line in root.code-lines: Rectangle")
+  |> should.be_true
 }
 
 pub fn selection_updates_control_model_and_scalars_test() {
@@ -220,6 +244,7 @@ pub fn preview_honours_form_layouts_test() {
           "Hi",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "list-1",
@@ -232,6 +257,7 @@ pub fn preview_honours_form_layouts_test() {
           "",
           True,
           True,
+          [],
         ),
         campy_form.Control(
           "panel-1",
@@ -244,8 +270,10 @@ pub fn preview_honours_form_layouts_test() {
           "Panel",
           True,
           True,
+          [],
         ),
       ],
+      [],
       [],
       [],
       [],
@@ -350,13 +378,13 @@ pub fn undo_restores_field_and_code_edits_test() {
   let stubbed =
     demo_state()
     |> state.select("search-edit")
-    |> state.open_event("changed")
+    |> state.open_event("edited")
   let assert Some(module) = state.active_module(stubbed)
-  string.contains(module.source, "search_edit_changed") |> should.be_true
+  string.contains(module.source, "search_edit_edited") |> should.be_true
 
   let restored = state.undo(stubbed)
   let assert Some(after) = state.active_module(restored)
-  string.contains(after.source, "search_edit_changed") |> should.be_false
+  string.contains(after.source, "search_edit_edited") |> should.be_false
 }
 
 pub fn new_edit_clears_the_redo_stack_test() {
@@ -922,9 +950,9 @@ pub fn multi_selection_grid_shows_common_props_test() {
   list.any(snapshot.props, fn(row) { row.key == "transparency" })
   |> should.be_false
 
-  // Events: both buttons have OnClick; handler names differ → blank value.
+  // Events: both buttons have OnClicked; handler names differ → blank value.
   let assert [event] = snapshot.events
-  event.label |> should.equal("OnClick")
+  event.label |> should.equal("OnClicked")
   event.value |> should.equal("")
 }
 
@@ -1019,10 +1047,173 @@ pub fn shell_inspector_grid_and_view_toggle_test() {
   // The Align submenu appears for multi-selections and dispatches each kind.
   string.contains(
     shell,
-    "if root.selection-count > 1: Button { text: \"Align ▸\"",
+    "if root.selection-count > 1: MenuRow { label: \"Align ▸\"",
   )
   |> should.be_true
   string.contains(shell, "root.align-selection(\"middle\")") |> should.be_true
+}
+
+// The code pane: always an editable transparent TextInput over the
+// tree-sitter highlight layer; no Apply/Discard buttons.
+pub fn code_pane_always_editable_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  string.contains(shell, "code-input := TextInput {") |> should.be_true
+  string.contains(shell, "text <=> root.code-text;") |> should.be_true
+  string.contains(shell, "root.code-apply(") |> should.be_false
+  string.contains(shell, "code-source") |> should.be_false
+  // Keystrokes stream to the tokenizer and language server.
+  string.contains(
+    shell,
+    "root.code-edit(\"\\{code-caret-line};\\{code-caret-col};\" + self.text);",
+  )
+  |> should.be_true
+  string.contains(shell, "for diag in root.diag-items: Rectangle")
+  |> should.be_true
+  // The completion popup anchors at the caret.
+  string.contains(shell, "if root.completions-open: Rectangle {")
+  |> should.be_true
+}
+
+// The context menu opens where the click happened.
+pub fn context_menu_opens_at_the_click_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  string.contains(
+    shell,
+    "root.context-menu(data.id + \";\" + round((data.x + self.mouse-x) / 1px)",
+  )
+  |> should.be_true
+  string.contains(
+    shell,
+    "x: max(0px, min(root.context-x, root.surface-w - 158px));",
+  )
+  |> should.be_true
+}
+
+// Tabs keep their place: opening appends, switching never reorders.
+pub fn tabs_never_reorder_test() {
+  let first = demo_state() |> state.open_module("widgets")
+  let second = first |> state.open_module("search-box")
+  second.opened |> should.equal(["cat-cafe", "widgets", "search-box"])
+
+  let switched = second |> state.activate_module("widgets")
+  switched.opened |> should.equal(second.opened)
+  switched.active |> should.equal("widgets")
+
+  // Re-opening an already-open module activates it without moving it.
+  let reopened = second |> state.open_module("cat-cafe")
+  reopened.opened |> should.equal(second.opened)
+  reopened.active |> should.equal("cat-cafe")
+}
+
+// Right-clicking a component that is already in the multi-selection keeps
+// the whole selection, so the Align submenu stays available.
+pub fn context_menu_keeps_multi_selection_test() {
+  let model =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.toggle_select("feed-button")
+  let opened = state.open_context_menu(model, "pet-button")
+  opened.context_open |> should.be_true
+  list.length(opened.selection) |> should.equal(2)
+
+  // Right-clicking outside the selection selects that component instead.
+  let other = state.open_context_menu(model, "panel-1")
+  other.selection |> should.equal(["panel-1"])
+
+  // Opening the menu resets the Align submenu; closing clears both.
+  let align_open = state.toggle_context_align(opened)
+  align_open.context_align |> should.be_true
+  let closed = state.close_context_menu(align_open)
+  closed.context_open |> should.be_false
+  closed.context_align |> should.be_false
+}
+
+// The code editor: a keystroke auto-commits the buffer into the module
+// source (F7/F5 always compile what is on screen); completions open only on
+// a forced request (Ctrl+Space) or after a dot, merging the Campy context
+// with server results filtered by the typed word; accepting splices the
+// insert at the caret and auto-commits again.
+pub fn code_editor_completion_flow_test() {
+  let model = demo_state() |> state.select("pet-button")
+  let typed = "pub fn pet_button_clicked() -> Nil {\n  pe\n}\n"
+
+  let edited = state.code_edit(model, "1;4;" <> typed)
+  edited.caret |> should.equal(#(1, 4))
+  // Auto-committed: the module source is the live buffer.
+  let assert Some(module) = state.active_module(edited)
+  module.source |> should.equal(typed)
+
+  // A bare identifier does not open the popup (it would cover the code).
+  let arrived =
+    state.completions_arrived(
+      edited,
+      "println\tfn(String) -> Nil\tprintln\tfunction\n",
+    )
+  arrived.completions |> should.equal([])
+
+  // Ctrl+Space forces it: Campy items merge with the server rows, filtered
+  // by the typed segment ("pe" keeps pet_button; println is dropped).
+  let requested = state.completion_requested(arrived)
+  let forced =
+    state.completions_arrived(
+      requested,
+      "println\tfn(String) -> Nil\tprintln\tfunction\n",
+    )
+  list.any(forced.completions, fn(item) { item.label == "pet_button" })
+  |> should.be_true
+  // The segment filter still applies: "pe" keeps only matches.
+  list.any(forced.completions, fn(item) { item.label == "println" })
+  |> should.be_false
+  list.any(forced.completions, fn(item) { item.label == "application" })
+  |> should.be_false
+
+  // Accepting the selection splices the insert at the caret and
+  // auto-commits the module source again.
+  let accepted = state.completion_accept(forced)
+  accepted.caret |> should.equal(#(1, 12))
+  accepted.completions |> should.equal([])
+  let assert Some(module) = state.active_module(accepted)
+  module.source
+  |> should.equal("pub fn pet_button_clicked() -> Nil {\n  pet_button\n}\n")
+
+  // A dot opens the member list from the server, filtered after the dot.
+  let dotted = state.code_edit(accepted, "1;15;pub fn x() {\n  io.\n}\n")
+  let members =
+    state.completions_arrived(
+      dotted,
+      "print\tfn(String) -> Nil\tprint\tfunction\nprintln\tfn(String) -> Nil\tprintln\tfunction\n",
+    )
+  list.any(members.completions, fn(item) { item.label == "println" })
+  |> should.be_true
+  list.any(members.completions, fn(item) { item.label == "pet_button" })
+  |> should.be_false
+
+  // Arrow-key navigation moves within the list; Escape closes it.
+  let moved =
+    members
+    |> state.completion_move(1)
+    |> state.completion_move(-5)
+  moved.completion_index |> should.equal(0)
+  state.completion_close(moved).completions |> should.equal([])
+}
+
+// The window is a three-pane layout: navigator, centre, inspector must be
+// siblings inside main_area's HorizontalLayout. Guards against brace slips
+// that silently restructure the generated tree.
+pub fn shell_keeps_three_pane_layout_test() {
+  let assert Ok(shell) = ide_ui.to_slint(demo_state())
+  string.contains(shell, "main_area()") |> should.be_false
+  // The main_area HorizontalLayout opens and the navigator's VerticalLayout
+  // is its first child; the centre and right pane follow as siblings.
+  string.contains(shell, "project-list := ListView {") |> should.be_true
+  string.contains(shell, "module-list := ListView {") |> should.be_true
+  string.contains(shell, "if root.code-view: Rectangle {") |> should.be_true
+  // The right pane's tab grid comes after the centre's canvases in source
+  // order, at the same nesting depth (both are children of the Horizontal).
+  let navigator = string.contains(shell, "VerticalLayout { width: 190px;")
+  navigator |> should.be_true
+  string.contains(shell, "VerticalLayout { width: 320px; spacing: 6px;")
+  |> should.be_true
 }
 
 pub fn mcp_protocol_handles_initialize_and_tools_test() {

@@ -2,6 +2,7 @@
 
 use slint_interpreter::{CompilationResult, Compiler, DiagnosticLevel};
 
+pub mod highlight;
 pub mod sessions;
 
 /// Compile an interpreted UI without creating a window or retaining handles.
