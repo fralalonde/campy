@@ -15,6 +15,13 @@
 ////
 //// Generated console lines go through `campy_app.report_line`, so the
 //// `[<app>] <variant>` format stays defined in one place.
+////
+//// ## Output location
+////
+//// Dependency paths in the emitted `gleam.toml` assume `out_dir` is
+//// `<repo-root>/generated/apps/<module_slug>` — the broker's P1 build
+//// location (T1.3) — where `../../../` reaches the repository root. A tree
+//// generated elsewhere needs its own path deps.
 
 import campy_ccl
 import campy_form
@@ -64,7 +71,9 @@ pub fn slug(name: String) -> String {
 
 // Write the standalone app tree for one project module into `out_dir`,
 // creating directories as needed. `Ok` carries the output directory. An
-// unknown module id is an error; nothing is written in that case.
+// unknown module id is an error; nothing is written in that case. Emitted
+// dependency paths assume `out_dir` is `<repo-root>/generated/apps/<slug>`
+// (the broker's build location), so `../../../` reaches the repo root.
 pub fn generate(
   project: project_codec.Project,
   module_id: String,
@@ -143,10 +152,10 @@ fn gleam_toml(module_slug: String) -> String {
     "",
     "[dependencies]",
     "gleam_stdlib = \">= 0.70.0 and < 1.0.0\"",
-    "campy_app = { path = \"../../../packages/campy_app\" }",
-    "campy_bridge = { path = \"../../../packages/campy_bridge\" }",
-    "campy_form = { path = \"../../../packages/campy_form\" }",
-    "campy_runtime = { path = \"../../../packages/campy_runtime\" }",
+    "campy_app = { path = \"../../../gleam/packages/campy_app\" }",
+    "campy_bridge = { path = \"../../../gleam/packages/campy_bridge\" }",
+    "campy_form = { path = \"../../../gleam/packages/campy_form\" }",
+    "campy_runtime = { path = \"../../../gleam/packages/campy_runtime\" }",
     "",
     "[dev-dependencies]",
     "gleeunit = \">= 1.0.0 and < 2.0.0\"",

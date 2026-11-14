@@ -163,7 +163,7 @@ pub fn toml_name_matches_entry_module_test() {
   |> should.be_true
   string.contains(
     toml,
-    "campy_app = { path = \"../../../packages/campy_app\" }",
+    "campy_app = { path = \"../../../gleam/packages/campy_app\" }",
   )
   |> should.be_true
 }
