@@ -89,7 +89,9 @@ report back. See `docs/ARCHITECTURE.md` (reload protocol) and `docs/MVP.md`
 2. New packages go to `gleam/packages/<name>/` with `gleam.toml`
    (`target = "erlang"`, `gleam = ">= 1.16.0 and < 2.0.0"`, gleeunit
    dev-dependency, path deps to other campy packages). Runnable apps go to
-   `gleam/apps/`.
+   `gleam/apps/`. **A brief that creates a package must also add its name to
+   the `PACKAGES` tuple in `scripts/workspace.py`** (one line) so `just check`
+   builds and tests it; this registration is part of the brief's Files list.
 3. Dependency rules (from `docs/ARCHITECTURE.md`): `campy_bridge` is the sole
    owner of native externals; `campy_form`/`campy_ccl` stay pure (no bridge
    dependency); app-level packages may depend on the bridge.
