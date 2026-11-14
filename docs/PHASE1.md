@@ -404,8 +404,13 @@ source tree. No builds, no IO beyond writing the tree.
 3. `pub fn generate(project: campy_form project Project, module_id: String, out_dir: String) -> Result(String, String)`
    writes (creating dirs):
    - `out_dir/gleam.toml`: name `campy_app_<module_slug>`, target erlang,
-     same gleam range, deps by path `../../../packages/campy_app`,
-     `campy_bridge`, `campy_form`, `campy_runtime`; gleeunit dev-dep.
+     same gleam range, deps by path `../../../gleam/packages/campy_app`,
+     `../../../gleam/packages/campy_bridge`,
+     `../../../gleam/packages/campy_form`,
+     `../../../gleam/packages/campy_runtime`; gleeunit dev-dep. The emitted
+     paths assume `out_dir` is `<repo-root>/generated/apps/<module_slug>`
+     (the broker's P1 build location, T1.3): `../../../` reaches the repo
+     root from there.
    - `out_dir/src/campy_app_<module_slug>.gleam`: a `main` that passes the
       embedded form (see below) to `campy_app.start`
      with `report` = print each report as one console line (format below), then
@@ -485,11 +490,15 @@ model, phase 1 edition), assemble and digest the artifact.
 anything.
 
 **Acceptance.** `just check` green. A test (allowed to invoke `gleam` —
-mark it and skip when `CAMPY_FAST_ONLY` env var is set) builds the Cat Café
-module from `campy.campy` and asserts: artifact contains manifest + the two
-beams, digest is 64 hex chars, manifest fields match the brief (app slug
-`cat_cafe`, version 1, modules sorted), and a second `build` produces version
-2. `just check` must remain green both with and without `CAMPY_FAST_ONLY`.
+mark it and skip when `CAMPY_FAST_ONLY` env var is set) builds the CCL
+Widgets module (module id `widgets`) from `campy.campy` and asserts:
+artifact contains manifest + the two beams, digest is 64 hex chars, manifest
+fields match the brief (app slug `widgets`, version 1, modules sorted), and
+a second `build` produces version 2. Use `widgets`, not the Cat Café module:
+its committed handler stubs are valid Gleam, while the Cat Café demo's
+handler body contains manual test edits that do not compile (live demo data
+must not be a test dependency). `just check` must remain green both with and
+without `CAMPY_FAST_ONLY`.
 
 ### T1.4 — End-to-end build integration + just target
 
@@ -500,7 +509,8 @@ beams, digest is 64 hex chars, manifest fields match the brief (app slug
 **Spec.**
 
 1. `scripts/workspace.py`: add command `build-app` with an optional module-id
-   argument (default: the workspace's active project's first module). It
+   argument (default: the active project's `widgets` module — its handlers
+   compile; see T1.3's note about the Cat Café demo). It
    loads the project file, calls the broker build via
    `erl -noshell -eval` (same pattern the file already uses for OTP-version
    probes), and prints the manifest summary line and artifact path.
