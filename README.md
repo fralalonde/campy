@@ -43,6 +43,7 @@ Erlang/OTP 27+ installation (`erl` on PATH) — no Rust, Gleam, Python, or
 - Working prototype: project/workspace persistence, form designer, property inspector, undo/redo, native preview, and F7 updates to a running form.
 - Handler stubs can be edited, but the preview does not execute handler code. Its console logs events and input.
 - F6 reloads Gleam code in the IDE (a project-format upgrade reloads the workspace in place); Rust/NIF changes and other state-shape changes need a restart.
+- `just build-app` is experimental: it compiles one module of `campy.campy` (default: `widgets`) into a versioned artifact under `generated/broker/artifacts/`, printing the manifest summary line and the artifact path. It exercises generation and compilation only; the artifact is not dispatched or run.
 - Palette drag-and-drop, richer source editing, and the general versioned component schema are unfinished.
 - Native sessions run on Linux and Windows. Windows context-menu input is not covered by the automated smoke test.
 

@@ -42,6 +42,10 @@ run: build
 dev: build
     python scripts/workspace.py dev
 
+# Compile a designed module into a versioned broker artifact (default: `widgets`).
+build-app module="widgets": build-gleam
+    python scripts/workspace.py build-app {{module}}
+
 # Generate the current search-box UI without hand-editing Slint.
 generate: build
     python scripts/workspace.py generate

@@ -24,6 +24,8 @@ PACKAGES = [
 NATIVE = ROOT / "gleam/packages/campy_bridge/priv/native"
 RELOAD = ROOT / "generated/reload.signal"
 DIST = ROOT / "generated/dist"
+PROJECT = ROOT / "campy.campy"
+BROKER = ROOT / "gleam/packages/campy_broker"
 
 
 def environment() -> dict[str, str]:
@@ -283,6 +285,46 @@ def check_shipment(shipment: Path) -> None:
     print(result.stdout.strip(), flush=True)
 
 
+BUILD_APP_PROBE = """case campy_form@project:load(<<"%s">>) of
+  {ok, Project} ->
+    case campy_broker:build(Project, <<"%s">>) of
+      {ok, {Artifact, Manifest}} ->
+        io:format("~s~n~s~n", [campy_manifest:to_summary(Manifest), Artifact]),
+        halt(0);
+      {error, Error} ->
+        io:format(standard_error, "~s~n", [Error]),
+        halt(1)
+    end;
+  {error, Error} ->
+    io:format(standard_error, "~s~n", [Error]),
+    halt(1)
+end.
+"""
+
+
+def build_app(module_id: str) -> None:
+    """Compile one project module into a broker artifact, end to end."""
+    ebins = sorted(
+        str(path) for path in sorted(BROKER.glob("build/dev/erlang/*/ebin"))
+    )
+    if not ebins:
+        raise SystemExit(
+            f"Missing {BROKER.relative_to(ROOT)}/build; run `just build-gleam` first."
+        )
+    probe = BUILD_APP_PROBE % (PROJECT, module_id)
+    result = subprocess.run(
+        ["erl", "-noshell", "-eval", probe,
+         *[path for ebin in ebins for path in ("-pa", ebin)]],
+        cwd=ROOT, env=environment(), capture_output=True, text=True,
+    )
+    if result.returncode:
+        raise SystemExit(
+            (result.stdout + result.stderr).strip()
+            or f"Broker build failed (status {result.returncode})."
+        )
+    print(result.stdout.strip(), flush=True)
+
+
 def write_archive(shipment: Path) -> None:
     name = f"campy-studio-{app_version()}-{platform.system().lower()}-{platform.machine().lower()}"
     staged = shipment.parent / name
@@ -325,6 +367,8 @@ def main() -> None:
     elif action == "snapshot-ide":
         command(["gleam", "run", "-m", "campy_ide_snapshot"], cwd=APP,
                 expected="IDE snapshots written")
+    elif action == "build-app":
+        build_app(args[0] if args else "widgets")
     elif action == "dev":
         dev()
     else:
