@@ -26,12 +26,13 @@ Merged to main, all `just check` green at merge time:
   golden update, reviewed and merged
 - Demo-data fix `b24098d`; schema-from-`project.version` fix `b032099`
 
-In flight (suspended): **T0.3** (migration chain planner) was dispatched on
-branch `p1/t0.3-migration` and may have been interrupted mid-work by a
-shutdown. On resume, check that branch first: `git log p1/t0.3-migration` —
-a complete commit gets reviewed and merged; a dirty or partial state gets
-`git checkout main && git branch -D p1/t0.3-migration` and a fresh dispatch
-per §1.5.
+In flight: nothing — suspended at the user's request. Next task is **T2.1**
+(broker store + deployment state), then Wave 3 (T1.4, T2.2).
+
+**P1.0 is complete** (T0.1 + T0.2 + T0.3 merged): the contracts milestone.
+Gate G0 is recorded as passed via per-task reviews (each task was reviewed
+against its brief before merge; no separate skim needed). Formal gate G1
+comes after T1.4/T2.2 in Wave 3.
 
 Not started: T1.4, T2.1–T2.6, all of P1.3 (gated on G2+G3).
 
