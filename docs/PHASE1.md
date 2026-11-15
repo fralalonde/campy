@@ -30,17 +30,19 @@ Merged to main, all `just check` green at merge time:
 - **T2.2** `campy_runner` — in-VM runner; `update_code` validates beams
   first, then pause → load → `apply_snapshot`, committing on the `Applied`
   report; additive `campy_app.session_id/1` accessor (`33eecd2`)
+- **T1.4** `just build-app` — end-to-end CLI target (`8447f0e`) —
+  **P1.1 complete**
 - Demo-data fix `b24098d`; schema-from-`project.version` fix `b032099`
 
-In flight: **T1.4** (`just build-app` integration target) on branch
-`p1/t1.4-build-target`.
+In flight: **T2.3** (IDE re-route: Run/F7/Stop through broker + runner) on
+branch `p1/t2.3-ide-route`.
 
 **P1.0 is complete** (T0.1 + T0.2 + T0.3 merged): the contracts milestone.
 Gate G0 is recorded as passed via per-task reviews (each task was reviewed
 against its brief before merge; no separate skim needed). Formal gate G1
 comes after T2.3 (IDE re-route) and T2.4.
 
-Not started: T2.3 (IDE re-route), T2.4, T2.6, stretch T2.5, all of P1.3
+Not started: T2.4 (compat check), T2.6 (docs), stretch T2.5, all of P1.3
 (gated on G2+G3).
 
 Resuming cold: dispatch tasks per §1.5 using `.opencode/agents/p1.md` or a
