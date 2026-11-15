@@ -26,8 +26,12 @@ Merged to main, all `just check` green at merge time:
   golden update, reviewed and merged
 - Demo-data fix `b24098d`; schema-from-`project.version` fix `b032099`
 
-In flight: **T0.3** (migration chain planner) on branch `p1/t0.3-migration`,
-subagent session in the session database.
+In flight (suspended): **T0.3** (migration chain planner) was dispatched on
+branch `p1/t0.3-migration` and may have been interrupted mid-work by a
+shutdown. On resume, check that branch first: `git log p1/t0.3-migration` —
+a complete commit gets reviewed and merged; a dirty or partial state gets
+`git checkout main && git branch -D p1/t0.3-migration` and a fresh dispatch
+per §1.5.
 
 Not started: T1.4, T2.1–T2.6, all of P1.3 (gated on G2+G3).
 
