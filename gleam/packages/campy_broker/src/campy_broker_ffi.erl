@@ -1,6 +1,7 @@
 -module(campy_broker_ffi).
 -export([run_build/1, root/0, remove_tree/1, copy_file/2, list_versions/1,
-         list_files/1, getenv/1, write_file/2]).
+         list_files/1, getenv/1, write_file/2, save_state/2, load_state/1,
+         now_ms/0]).
 
 %% Port-spawn `gleam build` in Dir, merging stderr into stdout. This is the
 %% campy_hot_ffi pattern: the build runs in its own OS process so the host VM
@@ -139,6 +140,72 @@ write_file(Path, Contents) ->
         {error, Reason} ->
             error_text("cannot create directory for ~ts: ~p", [Path, Reason])
     end.
+
+%% Broker state is a versioned compressed Erlang term, following the
+%% campy_manifest codec: an outer format tag, validation on load, and explicit
+%% errors on mismatch. Local phase-1 state is advisory, so Gleam callers treat
+%% any load error as an empty state.
+save_state(Path, State) ->
+    Native = unicode:characters_to_list(Path),
+    case filelib:ensure_dir(Native) of
+        ok ->
+            Term = {broker_state, 1, State},
+            case file:write_file(Native, term_to_binary(Term, [compressed])) of
+                ok ->
+                    {ok, nil};
+                {error, Reason} ->
+                    error_text("cannot write ~ts: ~p", [Path, Reason])
+            end;
+        {error, Reason} ->
+            error_text("cannot create directory for ~ts: ~p", [Path, Reason])
+    end.
+
+load_state(Path) ->
+    case file:read_file(unicode:characters_to_list(Path)) of
+        {ok, Binary} ->
+            try binary_to_term(Binary, [safe]) of
+                {broker_state, 1, State} ->
+                    case valid_state(State) of
+                        true -> {ok, State};
+                        false -> {error, <<"Invalid broker state file">>}
+                    end;
+                {broker_state, Version, _} when is_integer(Version) ->
+                    {error, unicode:characters_to_binary(
+                        io_lib:format("unsupported broker state version: ~p",
+                                      [Version]))};
+                _ ->
+                    {error, <<"Unsupported broker state format">>}
+            catch
+                _:_ -> {error, <<"Invalid broker state file">>}
+            end;
+        {error, enoent} ->
+            {error, <<"Broker state file not found">>};
+        {error, Reason} ->
+            error_text("cannot read ~ts: ~p", [Path, Reason])
+    end.
+
+valid_state({broker_state, Current, Deployments})
+  when is_list(Current), is_list(Deployments) ->
+    lists:all(fun valid_current/1, Current) andalso
+        lists:all(fun valid_deployment/1, Deployments);
+valid_state(_) ->
+    false.
+
+valid_current({App, Version}) ->
+    is_binary(App) andalso is_integer(Version);
+valid_current(_) ->
+    false.
+
+valid_deployment({deployment, App, Version, Runner, Status, Detail, AtMs}) ->
+    is_binary(App) andalso is_integer(Version) andalso is_binary(Runner)
+        andalso is_binary(Status) andalso is_binary(Detail)
+        andalso is_integer(AtMs);
+valid_deployment(_) ->
+    false.
+
+%% Wall-clock milliseconds for deployment records.
+now_ms() ->
+    erlang:system_time(millisecond).
 
 error_text(Format, Arguments) ->
     {error, error_text_text(Format, Arguments)}.
