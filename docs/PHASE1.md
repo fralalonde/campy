@@ -27,17 +27,21 @@ Merged to main, all `just check` green at merge time:
   golden update, reviewed and merged
 - **T2.1** `campy_broker/state_store` — deployment state, versioned term
   file, report state machine (`1289135`) — **Wave 2 complete**
+- **T2.2** `campy_runner` — in-VM runner; `update_code` validates beams
+  first, then pause → load → `apply_snapshot`, committing on the `Applied`
+  report; additive `campy_app.session_id/1` accessor (`33eecd2`)
 - Demo-data fix `b24098d`; schema-from-`project.version` fix `b032099`
 
-In flight: **T2.2** (in-VM runner package `campy_runner`) on branch
-`p1/t2.2-runner`.
+In flight: **T1.4** (`just build-app` integration target) on branch
+`p1/t1.4-build-target`.
 
 **P1.0 is complete** (T0.1 + T0.2 + T0.3 merged): the contracts milestone.
 Gate G0 is recorded as passed via per-task reviews (each task was reviewed
 against its brief before merge; no separate skim needed). Formal gate G1
-comes after T1.4/T2.2 in Wave 3.
+comes after T2.3 (IDE re-route) and T2.4.
 
-Not started: T1.4, T2.3–T2.6, all of P1.3 (gated on G2+G3).
+Not started: T2.3 (IDE re-route), T2.4, T2.6, stretch T2.5, all of P1.3
+(gated on G2+G3).
 
 Resuming cold: dispatch tasks per §1.5 using `.opencode/agents/p1.md` or a
 subagent on `opencode-go/deepseek-v4.1-flash`; review and merge per task;
