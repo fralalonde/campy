@@ -16,6 +16,7 @@ Merged to main, all `just check` green at merge time:
 
 - **T0.1** ADR 0002 (`docs/adr/0002-three-role-architecture.md`)
 - **T0.2** `campy_manifest` — manifest types, versioned codec, content digest
+- **T0.3** `campy_manifest/migration` — chain planner + executor (`d9c289f`)
 - **T1.1** `campy_app` — supervised app host, handler ABI v1 (Config carries
   the form; spec fix `2df24b1`)
 - **T1.2** `campy_appgen` — project module → app source tree; dep paths
@@ -24,17 +25,19 @@ Merged to main, all `just check` green at merge time:
   plus an out-of-brief fix the agent caught: the Cat Café golden was stale
   after the `b24098d` demo-data fix (main's `just check` was red); one-line
   golden update, reviewed and merged
+- **T2.1** `campy_broker/state_store` — deployment state, versioned term
+  file, report state machine (`1289135`) — **Wave 2 complete**
 - Demo-data fix `b24098d`; schema-from-`project.version` fix `b032099`
 
-In flight: nothing — suspended at the user's request. Next task is **T2.1**
-(broker store + deployment state), then Wave 3 (T1.4, T2.2).
+In flight: **T2.2** (in-VM runner package `campy_runner`) on branch
+`p1/t2.2-runner`.
 
 **P1.0 is complete** (T0.1 + T0.2 + T0.3 merged): the contracts milestone.
 Gate G0 is recorded as passed via per-task reviews (each task was reviewed
 against its brief before merge; no separate skim needed). Formal gate G1
 comes after T1.4/T2.2 in Wave 3.
 
-Not started: T1.4, T2.1–T2.6, all of P1.3 (gated on G2+G3).
+Not started: T1.4, T2.3–T2.6, all of P1.3 (gated on G2+G3).
 
 Resuming cold: dispatch tasks per §1.5 using `.opencode/agents/p1.md` or a
 subagent on `opencode-go/deepseek-v4.1-flash`; review and merge per task;
@@ -640,11 +643,13 @@ pub fn stop(ref: Ref) -> Nil
    reloaded from the manifest's provenance (the artifact deliberately does not
    embed the form in P1; it reloads from the same project the IDE has open,
    which is identical by construction).
-4. `update_code(new artifact)`: pause (suspend the app actor's processing —
-   simplest correct P1 mechanism: the runner stops delivering events and
-   awaits an ack of quiescence from the actor mailbox being empty via a
-   synchronous ping message), soft-purge + load new modules, re-apply the
-   current snapshot, resume delivery, report `CodeUpdated`. **Failure
+4. `update_code(new artifact)`: pause delivery (the runner stops forwarding
+   events), soft-purge + load new modules, then call
+   `campy_app.apply_snapshot` with the current form — the actor processes its
+   mailbox serially, so the `Applied` report that follows is the quiescence
+   barrier (it fires only after prior messages have drained; `campy_app` has
+   no synchronous ping API). Resume delivery on that report and report
+   `CodeUpdated`. **Failure
    anywhere before the purge leaves the old code and old session live —
    return the error, keep running, record a failed deployment (T2.1).** A
    purge failure (old module still executing) aborts the update the same
