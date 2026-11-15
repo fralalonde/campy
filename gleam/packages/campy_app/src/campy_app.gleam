@@ -91,6 +91,7 @@ type WatcherMessage {
   DeliverEvent(bridge.NativeEvent)
   ApplySnapshot(campy_form.Form)
   StopApp
+  SessionQuery(reply: process.Subject(Result(Int, String)))
   ActorStarting(pid: process.Pid, subject: process.Subject(ActorMessage))
   ActorStartFailed(reason: String)
   ActorStopped
@@ -104,6 +105,7 @@ type WatchEvent {
 type ActorMessage {
   ActorDeliver(bridge.NativeEvent)
   ActorApply(campy_form.Form)
+  ActorSessionQuery(reply: process.Subject(Result(Int, String)))
   ActorStop
 }
 
@@ -166,6 +168,19 @@ pub fn deliver(ref: Ref, event: bridge.NativeEvent) -> Nil {
 pub fn apply_snapshot(ref: Ref, form: campy_form.Form) -> Nil {
   let Ref(subject) = ref
   process.send(subject, ApplySnapshot(form))
+}
+
+// The live bridge session id of the app actor. The single poll owner uses this
+// to route only this app's native events when several sessions share a VM.
+// A restarted actor gets a fresh session, so callers refresh after `Restarted`.
+pub fn session_id(ref: Ref) -> Result(Int, String) {
+  let Ref(subject) = ref
+  let reply = process.new_subject()
+  process.send(subject, SessionQuery(reply))
+  case process.receive(reply, 5000) {
+    Ok(result) -> result
+    Error(Nil) -> Error("campy_app session query timed out")
+  }
 }
 
 // Clean stop: close the bridge session, shut the supervisor down, and report
@@ -311,6 +326,10 @@ fn handle_actor_message(
       dispatch_event(state, event)
       actor.continue(state)
     }
+    ActorSessionQuery(reply) -> {
+      process.send(reply, bridge.session_id(state.session))
+      actor.continue(state)
+    }
     ActorApply(form) -> {
       let snapshot = live_preview.snapshot(form)
       case preview_apply.apply(state.session, snapshot) {
@@ -385,6 +404,17 @@ fn handle_watcher_message(state: WatchState, message: WatcherMessage) -> Nil {
       forward(state, ActorApply(form))
       watcher_loop(state)
     }
+    SessionQuery(reply) ->
+      case state.actor {
+        Some(info) -> {
+          process.send(info.subject, ActorSessionQuery(reply))
+          watcher_loop(state)
+        }
+        None -> {
+          process.send(reply, Error("app is not running"))
+          watcher_loop(state)
+        }
+      }
     StopApp ->
       case state.stopping {
         True -> watcher_loop(state)
