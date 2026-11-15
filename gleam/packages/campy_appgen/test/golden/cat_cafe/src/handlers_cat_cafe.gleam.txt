@@ -7,5 +7,5 @@ pub fn pet_button_clicked() -> Nil {
 
 pub fn feed_button_clicked() -> Nil {
   // TODO: serve a snack.
-  Nil sfsfsdf how  aout
+  Nil
 }
