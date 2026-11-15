@@ -20,14 +20,16 @@ Merged to main, all `just check` green at merge time:
   the form; spec fix `2df24b1`)
 - **T1.2** `campy_appgen` — project module → app source tree; dep paths
   resolve from `generated/apps/<slug>` (`4cf851e`)
+- **T1.3** `campy_broker` — build port + artifact assembly (`cc17b1d`),
+  plus an out-of-brief fix the agent caught: the Cat Café golden was stale
+  after the `b24098d` demo-data fix (main's `just check` was red); one-line
+  golden update, reviewed and merged
 - Demo-data fix `b24098d`; schema-from-`project.version` fix `b032099`
 
-In flight: **T1.3** (`campy_broker` build port + artifact assembly) running on
-a background agent, branch `p1/t1.3-broker-build`, subagent session
-`ses_e2064cf1effemUDIBz3mZnx4dG`. When its commit appears: review the diff
-against the T1.3 brief, run `just check`, then merge.
+In flight: **T0.3** (migration chain planner) on branch `p1/t0.3-migration`,
+subagent session in the session database.
 
-Not started: T0.3, T1.4, T2.1–T2.6, all of P1.3 (gated on G2+G3).
+Not started: T1.4, T2.1–T2.6, all of P1.3 (gated on G2+G3).
 
 Resuming cold: dispatch tasks per §1.5 using `.opencode/agents/p1.md` or a
 subagent on `opencode-go/deepseek-v4.1-flash`; review and merge per task;
