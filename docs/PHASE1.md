@@ -478,10 +478,9 @@ model, phase 1 edition), assemble and digest the artifact.
 6. `pub fn build(project, module_id) -> Result(#(String, Manifest), String)`
    — generate → build → assemble → digest via `campy_manifest.digest_dir` →
    save manifest (capabilities `Capabilities(27, 1)`, natives `[]`,
-   migration `[]`, signature `None`, schema = the project codec's current
-   version (v9) — if `campy_form/project` does not already expose it as a
-   public constant, you may add one `pub const` there and say so in your
-   report). Returns artifact dir and manifest.
+   migration `[]`, signature `None`, schema = `campy_form/project`'s public
+   `version` constant (currently 11; read the constant, never hardcode the
+   number). Returns artifact dir and manifest.
 7. On build failure, return the FFI error verbatim; artifact dir untouched.
 
 **Files.** `gleam/packages/campy_broker/**` only.
