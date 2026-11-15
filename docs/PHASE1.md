@@ -10,6 +10,29 @@ supervised OTP application with a versioned artifact and migration chain; Run /
 F7 / Stop flow through local broker and runner seams; the developer sees no new
 concepts.**
 
+## Status (intermediate, 2026-11-15)
+
+Merged to main, all `just check` green at merge time:
+
+- **T0.1** ADR 0002 (`docs/adr/0002-three-role-architecture.md`)
+- **T0.2** `campy_manifest` — manifest types, versioned codec, content digest
+- **T1.1** `campy_app` — supervised app host, handler ABI v1 (Config carries
+  the form; spec fix `2df24b1`)
+- **T1.2** `campy_appgen` — project module → app source tree; dep paths
+  resolve from `generated/apps/<slug>` (`4cf851e`)
+- Demo-data fix `b24098d`; schema-from-`project.version` fix `b032099`
+
+In flight: **T1.3** (`campy_broker` build port + artifact assembly) running on
+a background agent, branch `p1/t1.3-broker-build`, subagent session
+`ses_e2064cf1effemUDIBz3mZnx4dG`. When its commit appears: review the diff
+against the T1.3 brief, run `just check`, then merge.
+
+Not started: T0.3, T1.4, T2.1–T2.6, all of P1.3 (gated on G2+G3).
+
+Resuming cold: dispatch tasks per §1.5 using `.opencode/agents/p1.md` or a
+subagent on `opencode-go/deepseek-v4.1-flash`; review and merge per task;
+gates per §6. Wave order per §7.
+
 Non-goals for this phase (do not build, do not stub beyond what briefs say):
 iroh transport, artifact signing/verification, broker federation, remote
 runners, web/CLI management UIs, app persistent-state migrations, config
