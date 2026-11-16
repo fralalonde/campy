@@ -36,7 +36,7 @@ pub fn main() {
 }
 
 fn interactive(project: campy_project.Project, dir: String) {
-  let shell = campy_wx.start("Campy", 980, 700)
+  let shell = campy_wx.start("Campy", 980, 760)
   let state = model.new(project) |> model.update(model.Log("Loaded " <> dir))
   let current_view = view(state)
 
@@ -46,7 +46,7 @@ fn interactive(project: campy_project.Project, dir: String) {
 }
 
 fn smoke(project: campy_project.Project, dir: String) {
-  let shell = campy_wx.start("Campy smoke", 980, 700)
+  let shell = campy_wx.start("Campy smoke", 980, 760)
   let started = campy_wx.now_ms()
   let state = model.new(project) |> model.update(model.Log("Loaded " <> dir))
   let current_view = view(state)
@@ -536,7 +536,7 @@ fn view(state: model.State) -> Node {
   |> campy_view.with_props([
     #("title", VText("Campy")),
     #("w", VInt(980)),
-    #("h", VInt(700)),
+    #("h", VInt(760)),
     #("layout", VText("column")),
   ])
   |> campy_view.with_children([
@@ -626,7 +626,7 @@ fn right_pane(state: model.State) -> Node {
         code_page(),
       ]),
     campy_view.node("editor", "console")
-      |> campy_view.with_props([#("h", VInt(150))])
+      |> campy_view.with_props([#("h", VInt(120))])
       |> campy_view.with_events([]),
   ])
 }
@@ -655,6 +655,6 @@ fn code_page() -> Node {
 
 fn inspector() -> Node {
   campy_view.node("grid", "inspector")
-  |> campy_view.with_props([#("h", VInt(110))])
+  |> campy_view.with_props([#("h", VInt(170))])
   |> campy_view.with_events(["change"])
 }

@@ -324,3 +324,35 @@ pub fn placed_and_find_node_lookup_test() {
 
   campy_design.placed(layout, "nope") |> should.equal(None)
 }
+
+pub fn freeze_materializes_layout_and_keeps_geometry_test() {
+  let tree =
+    form([#("layout", VText("column")), #("border", VInt(8))], [
+      box("a", 0, 0, 10, 20),
+      node("label", "b", [#("h", VInt(30))]),
+    ])
+
+  let frozen = campy_design.freeze(tree)
+
+  frozen |> campy_view.prop("layout") |> should.equal(Ok(VText("free")))
+
+  let before = campy_design.resolve(tree)
+  let after = campy_design.resolve(frozen)
+  after.places |> should.equal(before.places)
+}
+
+pub fn freeze_writes_explicit_child_geometry_test() {
+  let frozen =
+    campy_design.freeze(
+      form(
+        [#("layout", VText("column")), #("border", VInt(8)), #("gap", VInt(4))],
+        [box("a", 0, 0, 10, 20), node("label", "b", [#("h", VInt(30))])],
+      ),
+    )
+
+  let assert [a, b] = frozen.children
+  campy_design.int_prop(a, "x", 0) |> should.equal(8)
+  campy_design.int_prop(a, "y", 0) |> should.equal(8)
+  campy_design.int_prop(a, "w", 0) |> should.equal(584)
+  campy_design.int_prop(b, "y", 0) |> should.equal(32)
+}

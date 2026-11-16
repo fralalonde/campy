@@ -373,6 +373,7 @@ fn build_design(
 
   let props =
     node.props
+    |> list.filter(fn(prop) { prop.0 != "border" && prop.0 != "gap" })
     |> upsert("x", VInt(rect.x - parent_rect.x))
     |> upsert("y", VInt(rect.y - parent_rect.y))
     |> upsert("w", VInt(rect.w))
@@ -430,4 +431,47 @@ pub fn find_node(root: Node, id: String) -> Option(Node) {
         Error(Nil) -> None
       }
   }
+}
+
+/// Materialize the resolved layout into the document: every node gets explicit
+/// x/y/w/h relative to its parent and every container becomes free-layout.
+/// Called before a geometry edit so column/row forms cannot snap the edit back.
+pub fn freeze(root: Node) -> Node {
+  let layout = resolve(root)
+  let places =
+    dict.from_list(list.map(layout.places, fn(placed) { #(placed.id, placed) }))
+
+  freeze_node(root, Rect(0, 0, 0, 0), places)
+}
+
+fn freeze_node(
+  node: Node,
+  parent_rect: Rect,
+  places: dict.Dict(String, Placed),
+) -> Node {
+  let rect = case dict.get(places, node.id) {
+    Ok(placed) -> placed.rect
+    Error(Nil) -> Rect(0, 0, default_w(node.kind), default_h(node.kind))
+  }
+
+  let props =
+    node.props
+    |> list.filter(fn(prop) { prop.0 != "border" && prop.0 != "gap" })
+    |> upsert("x", VInt(rect.x - parent_rect.x))
+    |> upsert("y", VInt(rect.y - parent_rect.y))
+    |> upsert("w", VInt(rect.w))
+    |> upsert("h", VInt(rect.h))
+    |> upsert("layout", VText("free"))
+
+  campy_view.Node(
+    kind: node.kind,
+    id: node.id,
+    key: node.key,
+    props: props,
+    events: node.events,
+    children: list.map(node.children, fn(child) {
+      freeze_node(child, rect, places)
+    }),
+    extra: node.extra,
+  )
 }

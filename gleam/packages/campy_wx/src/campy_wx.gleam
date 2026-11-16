@@ -343,7 +343,7 @@ fn attach(
             Some(sizer) ->
               native.insert(
                 sizer,
-                index,
+                sizer_index(shell, parent),
                 child.ref,
                 parent.border,
                 True,
@@ -359,6 +359,21 @@ fn attach(
     }
     _, _ -> shell
   }
+}
+
+/// Number of already-attached layout children; chrome (menus, toolbar, status,
+/// pages) never occupies a sizer slot, so raw child indexes are wrong.
+fn sizer_index(shell: Shell, parent: Widget) -> Int {
+  list.fold(parent.children, 0, fn(count, id) {
+    case get_widget(shell, id) {
+      Ok(child) ->
+        case is_chrome(child.kind) {
+          True -> count
+          False -> count + 1
+        }
+      Error(_) -> count
+    }
+  })
 }
 
 fn is_chrome(kind: String) -> Bool {
@@ -762,26 +777,57 @@ pub fn show_selection(
   case rect {
     None ->
       list.each(shell.handles, fn(handle) { native.handle_show(handle, False) })
-    Some(#(x, y, width, height)) ->
+    Some(#(x, y, width, height)) -> {
+      let #(canvas_w, canvas_h) = canvas_size(shell)
+      let clamp_x = fn(x: Int) { int.max(0, int.min(x, canvas_w - 7)) }
+      let clamp_y = fn(y: Int) { int.max(0, int.min(y, canvas_h - 7)) }
+      let mid_x = clamp_x(x + width / 2 - 3)
+      let mid_y = clamp_y(y + height / 2 - 3)
+
       case shell.handles {
         [nw, n, ne, e, se, s, sw, west, grip, ..] -> {
-          place_handle(nw, x - 3, y - 3)
-          place_handle(n, x + width / 2 - 3, y - 3)
-          place_handle(ne, x + width - 4, y - 3)
-          place_handle(e, x + width - 4, y + height / 2 - 3)
-          place_handle(se, x + width - 4, y + height - 4)
-          place_handle(s, x + width / 2 - 3, y + height - 4)
-          place_handle(sw, x - 3, y + height - 4)
-          place_handle(west, x - 3, y + height / 2 - 3)
-          place_handle(grip, x + width / 2 - 12, int.max(y - 14, 0))
+          place_handle(nw, clamp_x(x - 3), clamp_y(y - 3), 7, 7)
+          place_handle(n, mid_x, clamp_y(y - 3), 7, 7)
+          place_handle(ne, clamp_x(x + width - 4), clamp_y(y - 3), 7, 7)
+          place_handle(e, clamp_x(x + width - 4), mid_y, 7, 7)
+          place_handle(
+            se,
+            clamp_x(x + width - 4),
+            clamp_y(y + height - 4),
+            7,
+            7,
+          )
+          place_handle(s, mid_x, clamp_y(y + height - 4), 7, 7)
+          place_handle(sw, clamp_x(x - 3), clamp_y(y + height - 4), 7, 7)
+          place_handle(west, clamp_x(x - 3), mid_y, 7, 7)
+          place_handle(
+            grip,
+            int.max(0, int.min(x + width / 2 - 12, canvas_w - 24)),
+            int.max(0, y - 14),
+            24,
+            8,
+          )
         }
         _ -> Nil
       }
+    }
   }
 }
 
-fn place_handle(handle: Dynamic, x: Int, y: Int) -> Nil {
-  native.handle_place(handle, x, y)
+fn canvas_size(shell: Shell) -> #(Int, Int) {
+  case
+    list.find(dict.values(shell.widgets), fn(widget) { widget.kind == "canvas" })
+  {
+    Ok(widget) -> #(
+      plan.int_of(widget.props, "w") |> plan.unwrap_or(600),
+      plan.int_of(widget.props, "h") |> plan.unwrap_or(400),
+    )
+    Error(Nil) -> #(600, 400)
+  }
+}
+
+fn place_handle(handle: Dynamic, x: Int, y: Int, w: Int, h: Int) -> Nil {
+  native.handle_place(handle, x, y, w, h)
   native.handle_show(handle, True)
   native.handle_raise(handle)
 }

@@ -13,7 +13,7 @@
     editor/2, editor_set/3,
     open_dialog/2, save_dialog/3,
     canvas/2, paint_canvas/4, connect_design/2,
-    handles_create/2, handle_place/3, handle_show/2, handle_raise/1,
+    handles_create/2, handle_place/5, handle_show/2, handle_raise/1,
     capture/1, release/1,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
@@ -238,10 +238,10 @@ set_menubar(Frame, MenuBar) ->
     ok.
 
 toolbar(Frame) ->
-    wxFrame:createToolBar(Frame).
+    wxFrame:createToolBar(Frame, [{style, ?wxTB_TEXT}]).
 
 tool(ToolBar, Id, Label) ->
-    wxToolBar:addTool(ToolBar, Id, Label, wxBitmap:new()),
+    wxToolBar:addTool(ToolBar, Id, Label, wxBitmap:new({16, 16})),
     ToolBar.
 
 realize_toolbar(ToolBar) ->
@@ -271,7 +271,7 @@ select_page(Notebook, Index) ->
     ok.
 
 tree(Parent, Id) ->
-    wxTreeCtrl:new(Parent, [{id, Id}, {style, ?wxTR_HAS_BUTTONS}]).
+    wxTreeCtrl:new(Parent, [{id, Id}, {style, ?wxTR_HAS_BUTTONS bor ?wxTR_HIDE_ROOT}]).
 
 tree_set(Tree, Items) ->
     wxTreeCtrl:deleteAllItems(Tree),
@@ -400,17 +400,17 @@ save_dialog(Frame, Wildcard, Default) ->
 
 canvas(Parent, Id) ->
     Panel = wxPanel:new(Parent, [{winid, Id}, {style, ?wxFULL_REPAINT_ON_RESIZE}]),
-    wxPanel:setBackgroundColour(Panel, {40, 42, 48}),
+    wxPanel:setBackgroundColour(Panel, {245, 246, 248}),
     wxPanel:connect(Panel, paint, []),
     Panel.
 
 paint_canvas(Canvas, Width, Height, GridStep) ->
     DC = wxBufferedPaintDC:new(Canvas),
-    wxDC:setBackground(DC, wxBrush:new({40, 42, 48})),
+    wxDC:setBackground(DC, wxBrush:new({245, 246, 248})),
     wxDC:clear(DC),
-    wxDC:setPen(DC, wxPen:new({58, 60, 68})),
+    wxDC:setPen(DC, wxPen:new({226, 228, 232})),
     draw_grid(DC, Width, Height, GridStep),
-    wxDC:setPen(DC, wxPen:new({120, 124, 140})),
+    wxDC:setPen(DC, wxPen:new({180, 184, 190})),
     wxDC:drawLine(DC, {0, 0}, {Width - 1, 0}),
     wxDC:drawLine(DC, {Width - 1, 0}, {Width - 1, Height - 1}),
     wxDC:drawLine(DC, {Width - 1, Height - 1}, {0, Height - 1}),
@@ -435,14 +435,33 @@ draw_grid(DC, Width, Height, Step) ->
 %% their command event, everything else through left_down.
 
 connect_design(Ref, Kind) ->
-    catch wxWindow:connect(Ref, left_down, []),
     case Kind of
-        <<"button">> -> catch wxButton:connect(Ref, command_button_clicked, []);
-        <<"checkbox">> -> catch wxCheckBox:connect(Ref, command_checkbox_clicked, []);
-        <<"radio">> -> catch wxRadioButton:connect(Ref, command_radiobutton_selected, []);
-        <<"choice">> -> catch wxChoice:connect(Ref, command_choice_selected, []);
-        <<"list">> -> catch wxListBox:connect(Ref, command_listbox_selected, []);
-        _ -> ok
+        <<"canvas">> -> catch wxPanel:connect(Ref, left_down, []);
+        <<"panel">> -> catch wxPanel:connect(Ref, left_down, []);
+        <<"group">> -> catch wxPanel:connect(Ref, left_down, []);
+        <<"page">> -> catch wxPanel:connect(Ref, left_down, []);
+        <<"label">> -> catch wxStaticText:connect(Ref, left_down, []);
+        <<"text">> -> catch wxTextCtrl:connect(Ref, left_down, []);
+        <<"memo">> -> catch wxTextCtrl:connect(Ref, left_down, []);
+        <<"slider">> -> catch wxSlider:connect(Ref, left_down, []);
+        <<"progress">> -> catch wxGauge:connect(Ref, left_down, []);
+        <<"picture">> -> catch wxStaticBitmap:connect(Ref, left_down, []);
+        <<"button">> ->
+            catch wxButton:connect(Ref, left_down, []),
+            catch wxButton:connect(Ref, command_button_clicked, []);
+        <<"checkbox">> ->
+            catch wxCheckBox:connect(Ref, left_down, []),
+            catch wxCheckBox:connect(Ref, command_checkbox_clicked, []);
+        <<"radio">> ->
+            catch wxRadioButton:connect(Ref, left_down, []),
+            catch wxRadioButton:connect(Ref, command_radiobutton_selected, []);
+        <<"choice">> ->
+            catch wxChoice:connect(Ref, left_down, []),
+            catch wxChoice:connect(Ref, command_choice_selected, []);
+        <<"list">> ->
+            catch wxListBox:connect(Ref, left_down, []),
+            catch wxListBox:connect(Ref, command_listbox_selected, []);
+        _ -> catch wxWindow:connect(Ref, left_down, [])
     end,
     ok.
 
@@ -463,9 +482,9 @@ create_handle(Parent, Id, _Role) ->
     Ref.
 
 connect_handle(Ref) ->
-    catch wxWindow:connect(Ref, left_down, []),
-    catch wxWindow:connect(Ref, motion, []),
-    catch wxWindow:connect(Ref, left_up, []),
+    catch wxPanel:connect(Ref, left_down, []),
+    catch wxPanel:connect(Ref, motion, []),
+    catch wxPanel:connect(Ref, left_up, []),
     ok.
 
 capture(Ref) ->
@@ -476,9 +495,9 @@ release(Ref) ->
     catch wxWindow:releaseMouse(Ref),
     ok.
 
-handle_place(Ref, X, Y) ->
+handle_place(Ref, X, Y, Width, Height) ->
     wxWindow:move(Ref, {X, Y}),
-    wxWindow:setSize(Ref, {7, 7}),
+    wxWindow:setSize(Ref, {Width, Height}),
     ok.
 
 handle_show(Ref, Visible) ->
@@ -534,7 +553,8 @@ next_message(Timeout) ->
         {wx, Id, _Obj, _UserData, Event} when is_tuple(Event) ->
             case element(1, Event) of
                 wxMouse ->
-                    {mouse_event, Id, element(2, Event), element(3, Event), element(4, Event)};
+                    Type = atom_to_binary(element(2, Event), utf8),
+                    {mouse_event, Id, Type, element(3, Event), element(4, Event)};
                 _ ->
                     {wx_event, Id, event_type(Event)}
             end;

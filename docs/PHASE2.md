@@ -36,13 +36,17 @@ handlers, and Run deploys to a local peer node and attaches a view.**
 - **Gate G1 passed** (human check). M1 is complete.
 - **T2.1 (part 1)** `campy_design` — absolute geometry, hit-testing, move/resize
   (19 tests) — done.
-- **T2.1 (part 2)** canvas, selection, and gestures — done: native controls on
-  a painted grid, design-mode click selection, nine chrome handles (eight
-  resize + move grip) with mouse capture, live drag preview, and commits
-  through `campy_design.set_rect` + model undo. Form/Code pages; the inspector
-  follows the selection and shows control geometry. Sizer minimum sizes were
-  fixed (previously a zero width skipped the height too, which hid the
-  inspector and console).
+- **T2.1 (part 2)** canvas, selection, and gestures — done and **verified under
+  Xvfb with xdotool + screenshots** (`scripts/ui_probe.sh`): native controls on
+  a painted grid, hit-tested canvas selection, nine chrome handles (eight
+  resize + move grip) with mouse capture, live previews, commits through
+  `campy_design.freeze` + `set_rect` + model undo, and module-switch persistence.
+- Bugs found by the probe: mouse event types were atoms while Gleam patterns
+  were binaries; `wxWindow:connect` silently failed for concrete widgets
+  (class-specific `connect` is required); sizer inserts used raw child indexes
+  (chrome children inflated the index); zero-width min sizes skipped heights;
+  column-layout edits snapped back until the container was frozen to free
+  layout; the inspector showed document props instead of resolved geometry.
 - Toolkit decision: stay on OTP wx/GTK. Qt has no OTP binding; wxQt exists but is
   incomplete and OTP's driver cannot be rebuilt against it. Option 2 (native
   children + selection chrome) is therefore built on wx/GTK: real child

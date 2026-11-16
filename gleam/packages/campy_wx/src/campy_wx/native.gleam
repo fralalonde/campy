@@ -254,7 +254,13 @@ pub fn connect_design(ref: Dynamic, kind: String) -> Nil
 pub fn handles_create(parent: Dynamic, base: Int) -> List(Dynamic)
 
 @external(erlang, "campy_wx_native", "handle_place")
-pub fn handle_place(ref: Dynamic, x: Int, y: Int) -> Nil
+pub fn handle_place(
+  ref: Dynamic,
+  x: Int,
+  y: Int,
+  width: Int,
+  height: Int,
+) -> Nil
 
 @external(erlang, "campy_wx_native", "handle_show")
 pub fn handle_show(ref: Dynamic, visible: Bool) -> Nil

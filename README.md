@@ -52,6 +52,13 @@ just fmt
 just clean
 ```
 
+Headless X11 probe (Xvfb + xdotool + ImageMagick + openbox) captures the IDE
+and drives clicks/drags; screenshots land in `generated/ui/`:
+
+```sh
+scripts/ui_probe.sh xvfb
+```
+
 Renderer harness (needs a display):
 
 ```sh
