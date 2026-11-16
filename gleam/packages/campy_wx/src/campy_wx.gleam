@@ -27,6 +27,8 @@ pub type Incoming {
   Idle
   /// The top-level window asked to close.
   Closed
+  /// A canvas needs painting; the caller should call `paint`.
+  Paint(id: String)
 }
 
 pub opaque type Shell {
@@ -36,6 +38,8 @@ pub opaque type Shell {
     widgets: Dict(String, Widget),
     by_wx: Dict(Int, String),
     next_wx: Int,
+    handles: List(Dynamic),
+    handle_base: Int,
   )
 }
 
@@ -87,6 +91,8 @@ pub fn start(title: String, width: Int, height: Int) -> Shell {
     widgets: dict.from_list([#("__window__", frame_widget)]),
     by_wx: dict.from_list([#(frame_id, "__window__")]),
     next_wx: frame_id + 1,
+    handles: [],
+    handle_base: 900_000,
   )
 }
 
@@ -242,12 +248,17 @@ fn create_node(
     "tree" -> Ok(native.tree(parent.ref, wx_id))
     "grid" -> Ok(native.grid(parent.ref, wx_id))
     "editor" -> Ok(native.editor(parent.ref, wx_id))
+    "canvas" -> Ok(native.canvas(parent.ref, wx_id))
     "window" | "form" -> Error("nested window is not supported")
     other -> Error("unknown widget kind: " <> other)
   }
 
   use ref <- result.try(created)
-  native.connect(ref, kind)
+
+  case plan.bool_of(node.props, "design") |> plan.unwrap_or(False) {
+    True -> native.connect_design(ref, kind)
+    False -> native.connect(ref, kind)
+  }
 
   case kind {
     "menubar" -> native.set_menubar(shell.frame, ref)
@@ -286,6 +297,12 @@ fn create_node(
   case kind {
     "toolbar" -> native.realize_toolbar(ref)
     _ -> Nil
+  }
+
+  let shell = case kind, list.is_empty(shell.handles) {
+    "canvas", True ->
+      Shell(..shell, handles: native.handles_create(ref, shell.handle_base))
+    _, _ -> shell
   }
 
   Ok(#(shell, widget))
@@ -639,6 +656,8 @@ fn remove_subtree_registry(shell: Shell, id: String) -> Shell {
 pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
   case native.next_message(timeout_ms) {
     native.WxEvent(wx_id, "close") if wx_id == shell.frame_id -> Closed
+    native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
+    native.WxEvent(wx_id, "mouse") -> design_event(shell, wx_id)
     native.WxEvent(wx_id, "command") -> command_event(shell, wx_id)
     native.WxEvent(_wx_id, _event_type) -> Idle
     native.Other(message) -> Message(message)
@@ -653,14 +672,86 @@ fn command_event(shell: Shell, wx_id: Int) -> Incoming {
       case dict.get(shell.widgets, view_id) {
         Error(Nil) -> Idle
         Ok(widget) -> {
-          let key = plan.event_key(widget.kind)
-          case list.contains(widget.events, key) {
-            False -> Idle
-            True -> Event(widget.view_id, key, event_value(widget))
+          case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
+            True -> Event(widget.view_id, "select", VText(widget.view_id))
+            False -> {
+              let key = plan.event_key(widget.kind)
+              case list.contains(widget.events, key) {
+                False -> Idle
+                True -> Event(widget.view_id, key, event_value(widget))
+              }
+            }
           }
         }
       }
   }
+}
+
+fn paint_event(shell: Shell, wx_id: Int) -> Incoming {
+  case dict.get(shell.by_wx, wx_id) {
+    Ok(view_id) -> Paint(view_id)
+    Error(Nil) -> Idle
+  }
+}
+
+fn design_event(shell: Shell, wx_id: Int) -> Incoming {
+  case dict.get(shell.by_wx, wx_id) {
+    Error(Nil) -> Idle
+    Ok(view_id) ->
+      case dict.get(shell.widgets, view_id) {
+        Error(Nil) -> Idle
+        Ok(widget) ->
+          case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
+            True -> Event(widget.view_id, "select", VText(widget.view_id))
+            False -> Idle
+          }
+      }
+  }
+}
+
+/// Paint a canvas: background, grid, and border, in form coordinates.
+pub fn paint(shell: Shell, id: String) -> Nil {
+  case get_widget(shell, id) {
+    Error(_) -> Nil
+    Ok(widget) ->
+      case widget.kind {
+        "canvas" -> {
+          let width = plan.int_of(widget.props, "w") |> plan.unwrap_or(400)
+          let height = plan.int_of(widget.props, "h") |> plan.unwrap_or(300)
+          let grid = plan.int_of(widget.props, "grid") |> plan.unwrap_or(24)
+          native.paint_canvas(widget.ref, width, height, grid)
+        }
+        _ -> Nil
+      }
+  }
+}
+
+/// Place the four selection handles around a control's rectangle (in canvas
+/// coordinates). `None` hides them.
+pub fn show_selection(
+  shell: Shell,
+  rect: Option(#(Int, Int, Int, Int)),
+) -> Nil {
+  case rect {
+    None ->
+      list.each(shell.handles, fn(handle) { native.handle_show(handle, False) })
+    Some(#(x, y, w, h)) ->
+      case shell.handles {
+        [nw, ne, sw, se, ..] -> {
+          place_handle(nw, x - 3, y - 3)
+          place_handle(ne, x + w - 4, y - 3)
+          place_handle(sw, x - 3, y + h - 4)
+          place_handle(se, x + w - 4, y + h - 4)
+        }
+        _ -> Nil
+      }
+  }
+}
+
+fn place_handle(handle: Dynamic, x: Int, y: Int) -> Nil {
+  native.handle_place(handle, x, y)
+  native.handle_show(handle, True)
+  native.handle_raise(handle)
 }
 
 fn event_value(widget: Widget) -> Value {

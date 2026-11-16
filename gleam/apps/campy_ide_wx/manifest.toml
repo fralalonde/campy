@@ -7,6 +7,7 @@
 # You should check this file into your source control repository.
 
 packages = [
+  { name = "campy_design", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_design" },
   { name = "campy_ide_model", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_project", "campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_ide_model" },
   { name = "campy_project", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_project" },
   { name = "campy_view", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../../packages/campy_view" },
@@ -16,6 +17,7 @@ packages = [
 ]
 
 [requirements]
+campy_design = { path = "../../packages/campy_design" }
 campy_ide_model = { path = "../../packages/campy_ide_model" }
 campy_project = { path = "../../packages/campy_project" }
 campy_view = { path = "../../packages/campy_view" }

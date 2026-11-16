@@ -1,15 +1,17 @@
 //// Campy IDE shell on wx.
 ////
 //// Loads a project directory, renders the shell view, and forwards wx events
-//// into `campy_ide_model`. There is no document logic here: the model decides,
-//// this module renders and dispatches.
+//// into `campy_ide_model`. Document logic lives in the model; this module
+//// builds the view tree, applies its diffs, and fills data-driven panes.
 ////
 //// Run: `CAMPY_PROJECT=examples/demo gleam run` from this directory.
-//// Smoke: `CAMPY_WX_SMOKE=1 CAMPY_PROJECT=../..` ... (no display loop).
+//// Smoke: `CAMPY_WX_SMOKE=1` runs mount/switch/select/close without a loop.
 
+import campy_design
 import campy_ide_model as model
 import campy_project
 import campy_view.{type Node, VBool, VInt, VText}
+import campy_view/diff
 import campy_wx
 import campy_wx/plan
 import gleam/int
@@ -34,25 +36,25 @@ pub fn main() {
 }
 
 fn interactive(project: campy_project.Project, dir: String) {
-  let shell = campy_wx.start("Campy", 980, 680)
-  let assert Ok(shell) = campy_wx.mount(shell, view())
-
+  let shell = campy_wx.start("Campy", 980, 700)
   let state = model.new(project) |> model.update(model.Log("Loaded " <> dir))
+  let current_view = view(state)
 
+  let assert Ok(shell) = campy_wx.mount(shell, current_view)
   refresh(shell, None, state)
-  loop(shell, state, dir)
+  loop(shell, state, current_view, dir)
 }
 
 fn smoke(project: campy_project.Project, dir: String) {
-  let shell = campy_wx.start("Campy smoke", 980, 680)
+  let shell = campy_wx.start("Campy smoke", 980, 700)
   let started = campy_wx.now_ms()
-  let assert Ok(shell) = campy_wx.mount(shell, view())
+  let state = model.new(project) |> model.update(model.Log("Loaded " <> dir))
+  let current_view = view(state)
+
+  let assert Ok(shell) = campy_wx.mount(shell, current_view)
   io.println(
     "[ide] mount " <> int.to_string(campy_wx.now_ms() - started) <> "ms",
   )
-
-  let state = model.new(project) |> model.update(model.Log("Loaded " <> dir))
-
   refresh(shell, None, state)
 
   let previous = state
@@ -60,25 +62,52 @@ fn smoke(project: campy_project.Project, dir: String) {
     [_, second, ..] -> model.update(state, model.OpenModule(second.slug))
     _ -> state
   }
+  let shell = rebind(shell, current_view, view(state))
+  let state = select_first_control(state)
   refresh(shell, Some(previous), state)
+
   io.println(
     "[ide] active="
     <> active_slug(state)
-    <> " console="
-    <> int.to_string(list.length(state.console)),
+    <> " selection="
+    <> int.to_string(list.length(state.selection)),
   )
   io.println("[ide] smoke ok")
-
   campy_wx.close(shell)
 }
 
-fn loop(shell: campy_wx.Shell, state: model.State, dir: String) {
+fn rebind(shell: campy_wx.Shell, previous: Node, next: Node) -> campy_wx.Shell {
+  case campy_wx.apply(shell, diff.diff(previous, next)) {
+    Ok(shell) -> shell
+    Error(error) -> {
+      io.println("[ide] view error: " <> error)
+      shell
+    }
+  }
+}
+
+fn select_first_control(state: model.State) -> model.State {
+  case model.active_module(state) {
+    Ok(module) ->
+      case module.form.view.children {
+        [first, ..] -> model.select_controls(state, [first.id])
+        [] -> state
+      }
+    Error(_) -> state
+  }
+}
+
+fn loop(shell: campy_wx.Shell, state: model.State, current: Node, dir: String) {
   case campy_wx.next(shell, 100) {
     campy_wx.Closed -> {
       campy_wx.close(shell)
       io.println("[ide] closed")
     }
-    campy_wx.Event(id, key, value) -> {
+    campy_wx.Paint(id) -> {
+      campy_wx.paint(shell, id)
+      loop(shell, state, current, dir)
+    }
+    campy_wx.Event(id, key, value) ->
       case id {
         "menu-quit" -> {
           campy_wx.close(shell)
@@ -87,13 +116,14 @@ fn loop(shell: campy_wx.Shell, state: model.State, dir: String) {
         _ -> {
           let previous = state
           let state = handle(state, dir, id, key, value)
+          let next = view(state)
+          let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
-          loop(shell, state, dir)
+          loop(shell, state, next, dir)
         }
       }
-    }
-    campy_wx.Message(_message) -> loop(shell, state, dir)
-    campy_wx.Idle -> loop(shell, state, dir)
+    campy_wx.Message(_message) -> loop(shell, state, current, dir)
+    campy_wx.Idle -> loop(shell, state, current, dir)
   }
 }
 
@@ -110,22 +140,33 @@ fn handle(
     "menu-redo" | "tool-redo" -> model.update(state, model.Redo)
     "menu-toggle" | "tool-toggle" -> model.update(state, model.ToggleCodeView)
     "modules" ->
-      case key {
-        "select" -> open_key(state, value)
-        _ -> state
+      case key, value {
+        "select", VText(slug) -> tree_selected(state, slug)
+        _, _ -> state
       }
-    _ -> model.update(state, model.Log("event " <> id <> "." <> key))
+    _ -> select_or_log(state, id, key)
   }
 }
 
-fn open_key(state: model.State, value: campy_view.Value) -> model.State {
-  case value {
-    VText(key) ->
-      case campy_project.module(state.project, key) {
-        Ok(_module) -> model.update(state, model.OpenModule(key))
-        Error(_) -> model.update(state, model.Log("not a module: " <> key))
+fn select_or_log(state: model.State, id: String, key: String) -> model.State {
+  case id {
+    "canvas" -> model.select_controls(state, [])
+    _ ->
+      case model.active_module(state) {
+        Ok(module) ->
+          case campy_design.find_node(module.form.view, id) {
+            Some(_node) -> model.select_controls(state, [id])
+            None -> model.update(state, model.Log("event " <> id <> "." <> key))
+          }
+        Error(_) -> model.update(state, model.Log("event " <> id <> "." <> key))
       }
-    _ -> state
+  }
+}
+
+fn tree_selected(state: model.State, id: String) -> model.State {
+  case campy_project.module(state.project, id) {
+    Ok(_module) -> model.update(state, model.OpenModule(id))
+    Error(_) -> state
   }
 }
 
@@ -146,6 +187,7 @@ fn refresh(
       campy_wx.set_tree(shell, "modules", tree_items(state))
       set_code(shell, state)
       set_console(shell, state)
+      campy_wx.select_page(shell, "tabs", page_index(state))
     }
     Some(previous) -> {
       case previous.active == state.active {
@@ -156,11 +198,23 @@ fn refresh(
         False -> set_console(shell, state)
         True -> Nil
       }
+      case previous.code_view == state.code_view {
+        False -> campy_wx.select_page(shell, "tabs", page_index(state))
+        True -> Nil
+      }
     }
   }
 
   campy_wx.set_grid(shell, "inspector", inspector_rows(state))
   campy_wx.set_status(shell, status_text(state))
+  campy_wx.show_selection(shell, selection_rect(state))
+}
+
+fn page_index(state: model.State) -> Int {
+  case state.code_view {
+    True -> 1
+    False -> 0
+  }
 }
 
 fn set_code(shell: campy_wx.Shell, state: model.State) {
@@ -172,6 +226,22 @@ fn set_code(shell: campy_wx.Shell, state: model.State) {
 
 fn set_console(shell: campy_wx.Shell, state: model.State) {
   campy_wx.set_editor(shell, "console", model.console_text(state), True)
+}
+
+fn selection_rect(state: model.State) -> Option(#(Int, Int, Int, Int)) {
+  case state.selection {
+    [] -> None
+    [id, ..] ->
+      case model.active_module(state) {
+        Error(_) -> None
+        Ok(module) ->
+          case campy_design.placed(campy_design.resolve(module.form.view), id) {
+            Some(placed) ->
+              Some(#(placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h))
+            None -> None
+          }
+      }
+  }
 }
 
 fn status_text(state: model.State) -> String {
@@ -194,6 +264,13 @@ pub fn tree_items(state: model.State) -> List(plan.TreeItem) {
 }
 
 pub fn inspector_rows(state: model.State) -> List(List(String)) {
+  case state.selection {
+    [] -> summary_rows(state)
+    [id, ..] -> control_rows(state, id)
+  }
+}
+
+fn summary_rows(state: model.State) -> List(List(String)) {
   [
     ["Field", "Value"],
     ["Project", state.project.title],
@@ -203,6 +280,33 @@ pub fn inspector_rows(state: model.State) -> List(List(String)) {
   ]
 }
 
+fn control_rows(state: model.State, id: String) -> List(List(String)) {
+  case model.active_module(state) {
+    Error(_) -> summary_rows(state)
+    Ok(module) ->
+      case campy_design.find_node(module.form.view, id) {
+        None -> summary_rows(state)
+        Some(node) -> [
+          ["Field", "Value"],
+          ["id", id],
+          ["kind", node.kind],
+          ["x", int.to_string(campy_design.int_prop(node, "x", 0))],
+          ["y", int.to_string(campy_design.int_prop(node, "y", 0))],
+          ["w", int.to_string(campy_design.int_prop(node, "w", 0))],
+          ["h", int.to_string(campy_design.int_prop(node, "h", 0))],
+          ["text", text_of(node)],
+        ]
+      }
+  }
+}
+
+fn text_of(node: Node) -> String {
+  case campy_view.prop(node, "text") {
+    Ok(VText(text)) -> text
+    _ -> ""
+  }
+}
+
 fn active_slug(state: model.State) -> String {
   case state.active {
     Some(slug) -> slug
@@ -210,19 +314,29 @@ fn active_slug(state: model.State) -> String {
   }
 }
 
-fn view() -> Node {
+fn canvas_node(state: model.State) -> Node {
+  case model.active_module(state) {
+    Ok(module) -> campy_design.design_view(module.form.view, "canvas")
+    Error(_) ->
+      campy_view.node("canvas", "canvas")
+      |> campy_view.with_props([#("h", VInt(300)), #("w", VInt(400))])
+      |> campy_view.with_events(["select"])
+  }
+}
+
+fn view(state: model.State) -> Node {
   campy_view.node("window", "main")
   |> campy_view.with_props([
     #("title", VText("Campy")),
     #("w", VInt(980)),
-    #("h", VInt(680)),
+    #("h", VInt(700)),
     #("layout", VText("column")),
   ])
   |> campy_view.with_children([
     menubar(),
     toolbar(),
     status(),
-    body(),
+    body(state),
     inspector(),
   ])
 }
@@ -275,7 +389,7 @@ fn status() -> Node {
   |> campy_view.with_props([#("text", VText("Ready"))])
 }
 
-fn body() -> Node {
+fn body(state: model.State) -> Node {
   campy_view.node("panel", "body")
   |> campy_view.with_props([
     #("layout", VText("row")),
@@ -286,11 +400,11 @@ fn body() -> Node {
     campy_view.node("tree", "modules")
       |> campy_view.with_props([#("w", VInt(220))])
       |> campy_view.with_events(["select"]),
-    right_pane(),
+    right_pane(state),
   ])
 }
 
-fn right_pane() -> Node {
+fn right_pane(state: model.State) -> Node {
   campy_view.node("panel", "right")
   |> campy_view.with_props([
     #("layout", VText("column")),
@@ -301,20 +415,34 @@ fn right_pane() -> Node {
       |> campy_view.with_props([#("grow", VBool(True))])
       |> campy_view.with_events(["change"])
       |> campy_view.with_children([
-        campy_view.node("page", "page-code")
-        |> campy_view.with_props([
-          #("text", VText("Code")),
-          #("layout", VText("column")),
-        ])
-        |> campy_view.with_children([
-          campy_view.node("editor", "code")
-          |> campy_view.with_props([#("grow", VBool(True))])
-          |> campy_view.with_events([]),
-        ]),
+        form_page(state),
+        code_page(),
       ]),
     campy_view.node("editor", "console")
       |> campy_view.with_props([#("h", VInt(150))])
       |> campy_view.with_events([]),
+  ])
+}
+
+fn form_page(state: model.State) -> Node {
+  campy_view.node("page", "page-form")
+  |> campy_view.with_props([
+    #("text", VText("Form")),
+    #("layout", VText("free")),
+  ])
+  |> campy_view.with_children([canvas_node(state)])
+}
+
+fn code_page() -> Node {
+  campy_view.node("page", "page-code")
+  |> campy_view.with_props([
+    #("text", VText("Code")),
+    #("layout", VText("column")),
+  ])
+  |> campy_view.with_children([
+    campy_view.node("editor", "code")
+    |> campy_view.with_props([#("grow", VBool(True))])
+    |> campy_view.with_events([]),
   ])
 }
 

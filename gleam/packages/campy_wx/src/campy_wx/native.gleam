@@ -240,6 +240,27 @@ pub fn open_dialog(frame: Dynamic, wildcard: String) -> String
 @external(erlang, "campy_wx_native", "save_dialog")
 pub fn save_dialog(frame: Dynamic, wildcard: String, default: String) -> String
 
+@external(erlang, "campy_wx_native", "canvas")
+pub fn canvas(parent: Dynamic, id: Int) -> Dynamic
+
+@external(erlang, "campy_wx_native", "paint_canvas")
+pub fn paint_canvas(ref: Dynamic, width: Int, height: Int, grid: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "connect_design")
+pub fn connect_design(ref: Dynamic, kind: String) -> Nil
+
+@external(erlang, "campy_wx_native", "handles_create")
+pub fn handles_create(parent: Dynamic, base: Int) -> List(Dynamic)
+
+@external(erlang, "campy_wx_native", "handle_place")
+pub fn handle_place(ref: Dynamic, x: Int, y: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "handle_show")
+pub fn handle_show(ref: Dynamic, visible: Bool) -> Nil
+
+@external(erlang, "campy_wx_native", "handle_raise")
+pub fn handle_raise(ref: Dynamic) -> Nil
+
 @external(erlang, "campy_wx_native", "now_ms")
 pub fn now_ms() -> Int
 

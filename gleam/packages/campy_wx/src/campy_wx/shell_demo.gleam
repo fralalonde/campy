@@ -164,6 +164,10 @@ fn loop(shell: campy_wx.Shell) {
         _ -> loop(shell)
       }
     }
+    campy_wx.Paint(id) -> {
+      campy_wx.paint(shell, id)
+      loop(shell)
+    }
     campy_wx.Message(_message) -> loop(shell)
     campy_wx.Idle -> loop(shell)
   }

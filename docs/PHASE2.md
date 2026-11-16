@@ -35,7 +35,10 @@ handlers, and Run deploys to a local peer node and attaches a view.**
   gone. `just check` (Gleam only) is green.
 - **Gate G1 passed** (human check). M1 is complete.
 - **T2.1 (part 1)** `campy_design` — absolute geometry, hit-testing, move/resize
-  (14 tests) — done. Canvas next.
+  (19 tests) — done.
+- **T2.1 (part 2)** canvas rendering and selection — done: native controls on a
+  painted grid, design-mode click selection, four corner handles, Form/Code
+  pages, inspector follows the selection. Drag/resize gestures next.
 - Toolkit decision: stay on OTP wx/GTK. Qt has no OTP binding; wxQt exists but is
   incomplete and OTP's driver cannot be rebuilt against it. Option 2 (native
   children + selection chrome) is therefore built on wx/GTK: real child
@@ -315,20 +318,16 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   hit-testing, deepest-container hit-testing, and move/resize/set-rect edits
   that clamp to a minimum and clear alignment on an explicit drag. Golden tests
   cover each rule.
-- **Part 2, next (option 2 on wx/GTK):** a `canvas` widget kind that hosts real
-  wx child controls at the resolved rectangles, paints the grid and the module
-  window frame, and manages selection:
-  - eight small handle widgets (raised siblings) around the selection, which
-    receive the resize drags;
-  - `wxOverlay`/`wxDCOverlay` for the marquee and the move/resize outline, drawn
-    over native children without invalidating them;
-  - a select tool: click selects (Ctrl toggles), drag from empty space or an
-    unselected control draws the marquee, drag from a selected control moves the
-    group and commits on release;
-  - selection reports to `campy_ide_model`, so the inspector and the canvas
-    share one selection.
-- Canvas state stays in the shell; committed geometry goes through
-  `campy_design.set_rect` and then `campy_ide_model.commit` for undo.
+- **Part 2, delivered:** `canvas` kind hosting real wx children at the
+  resolved rectangles; painted grid and frame; design-mode selection via
+  per-control mouse/command events (`design` prop, so the module tree keeps its
+  normal select semantics); four raised corner handle widgets; Form and Code
+  pages; the inspector reflects the canvas selection, and `campy_design` gives
+  the handle rectangle.
+- **Part 2, remaining:** gestures — a move grip, eight resize handles with
+  capture, and `wxOverlay` marquee/drag outlines; committed geometry through
+  `campy_design.set_rect` and `campy_ide_model.commit`. Then Ctrl-toggle and
+  empty-canvas clear are finished off with the gesture pass.
 - Acceptance: design the demo form's layout by dragging/resizing controls;
   selection and inspector agree; column/row forms stay read-only in the canvas
   (their geometry belongs to the sizer).

@@ -12,6 +12,8 @@
     grid/2, grid_set/2, grid_cell/1,
     editor/2, editor_set/3,
     open_dialog/2, save_dialog/3,
+    canvas/2, paint_canvas/4, connect_design/2,
+    handles_create/2, handle_place/3, handle_show/2, handle_raise/1,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
     set_items/3, set_enabled/2, set_visible/2, focus/1, raise/1, destroy/1,
@@ -317,13 +319,17 @@ adjust_grid(Grid, RowCount, ColCount) ->
             wxGrid:createGrid(Grid, RowCount, ColCount);
         {OldRows, OldCols} ->
             if
-                RowCount > OldRows -> wxGrid:appendRows(Grid, RowCount - OldRows);
-                RowCount < OldRows -> wxGrid:deleteRows(Grid, 0, OldRows - RowCount);
+                RowCount > OldRows ->
+                    wxGrid:appendRows(Grid, [{numRows, RowCount - OldRows}]);
+                RowCount < OldRows ->
+                    wxGrid:deleteRows(Grid, [{pos, 0}, {numRows, OldRows - RowCount}]);
                 true -> ok
             end,
             if
-                ColCount > OldCols -> wxGrid:appendCols(Grid, ColCount - OldCols);
-                ColCount < OldCols -> wxGrid:deleteCols(Grid, 0, OldCols - ColCount);
+                ColCount > OldCols ->
+                    wxGrid:appendCols(Grid, [{numCols, ColCount - OldCols}]);
+                ColCount < OldCols ->
+                    wxGrid:deleteCols(Grid, [{pos, 0}, {numCols, OldCols - ColCount}]);
                 true -> ok
             end
     end.
@@ -384,6 +390,84 @@ save_dialog(Frame, Wildcard, Default) ->
     end,
     wxFileDialog:destroy(Dialog),
     Result.
+
+%% Designer canvas
+
+canvas(Parent, Id) ->
+    Panel = wxPanel:new(Parent, [{winid, Id}, {style, ?wxFULL_REPAINT_ON_RESIZE}]),
+    wxPanel:setBackgroundColour(Panel, {40, 42, 48}),
+    wxPanel:connect(Panel, paint, []),
+    Panel.
+
+paint_canvas(Canvas, Width, Height, GridStep) ->
+    DC = wxBufferedPaintDC:new(Canvas),
+    wxDC:setBackground(DC, wxBrush:new({40, 42, 48})),
+    wxDC:clear(DC),
+    wxDC:setPen(DC, wxPen:new({58, 60, 68})),
+    draw_grid(DC, Width, Height, GridStep),
+    wxDC:setPen(DC, wxPen:new({120, 124, 140})),
+    wxDC:drawLine(DC, {0, 0}, {Width - 1, 0}),
+    wxDC:drawLine(DC, {Width - 1, 0}, {Width - 1, Height - 1}),
+    wxDC:drawLine(DC, {Width - 1, Height - 1}, {0, Height - 1}),
+    wxDC:drawLine(DC, {0, Height - 1}, {0, 0}),
+    wxBufferedPaintDC:destroy(DC),
+    ok.
+
+draw_grid(_DC, _Width, _Height, Step) when Step =< 0 ->
+    ok;
+draw_grid(DC, Width, Height, Step) ->
+    lists:foreach(
+        fun(X) -> wxDC:drawLine(DC, {X, 0}, {X, Height}) end,
+        lists:seq(0, Width, Step)
+    ),
+    lists:foreach(
+        fun(Y) -> wxDC:drawLine(DC, {0, Y}, {Width, Y}) end,
+        lists:seq(0, Height, Step)
+    ),
+    ok.
+
+%% Design-mode input: any click selects; button-like controls report through
+%% their command event, everything else through left_down.
+
+connect_design(Ref, Kind) ->
+    catch wxWindow:connect(Ref, left_down, []),
+    case Kind of
+        <<"button">> -> catch wxButton:connect(Ref, command_button_clicked, []);
+        <<"checkbox">> -> catch wxCheckBox:connect(Ref, command_checkbox_clicked, []);
+        <<"radio">> -> catch wxRadioButton:connect(Ref, command_radiobutton_selected, []);
+        <<"choice">> -> catch wxChoice:connect(Ref, command_choice_selected, []);
+        <<"list">> -> catch wxListBox:connect(Ref, command_listbox_selected, []);
+        _ -> ok
+    end,
+    ok.
+
+handles_create(Parent, Base) ->
+    [
+        begin
+            Id = Base + Index,
+            Ref = wxPanel:new(Parent, [{winid, Id}, {size, {7, 7}}, {style, 0}]),
+            wxPanel:setBackgroundColour(Ref, {235, 235, 240}),
+            wxWindow:hide(Ref),
+            Ref
+        end
+        || Index <- lists:seq(0, 3)
+    ].
+
+handle_place(Ref, X, Y) ->
+    wxWindow:move(Ref, {X, Y}),
+    wxWindow:setSize(Ref, {7, 7}),
+    ok.
+
+handle_show(Ref, Visible) ->
+    case Visible of
+        true -> wxWindow:show(Ref);
+        false -> wxWindow:hide(Ref)
+    end,
+    ok.
+
+handle_raise(Ref) ->
+    wxWindow:raise(Ref),
+    ok.
 
 %% Events
 

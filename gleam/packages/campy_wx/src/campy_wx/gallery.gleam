@@ -75,6 +75,10 @@ fn loop(
         _, _ -> loop(shell, view, phase, status, tick + 1)
       }
     }
+    campy_wx.Paint(id) -> {
+      campy_wx.paint(shell, id)
+      loop(shell, view, phase, status, tick + 1)
+    }
     campy_wx.Message(_message) -> loop(shell, view, phase, status, tick + 1)
     campy_wx.Idle -> {
       case tick % 40 {

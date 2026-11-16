@@ -146,7 +146,7 @@ pub fn event_key(kind: String) -> String {
 
 pub fn is_container(kind: String) -> Bool {
   case kind {
-    "window" | "form" | "panel" | "group" | "page" -> True
+    "window" | "form" | "panel" | "group" | "page" | "canvas" -> True
     _ -> False
   }
 }

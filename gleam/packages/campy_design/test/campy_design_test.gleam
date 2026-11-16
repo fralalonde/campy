@@ -1,5 +1,5 @@
 import campy_design
-import campy_view.{VInt, VText}
+import campy_view.{VBool, VInt, VText}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleeunit
@@ -243,4 +243,84 @@ pub fn containers_are_classified_test() {
   campy_design.is_container("form") |> should.be_true()
   campy_design.is_container("panel") |> should.be_true()
   campy_design.is_container("label") |> should.be_false()
+}
+
+pub fn design_view_roots_at_the_canvas_test() {
+  let view =
+    campy_design.design_view(form([], [box("a", 16, 24, 80, 20)]), "canvas")
+
+  view.kind |> should.equal("canvas")
+  view.id |> should.equal("canvas")
+  campy_design.int_prop(view, "w", 0) |> should.equal(600)
+  campy_design.int_prop(view, "h", 0) |> should.equal(400)
+  view.events |> should.equal(["select"])
+}
+
+pub fn design_view_children_are_absolute_and_free_test() {
+  let view =
+    campy_design.design_view(form([], [box("a", 16, 24, 80, 20)]), "canvas")
+  let assert [child] = view.children
+
+  child.kind |> should.equal("label")
+  campy_design.int_prop(child, "x", 0) |> should.equal(16)
+  campy_design.int_prop(child, "y", 0) |> should.equal(24)
+  campy_design.int_prop(child, "w", 0) |> should.equal(80)
+  campy_design.int_prop(child, "h", 0) |> should.equal(20)
+  child |> campy_view.prop("layout") |> should.equal(Ok(VText("free")))
+  child.events |> should.equal(["select"])
+  child |> campy_view.prop("design") |> should.equal(Ok(VBool(True)))
+}
+
+pub fn design_view_nested_children_are_parent_relative_test() {
+  let panel =
+    node("panel", "panel", [
+      #("h", VInt(200)),
+      #("w", VInt(300)),
+      #("x", VInt(20)),
+      #("y", VInt(30)),
+    ])
+    |> campy_view.with_children([box("a", 5, 6, 40, 18)])
+
+  let view = campy_design.design_view(form([], [panel]), "canvas")
+  let assert [placed_panel] = view.children
+  let assert [child] = placed_panel.children
+
+  campy_design.int_prop(placed_panel, "x", 0) |> should.equal(20)
+  campy_design.int_prop(placed_panel, "y", 0) |> should.equal(30)
+  campy_design.int_prop(child, "x", 0) |> should.equal(5)
+  campy_design.int_prop(child, "y", 0) |> should.equal(6)
+}
+
+pub fn design_view_freezes_column_layout_positions_test() {
+  let view =
+    campy_design.design_view(
+      form(
+        [#("border", VInt(8)), #("gap", VInt(4)), #("layout", VText("column"))],
+        [box("a", 0, 0, 10, 20), node("label", "b", [#("h", VInt(30))])],
+      ),
+      "canvas",
+    )
+
+  let assert [a, b] = view.children
+  campy_design.int_prop(a, "y", 0) |> should.equal(8)
+  campy_design.int_prop(b, "y", 0) |> should.equal(32)
+  a |> campy_view.prop("layout") |> should.equal(Ok(VText("free")))
+}
+
+pub fn placed_and_find_node_lookup_test() {
+  let tree = form([], [box("a", 16, 24, 80, 20)])
+  let layout = campy_design.resolve(tree)
+
+  case campy_design.placed(layout, "a") {
+    Some(placed) ->
+      placed.rect |> should.equal(campy_design.Rect(16, 24, 80, 20))
+    None -> should.fail()
+  }
+
+  case campy_design.find_node(tree, "a") {
+    Some(node) -> node.kind |> should.equal("label")
+    None -> should.fail()
+  }
+
+  campy_design.placed(layout, "nope") |> should.equal(None)
 }

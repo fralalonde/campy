@@ -9,7 +9,8 @@
 //// root's origin is 0,0). Column/row children ignore x/y; free children honour
 //// x/y/w/h and an optional alignment.
 
-import campy_view.{type Node, type Value, VInt, VText}
+import campy_view.{type Node, type Value, VBool, VInt, VText}
+import gleam/dict
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -337,5 +338,96 @@ pub fn default_h(kind: String) -> Int {
     "editor" | "notebook" | "page" -> 200
     "form" | "window" -> 480
     _ -> 28
+  }
+}
+
+/// Resolve a form into a design-mode view: geometry becomes explicit absolute
+/// coordinates (relative to the immediate parent), every container uses free
+/// layout, and every node declares the `select` event. The root becomes a
+/// `canvas` node.
+pub fn design_view(root: Node, canvas_id: String) -> Node {
+  let layout = resolve(root)
+  let places =
+    dict.from_list(list.map(layout.places, fn(placed) { #(placed.id, placed) }))
+
+  let root_rect = case dict.get(places, root.id) {
+    Ok(placed) -> placed.rect
+    Error(Nil) -> Rect(0, 0, 640, 480)
+  }
+
+  build_design(root, Rect(0, 0, 0, 0), root_rect, places, canvas_id, True)
+}
+
+fn build_design(
+  node: Node,
+  parent_rect: Rect,
+  own_rect: Rect,
+  places: dict.Dict(String, Placed),
+  canvas_id: String,
+  is_root: Bool,
+) -> Node {
+  let rect = case dict.get(places, node.id) {
+    Ok(placed) -> placed.rect
+    Error(Nil) -> own_rect
+  }
+
+  let props =
+    node.props
+    |> upsert("x", VInt(rect.x - parent_rect.x))
+    |> upsert("y", VInt(rect.y - parent_rect.y))
+    |> upsert("w", VInt(rect.w))
+    |> upsert("h", VInt(rect.h))
+    |> upsert("layout", VText("free"))
+    |> upsert("design", VBool(True))
+
+  let children =
+    list.map(node.children, fn(child) {
+      build_design(child, rect, rect, places, canvas_id, False)
+    })
+
+  campy_view.Node(
+    kind: case is_root {
+      True -> "canvas"
+      False -> node.kind
+    },
+    id: case is_root {
+      True -> canvas_id
+      False -> node.id
+    },
+    key: node.key,
+    props: props,
+    events: ["select"],
+    children: children,
+    extra: node.extra,
+  )
+}
+
+fn upsert(
+  props: List(#(String, Value)),
+  name: String,
+  value: Value,
+) -> List(#(String, Value)) {
+  list.append(list.filter(props, fn(prop) { prop.0 != name }), [#(name, value)])
+}
+
+/// Find a placed rectangle by control id.
+pub fn placed(layout: Layout, id: String) -> Option(Placed) {
+  case list.find(layout.places, fn(placed) { placed.id == id }) {
+    Ok(placed) -> Some(placed)
+    Error(Nil) -> None
+  }
+}
+
+/// Find a node by control id.
+pub fn find_node(root: Node, id: String) -> Option(Node) {
+  case root.id == id {
+    True -> Some(root)
+    False ->
+      case
+        list.find(root.children, fn(child) { find_node(child, id) != None })
+      {
+        Ok(child) -> find_node(child, id)
+        Error(Nil) -> None
+      }
   }
 }
