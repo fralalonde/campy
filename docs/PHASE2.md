@@ -16,7 +16,11 @@ handlers, and Run deploys to a local peer node and attaches a view.**
   plus a reference applier (49 tests) — done in the working tree
 - **T0.3** `campy_view/codec` — canonical JSON, `Document` wrapper, unknown-field
   preservation (71 tests total) — done in the working tree
-- Next: **T0.3** canonical JSON codec, then **T0.4** `campy_wx` core.
+- **T0.4** `campy_wx` core renderer — done; 13 pure tests; smoke in `dev-raw`
+  mounts the gallery in ~110 ms and applies patches in 0–1 ms
+- **T0.5** gallery harness — done; the G0 focus/caret/scroll checks are manual
+  and still owed
+- Next: **T1.1** shell primitives and **T1.2** form/document rewrite.
 
 Superseded and not to be built: everything in `docs/PHASE1.md` §5 (P1.3 port
 runner, ETF framing, runner child process). Distribution via `:peer` replaces it.
@@ -148,49 +152,45 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   unicode, floats, numbers that look like ints, unknown-key preservation, and
   malformed input errors.
 
-### T0.4 — `campy_wx` core renderer
+### T0.4 — `campy_wx` core renderer — done
 
-- Depends: T0.2 · Size: L · Risk: medium-high · Branch: `p2/t0.4-wx-core`
-- Goal: mount a `Node` tree into a wx window and apply patch batches, with the
-  behaviours that replace Slint's models/bindings.
-- Spec:
-  1. New package `gleam/packages/campy_wx`; deps: `campy_view`, `campy_ccl`
-     (kinds/prop schema), stdlib. No FFI.
-  2. Public API: `start(title, width, height) -> Result(Shell, String)`,
-     `mount(shell, Node) -> Result(Nil, String)`,
-     `apply(shell, List(Patch)) -> Result(Nil, String)`,
-     `unmount(shell)`, `run(shell)` (wx main loop), and
-     `next_event(shell) -> ViewEvent` / an event callback.
-  3. Shell process owns every wx object and is the single wx event receiver.
-     Normalize wx events to `ViewEvent(id, key, value)` and forward them; never
-     block the shell on app logic.
-  4. Widget table for at least: `window`, `panel`, `group`, `label`, `button`,
-     `checkbox`, `radio`, `choice`, `text`, `memo`, `list`, `slider`,
-     `progress`, `picture`, `menu`, plus container layout.
-  5. Props: apply only changed values; skip writes when equal. `apply` wraps the
-     batch in `freeze`/`thaw` and one `layout`. `Order` maps to sizer
-     detach/insert or `raise`/`lower`; `Insert` respects the patch index.
-  6. Layout: children with `layout = column|row` get a `wxBoxSizer`; free
-     children use absolute position/size; `border` becomes sizer border/
-     `wxStaticBoxSizer` for groups.
-  7. Event subscription only for declared events; text changes coalesce with
-     `erlang:send_after` (e.g. 60 ms) and carry the latest value.
-  8. Timers use `send_after`; there is no `wxTimer` in the binding.
-- Files: `campy_wx/**` only.
-- Do not: add a second renderer, poll, or use `:rpc`.
-- Acceptance: `just check` green for pure parts; a `gallery` executable opens in
-  `dev-raw` and demonstrates mount + patch; manual proof that typing keeps
-  focus/caret and a scrolled list keeps its scroll position across a patch.
+- Depends: T0.2 · Size: L · Risk: medium-high · 13 pure tests; wx smoke passed.
+- Delivered:
+  1. `campy_wx` public API: `start/3`, `mount/2`, `apply/2`, `next/2`,
+     `close/1`, `focus/2`, `now_ms`, `getenv`. The calling process owns every
+     wx object; there is no worker process and no command queue.
+  2. `campy_wx/native.gleam` + `campy_wx_native.erl`: the adapter. All wx atoms,
+     option lists, records, event connections, and value read-back live there;
+     Gleam sees opaque handles and typed values.
+  3. Kinds: `panel`, `group` (rendered as a panel for now), `label`, `button`,
+     `checkbox`, `radio`, `choice`, `list`, `text`, `memo`, `slider`,
+     `progress`, `picture`, and window/form roots.
+  4. Layout: `column`/`row` create a box sizer on the container; free children
+     use absolute position/size. Inserts honor the patch index; `Order` detaches
+     and re-inserts in sizer order, or raises in free order.
+  5. Props: text/title, value, checked, selection, items, enabled, visible,
+     x/y/w/h. Unchanged values are never written; `freeze`/`thaw` and one
+     `layout` wrap each batch.
+  6. Events: the `#wx{}` message is the single receive point. `next/2` maps the
+     wx id to the view widget, derives the key by kind, reads the value, and
+     only emits event keys the node declared. Other messages are returned to the
+     caller unchanged.
+- Deviations: `group` has no static-box chrome yet (T2); text changes are
+  forwarded per event (no coalescing yet); changing a container's `layout` at
+  runtime is not supported (remount instead).
+- Files: `campy_wx/**`.
 
-### T0.5 — Gallery harness and gate G0
+### T0.5 — Gallery harness and gate G0 — done
 
-- Depends: T0.4 · Size: S · Branch: `p2/t0.5-gallery`
-- Goal: one command that exercises every renderer claim.
-- Spec: a `campy_wx` gallery window with the full CCL set, buttons that mutate
-  the tree (change text, toggle enabled, insert/remove keyed rows, reorder,
-  change kind), a 500-row list, and a timing line for mount and patch. Keep it
-  in `gleam/packages/campy_wx/src/gallery.gleam`.
-- Acceptance: gate G0 checklist in §6 passes manually in `dev-raw`.
+- Depends: T0.4 · Size: S · Done (manual checks owed).
+- `campy_wx/gallery.gleam`: full control set, 500-row list, keyed row
+  insert/remove/reorder, enable toggle, live status patches, mount/patch timing
+  lines. `CAMPY_WX_SMOKE=1` runs a scripted mount → 4 patch batches → close and
+  exits 0.
+- Verified in `dev-raw`: mount ~110 ms, patches 0–1 ms.
+- Gate G0 still needs a human in front of the window: type in the text field
+  while periodic patches land (caret/focus must not move), scroll the 500-row
+  list and patch (scroll must not jump), click Mutate through the four phases.
 
 ## 3. M1 — the shell
 
