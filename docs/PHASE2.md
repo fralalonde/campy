@@ -20,7 +20,10 @@ handlers, and Run deploys to a local peer node and attaches a view.**
   mounts the gallery in ~110 ms and applies patches in 0–1 ms
 - **T0.5** gallery harness — done; the G0 focus/caret/scroll checks are manual
   and still owed
-- Next: **T1.1** shell primitives and **T1.2** form/document rewrite.
+- **T1.2** `campy_project` — project directory, canonical `campy.json`,
+  module/form documents, handler files (13 tests) — done; geometry resolution
+  moves to T2.1
+- Next: **T1.1** shell primitives, then **T1.3** IDE model.
 
 Superseded and not to be built: everything in `docs/PHASE1.md` §5 (P1.3 port
 runner, ETF framing, runner child process). Distribution via `:peer` replaces it.
@@ -64,7 +67,8 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 | `gleam/packages/campy_view` | **new**, the view tree and diff |
 | `gleam/packages/campy_wx` | **to build**, wx renderer |
 | `gleam/packages/campy_ccl` | retarget: target-neutral widget catalog + prop schema |
-| `gleam/packages/campy_form` | rewrite: form document, geometry, JSON project codec |
+| `gleam/packages/campy_project` | **new**, project directory + form documents |
+| `gleam/packages/campy_form` | legacy until T1.5; geometry reference for T2.1 |
 | `gleam/packages/campy_app` | rewrite: ABI v2 actor |
 | `gleam/packages/campy_appgen` | rewrite: v2 source generation |
 | `gleam/packages/campy_manifest` | keep (manifest codec, migration, compat) |
@@ -204,26 +208,28 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 - Expose them as nodes or small typed helpers; no IDE policy in this package.
 - Acceptance: a `shell_demo` window shows every region with placeholder data.
 
-### T1.2 — `campy_form` rewrite and project codec
+### T1.2 — `campy_project`: project and form documents — done
 
-- Depends: T0.3 · Size: L · Branch: `p2/t1.2-form`
-- Spec:
-  1. Form document = `campy_view.Node` root (`kind = "form"`) plus
-     `schema`, `title`, size, layout. `modules/<slug>/form.json`.
-  2. Project = directory: `campy.json` (schema, title, module order),
-     `modules/<slug>/form.json` + `handlers.gleam`, `assets/`.
-  3. Canonical save/load via `campy_view/codec`; schema migration hook through
-     `campy_manifest/migration`.
-  4. Geometry resolution rescued from the old model: free/column/row,
-     container layouts, alignment (top/bottom/left/right/client/fill), border
-     insets, adoption and hit-testing (`container_at`), z-order = child order.
-     Pure functions with tests.
-  5. Handler name derivation and stub generation, ABI v2 shape.
-  6. Convert the two Cat Café modules into the new layout; keep them as the
-     fixture project.
-- Do not: depend on wx, write JSON anywhere but through the codec.
-- Acceptance: `just check` green; a golden `form.json`; geometry tests ported
-  from the old suite where still meaningful.
+- Depends: T0.3 · Size: M · Done (13 tests, sandbox and `dev-raw`).
+- Delivered:
+  1. `campy_project` (new package; the legacy `campy_form` stays until T1.5):
+     `Project(title, modules, extra)`, `Module(slug, form: campy_view.Document,
+     handlers)`.
+  2. Layout: `campy.json`, `modules/<slug>/form.json`,
+     `modules/<slug>/handlers.gleam`. Handler source is written verbatim.
+  3. `load/1`, `save/2`: canonical JSON through `campy_view/codec`
+     (`parse_json`/`write_json` are now public). Project schema 1; newer or
+     older schemas are refused with an explicit message until a migration path
+     exists.
+  4. Module slugs are validated (`[a-z0-9_]`, unique); form roots must be
+     `form` or `window`.
+  5. Unknown project fields are preserved as JSON and re-emitted sorted.
+  6. `handler_name(control, event)` (ABI v2 naming) and `module/2`.
+- Deferred: geometry resolution (free/column/row, alignment, border, adoption)
+  and hit-testing are designer concerns and move to T2.1. The old geometry code
+  remains the reference.
+- Files: `campy_project/**`, `campy_view/src/campy_view/codec.gleam` (public
+  parse/write).
 
 ### T1.3 — `campy_ide`: display-free IDE model
 

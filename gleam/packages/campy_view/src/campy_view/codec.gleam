@@ -47,6 +47,17 @@ pub fn decode(input: String) -> Result(Node, String) {
   }
 }
 
+/// Parse arbitrary JSON into the codec's tree. Used by project manifests and
+/// any other text document that is not a view.
+pub fn parse_json(input: String) -> Result(Json, String) {
+  decode_json(input)
+}
+
+/// Write any JSON tree canonically (same layout rules as documents).
+pub fn write_json(json: Json) -> String {
+  write(json)
+}
+
 pub fn encode_document(document: Document) -> String {
   let extra =
     document.extra
