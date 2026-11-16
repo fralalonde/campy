@@ -1,3 +1,6 @@
+> Historical: written for the Phase 1 Slint prototype. Superseded by ADRs
+> 0003–0005 and docs/PHASE2.md.
+
 # Phase 1 — Compilable apps, local broker/runner (OTP seams)
 
 This is a dispatch plan. Every task below is a self-contained brief: a fresh agent

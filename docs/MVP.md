@@ -1,3 +1,6 @@
+> Historical: written for the Phase 1 Slint prototype. Superseded by ADRs
+> 0003–0005 and docs/PHASE2.md.
+
 # MVP: one portable search box in a live Gleam application
 
 ## Definition of done

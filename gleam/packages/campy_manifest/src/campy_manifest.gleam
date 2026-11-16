@@ -3,8 +3,8 @@
 ////
 //// A manifest describes one built version of a designed app. It is stored
 //// next to the artifact as a versioned compressed Erlang term
-//// (`manifest.campy`), following the codec pattern of
-//// `campy_form/project.gleam`: an explicit format version tag, validation on
+//// (`manifest.campy`), following the versioned-codec pattern of
+//// `campy_view/codec.gleam`: an explicit format version tag, validation on
 //// load, and explicit errors on mismatch.
 
 import gleam/int

@@ -29,7 +29,12 @@ handlers, and Run deploys to a local peer node and attaches a view.**
   (16 tests) — done
 - **T1.4** `campy_ide_wx` — runnable shell over a project directory, sample
   fixture, smoke ~38 ms (5 tests) — done
-- Next: **T1.5** removal of the legacy stack, after gate G1 (needs human eyes).
+- **T1.5** legacy removal — done. `rust/`, Slint packages, the bridge/runtime,
+  the old IDE app, `campy_ccl`, `campy_form`, `campy_app`, `campy_appgen`,
+  `campy_broker`, `campy_runner`, NIF staging, and the legacy project files are
+  gone. `just check` (Gleam only) is green.
+- **Gate G1 passed** (human check). M1 is complete.
+- Next: **T2.1** designer canvas and geometry.
 
 Superseded and not to be built: everything in `docs/PHASE1.md` §5 (P1.3 port
 runner, ETF framing, runner child process). Distribution via `:peer` replaces it.
@@ -70,22 +75,14 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 
 | Path | State |
 | --- | --- |
-| `gleam/packages/campy_view` | **new**, the view tree and diff |
-| `gleam/packages/campy_wx` | **to build**, wx renderer |
-| `gleam/packages/campy_ccl` | retarget: target-neutral widget catalog + prop schema |
-| `gleam/packages/campy_project` | **new**, project directory + form documents |
-| `gleam/packages/campy_form` | legacy until T1.5; geometry reference for T2.1 |
-| `gleam/packages/campy_app` | rewrite: ABI v2 actor |
-| `gleam/packages/campy_appgen` | rewrite: v2 source generation |
-| `gleam/packages/campy_manifest` | keep (manifest codec, migration, compat) |
-| `gleam/packages/campy_broker` | keep build/assemble/store; no network |
-| `gleam/packages/campy_peer` | **to build**, client-side node/deploy control |
-| `gleam/packages/campy_runner` | rewrite: runner node app + `campy_control` |
-| `gleam/packages/campy_ide` | rewrite: display-free IDE state and commands |
-| `gleam/packages/campy_ide_wx` | **to build**, the wx shell |
-| `gleam/apps/campy_ide` | replaced by the new shell wiring |
-| `rust/`, `campy_bridge`, `campy_runtime`, `campy_ui`, `campy_search_box` | delete (T1.5) |
-| `campy.campy`, `projects/*.campy` | convert to the JSON project layout (T1.2) |
+| `gleam/packages/campy_view` | view tree, values, patches, diff, canonical JSON |
+| `gleam/packages/campy_wx` | wx renderer, shell primitives, gallery/shell demos |
+| `gleam/packages/campy_project` | project directory, module/form documents |
+| `gleam/packages/campy_ide_model` | display-free IDE state and commands |
+| `gleam/packages/campy_manifest` | artifact manifest, migration, compatibility |
+| `gleam/apps/campy_ide_wx` | the IDE shell on wx |
+| `examples/demo` | two-module fixture project in the canonical format |
+| to build | `campy_peer`, `campy_runner`, `campy_app`, `campy_appgen`, `campy_broker` (M3/M4) |
 
 ### 1.4 Conventions and guardrails
 
@@ -282,16 +279,24 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 - Launch: `cd gleam/apps/campy_ide_wx && CAMPY_PROJECT=../../../examples/demo
   gleam run`; smoke with `CAMPY_WX_SMOKE=1`.
 
-### T1.5 — Delete the legacy stack
+### T1.5 — Delete the legacy stack — done
 
-- Depends: T1.4 · Size: M · Branch: `p2/t1.5-remove-legacy`
-- Delete `rust/`, `campy_bridge`, `campy_runtime`, `campy_ui`,
-  `campy_search_box`, the old `gleam/apps/campy_ide` wiring, Slint emitters,
-  NIF staging in `scripts/workspace.py`, and the Cargo recipes in `justfile`.
-  Update `PACKAGES`, `.gitignore`, README. Keep `campy_manifest`, `campy_broker`,
-  `campy_appgen`, `campy_app` (rewritten in M3).
-- Acceptance: `just check` green with no Rust toolchain; repo contains no
-  Slint/Rust references outside historical docs.
+- Depends: T1.4 · Size: M · Done.
+- Removed: `rust/`, `scripts/cargo.sh`, the NIF staging and packaging paths,
+  `campy_bridge`, `campy_runtime`, `campy_ui`, `campy_search_box`,
+  `campy_form`, `campy_app`, `campy_appgen`, `campy_broker`, `campy_runner`,
+  `gleam/apps/campy_ide`, `campy.campy`, `projects/`, the old screenshots under
+  `generated/`, and the Slint-era just recipes.
+- `campy_ccl` was deleted as well: it was unused by the new renderer and still
+  carried Slint vocabulary. The widget catalog returns in T2.2 with kinds,
+  property schemas, and defaults expressed for the target-neutral model.
+- `campy_manifest` is kept (pure, useful for M3/M4); it no longer references
+  the legacy codec in its docs.
+- `scripts/workspace.py` and `justfile` are rewritten around the new packages:
+  `doctor`, `run`, `smoke`, `build`, `fmt`, `fmt-check`, `test`, `check`,
+  `clean`. `README.md` and `.gitignore` describe the new tree.
+- `just check` passes in the headless sandbox; `just smoke` mounts the IDE on
+  `examples/demo` in `dev-raw`.
 
 ## 4. M2 — the form designer
 

@@ -1,50 +1,73 @@
 # Campy
 
-![Campy Studio](docs/images/campy-studio.png)
-
-**Idea:** A native, Gleam-first RAD studio. Design forms, edit properties and handlers, and run the result in a live window. The IDE uses the same component model and runtime as the apps it builds.
-
-**Why:** Keep application state and behavior on the BEAM; use Slint for native rendering. A small Rust NIF owns the UI thread and passes events to Gleam. Forms can update without rebuilding the bridge.
+Campy is a native, Gleam-first RAD IDE (an IDDDE — integrated develop, deploy,
+debug environment) for the BEAM. Design a form, edit handlers, run the app as a
+supervised OTP application, and deploy it to peer nodes. The UI is wxWidgets,
+driven from the BEAM: no Rust, no NIF.
 
 ## Requirements
 
-- Rust 1.92+, Gleam 1.16+, Erlang/OTP 27+, Python 3, `just`, Bash.
-- Linux: Wayland or X11 and Winit runtime libraries; X11 also needs `libxkbcommon-x11`.
-- Windows: Git Bash on `PATH`. macOS startup is not implemented.
-- Network access for the first dependency build.
+- Gleam 1.16+ and Erlang/OTP 27+ with the `wx` application (wxWidgets 3.2 and
+  GTK3 on Linux).
+- Python 3, `just`, and a display for the IDE. Headless tests need no display.
+- Linux: Wayland or X11 with the wxWidgets runtime libraries. On this machine,
+  run inside the Fedora `dev-raw` toolbox.
 
-## Install and run
+## Run
 
 ```sh
-git clone https://github.com/fralalonde/campy.git
-cd campy
 just doctor
 just run
 ```
 
-`just run` builds Rust and Gleam, stages the NIF, and opens Campy Studio. On Linux, `./campy` is an equivalent launcher. Development: `just dev` watches Gleam sources; `just check` runs formatting and
-tests; `just clean` removes Rust/Gleam build artifacts and the staged
-development NIF.
+`just run` opens the IDE shell on `examples/demo`. Point `CAMPY_PROJECT` at a
+project directory to open another project.
 
-## Package for distribution
+## Current state (Phase 2)
+
+- **View layer** (`campy_view`): a declarative node tree, values, patches,
+  structural diff, and canonical JSON documents. 71 tests.
+- **wx renderer** (`campy_wx`): widget table, sizer/free layout, patch
+  application that leaves unchanged values alone, event normalization, and
+  shell chrome (menus, toolbar, status, notebook, tree, grid, Scintilla,
+  dialogs). The design and live modes share one renderer.
+- **Project format** (`campy_project`): a project is a directory with canonical
+  `campy.json`, `modules/<slug>/form.json`, and `handlers.gleam`; unknown fields
+  survive a round trip.
+- **IDE model** (`campy_ide_model`): tabs, active module, selection, console,
+  undo/redo. Display-free and headless-tested.
+- **IDE shell** (`gleam/apps/campy_ide_wx`): module tree, Scintilla code view,
+  console, inspector grid, save, undo/redo.
+- **Sample project**: `examples/demo`.
+
+Not built yet: form designer canvas, form preview in the IDE, Run/hot update,
+the ABI v2 runtime, and peer-node deploy. See [`docs/PHASE2.md`](docs/PHASE2.md).
+
+## Development
 
 ```sh
-just package
+just check   # formatting + every package's tests, headless
+just test
+just fmt
+just clean
 ```
 
-Produces `generated/dist/campy-studio-<version>-<os>-<arch>.tar.gz`: a portable
-build that unpacks anywhere and runs with `./campy`, requiring only an
-Erlang/OTP 27+ installation (`erl` on PATH) — no Rust, Gleam, Python, or
-`just`. The release NIF and the windowing stack's native libraries
-(`libxkbcommon-x11` and friends, from `generated/native-deps`) are bundled.
+Renderer harness (needs a display):
 
-## State and limits
+```sh
+cd gleam/packages/campy_wx
+gleam run -m campy_wx/gallery
+CAMPY_WX_SMOKE=1 gleam run -m campy_wx/shell_demo
+```
 
-- Working prototype: project/workspace persistence, form designer, property inspector, undo/redo, native preview, and F7 updates to a running form.
-- Handler stubs can be edited, but the preview does not execute handler code. Its console logs events and input.
-- F6 reloads Gleam code in the IDE (a project-format upgrade reloads the workspace in place); Rust/NIF changes and other state-shape changes need a restart.
-- `just build-app` is experimental: it compiles one module of `campy.campy` (default: `widgets`) into a versioned artifact under `generated/broker/artifacts/`, printing the manifest summary line and the artifact path. It exercises generation and compilation only; the artifact is not dispatched or run.
-- Palette drag-and-drop, richer source editing, and the general versioned component schema are unfinished.
-- Native sessions run on Linux and Windows. Windows context-menu input is not covered by the automated smoke test.
+## Design notes
 
-Architecture and roadmap: [architecture](docs/ARCHITECTURE.md) · [MVP](docs/MVP.md).
+- [ADR 0003](docs/adr/0003-wx-ui-toolkit.md): wxWidgets replaces Slint; no UI NIF.
+- [ADR 0004](docs/adr/0004-view-tree-and-projection.md): view tree, patches,
+  projection, ABI v2, local peer nodes.
+- [ADR 0005](docs/adr/0005-source-format.md): canonical JSON source, binary
+  artifacts, project = directory.
+- [`docs/PHASE2.md`](docs/PHASE2.md): the current task plan.
+
+`docs/ARCHITECTURE.md`, `docs/MVP.md`, and `docs/PHASE1.md` are historical
+records of the Phase 1 Slint prototype.
