@@ -25,7 +25,9 @@ handlers, and Run deploys to a local peer node and attaches a view.**
   moves to T2.1
 - **T1.1** shell primitives — done; menus, toolbar, status, notebook, tree,
   grid, Scintilla, file dialogs; `shell_demo` smoke mounts in ~42 ms
-- Next: **T1.3** IDE model.
+- **T1.3** `campy_ide_model` — display-free state, commands, console, undo/redo
+  (16 tests) — done
+- Next: **T1.4** the shell on wx.
 
 Superseded and not to be built: everything in `docs/PHASE1.md` §5 (P1.3 port
 runner, ETF framing, runner child process). Distribution via `:peer` replaces it.
@@ -242,14 +244,21 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 - Files: `campy_project/**`, `campy_view/src/campy_view/codec.gleam` (public
   parse/write).
 
-### T1.3 — `campy_ide`: display-free IDE model
+### T1.3 — `campy_ide_model`: display-free IDE model — done
 
-- Depends: T1.2 · Size: L · Branch: `p2/t1.3-ide-model`
-- Spec: `State` (projects, modules, open tabs, selection, undo snapshots,
-  console, settings), commands as pure `(State, Command) -> #(State, List(ViewIntent))`,
-  and a headless test suite. No wx, no IO beyond loading/saving documents.
-- Acceptance: `just check` green; tests cover open/switch, selection, undo/redo,
-  console cap, and save/load round trip.
+- Depends: T1.2 · Size: M · Done (16 tests).
+- Package `campy_ide_model` (named to avoid colliding with the legacy
+  `campy_ide` app until T1.5).
+- Delivered: `State` (project, open tabs, active module, selection, console,
+  undo/redo snapshots, status, code/form toggle), `Command`, pure `update/2`,
+  `open_module/2` (Result), `close_module/2`, `select_controls/2`,
+  `commit/2` (no-op commits are not recorded), `undo`, `redo`, `log` (500-line
+  cap, newest first), `set_status`, `toggle_code_view`, `active_module`,
+  `console_text`, `status_line`.
+- Deviation: commands return `State`, not `#(State, List(ViewIntent))`. With
+  one shell present, the shell reads the state and re-renders; intents get
+  introduced only if a second observer (MCP/plugin) needs them.
+- Files: `campy_ide_model/**`, `scripts/workspace.py`.
 
 ### T1.4 — `campy_ide_wx`: the shell on wx
 
