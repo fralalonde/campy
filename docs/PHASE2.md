@@ -34,7 +34,13 @@ handlers, and Run deploys to a local peer node and attaches a view.**
   `campy_broker`, `campy_runner`, NIF staging, and the legacy project files are
   gone. `just check` (Gleam only) is green.
 - **Gate G1 passed** (human check). M1 is complete.
-- Next: **T2.1** designer canvas and geometry.
+- **T2.1 (part 1)** `campy_design` — absolute geometry, hit-testing, move/resize
+  (14 tests) — done. Canvas next.
+- Toolkit decision: stay on OTP wx/GTK. Qt has no OTP binding; wxQt exists but is
+  incomplete and OTP's driver cannot be rebuilt against it. Option 2 (native
+  children + selection chrome) is therefore built on wx/GTK: real child
+  controls, handle widgets as raised siblings, `wxOverlay` for marquee and drag
+  outlines.
 
 Superseded and not to be built: everything in `docs/PHASE1.md` §5 (P1.3 port
 runner, ETF framing, runner child process). Distribution via `:peer` replaces it.
@@ -300,13 +306,59 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 
 ## 4. M2 — the form designer
 
-- **T2.1** Canvas and overlay: module window, grid, marquee, eight resize
-  handles, drag outline, `wxOverlay`-based feedback; geometry from `campy_form`.
-- **T2.2** Palette, placement, adoption, z-order, clipboard, undo.
-- **T2.3** Inspector (common-property editing) and Events → handler stub.
-- **T2.4** Generated Gleam-wx source tab (read-only first), replacing the Slint
-  source tab.
-- Gate G2: design the Cat Café form from scratch, run it, reopen it, and diff it.
+### T2.1 — Designer canvas and geometry (in progress)
+
+- Depends: T1.4 · Size: L.
+- **Part 1, done:** `campy_design` — pure resolution of a form tree into
+  absolute rectangles. Parent-relative coordinates, container borders, column/
+  row stacking with gaps, top/bottom/left/right/client alignment, last-painted
+  hit-testing, deepest-container hit-testing, and move/resize/set-rect edits
+  that clamp to a minimum and clear alignment on an explicit drag. Golden tests
+  cover each rule.
+- **Part 2, next (option 2 on wx/GTK):** a `canvas` widget kind that hosts real
+  wx child controls at the resolved rectangles, paints the grid and the module
+  window frame, and manages selection:
+  - eight small handle widgets (raised siblings) around the selection, which
+    receive the resize drags;
+  - `wxOverlay`/`wxDCOverlay` for the marquee and the move/resize outline, drawn
+    over native children without invalidating them;
+  - a select tool: click selects (Ctrl toggles), drag from empty space or an
+    unselected control draws the marquee, drag from a selected control moves the
+    group and commits on release;
+  - selection reports to `campy_ide_model`, so the inspector and the canvas
+    share one selection.
+- Canvas state stays in the shell; committed geometry goes through
+  `campy_design.set_rect` and then `campy_ide_model.commit` for undo.
+- Acceptance: design the demo form's layout by dragging/resizing controls;
+  selection and inspector agree; column/row forms stay read-only in the canvas
+  (their geometry belongs to the sizer).
+
+### T2.2 — Palette, placement, adoption, clipboard, undo
+
+- Palette from a target-neutral catalog (kinds, labels, default sizes, events).
+  Click-to-arm, drag to place on the canvas; drop reparents to the deepest
+  accepting container; z-order via child order; copy/cut/paste subtrees;
+  every committed edit goes through model undo.
+- Acceptance: add, move between containers, reorder, duplicate, and delete
+  controls; undo restores each step.
+
+### T2.3 — Inspector and events
+
+- Inspector over the shared selection: common properties only for multi-select,
+  typed editors (text, int, bool, choice, color), differing values blank.
+- Events tab creates/opens ABI v2 handler stubs via `campy_project.handler_name`.
+- Acceptance: edit geometry/text in the inspector and see the canvas update;
+  clicking an event opens the handler source.
+
+### T2.4 — Generated source tab
+
+- Read-only generated Gleam-wx construction source for the active form,
+  replacing the Slint source tab of the prototype. Doubles as the export path.
+- Acceptance: generated code matches the canvas structure and compiles as a
+  standalone module skeleton.
+
+- Gate G2: design the demo form from scratch, run it, reopen it, and diff the
+  JSON.
 
 ## 5. M3/M4 — run, deploy, debug
 

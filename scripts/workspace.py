@@ -21,6 +21,7 @@ PACKAGES = [
         "campy_wx",
         "campy_project",
         "campy_ide_model",
+        "campy_design",
         "campy_manifest",
     )
 ] + [IDE]
