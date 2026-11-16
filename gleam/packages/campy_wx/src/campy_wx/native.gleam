@@ -9,6 +9,7 @@ import gleam/dynamic.{type Dynamic}
 
 pub type NativeMessage {
   WxEvent(wx_id: Int, event_type: String)
+  MouseEvent(wx_id: Int, event_type: String, x: Int, y: Int)
   Other(message: Dynamic)
   Idle
 }
@@ -260,6 +261,12 @@ pub fn handle_show(ref: Dynamic, visible: Bool) -> Nil
 
 @external(erlang, "campy_wx_native", "handle_raise")
 pub fn handle_raise(ref: Dynamic) -> Nil
+
+@external(erlang, "campy_wx_native", "capture")
+pub fn capture(ref: Dynamic) -> Nil
+
+@external(erlang, "campy_wx_native", "release")
+pub fn release(ref: Dynamic) -> Nil
 
 @external(erlang, "campy_wx_native", "now_ms")
 pub fn now_ms() -> Int

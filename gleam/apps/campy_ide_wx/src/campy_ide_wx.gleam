@@ -42,7 +42,7 @@ fn interactive(project: campy_project.Project, dir: String) {
 
   let assert Ok(shell) = campy_wx.mount(shell, current_view)
   refresh(shell, None, state)
-  loop(shell, state, current_view, dir)
+  loop(shell, state, current_view, dir, NoDrag)
 }
 
 fn smoke(project: campy_project.Project, dir: String) {
@@ -97,7 +97,13 @@ fn select_first_control(state: model.State) -> model.State {
   }
 }
 
-fn loop(shell: campy_wx.Shell, state: model.State, current: Node, dir: String) {
+fn loop(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+) {
   case campy_wx.next(shell, 100) {
     campy_wx.Closed -> {
       campy_wx.close(shell)
@@ -105,8 +111,10 @@ fn loop(shell: campy_wx.Shell, state: model.State, current: Node, dir: String) {
     }
     campy_wx.Paint(id) -> {
       campy_wx.paint(shell, id)
-      loop(shell, state, current, dir)
+      loop(shell, state, current, dir, drag)
     }
+    campy_wx.MouseHandle(role, kind, x, y) ->
+      handle_mouse(shell, state, current, dir, drag, role, kind, x, y)
     campy_wx.Event(id, key, value) ->
       case id {
         "menu-quit" -> {
@@ -119,12 +127,178 @@ fn loop(shell: campy_wx.Shell, state: model.State, current: Node, dir: String) {
           let next = view(state)
           let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
-          loop(shell, state, next, dir)
+          loop(shell, state, next, dir, NoDrag)
         }
       }
-    campy_wx.Message(_message) -> loop(shell, state, current, dir)
-    campy_wx.Idle -> loop(shell, state, current, dir)
+    campy_wx.Message(_message) -> loop(shell, state, current, dir, drag)
+    campy_wx.Idle -> loop(shell, state, current, dir, drag)
   }
+}
+
+fn handle_mouse(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+  role: Int,
+  kind: String,
+  x: Int,
+  y: Int,
+) {
+  case kind {
+    "left_down" -> {
+      let next_drag = start_drag(state, role, x, y)
+      case next_drag {
+        NoDrag -> loop(shell, state, current, dir, NoDrag)
+        _ -> {
+          campy_wx.capture_handle(shell, role)
+          loop(shell, state, current, dir, next_drag)
+        }
+      }
+    }
+    "motion" ->
+      case drag_rect(drag, x, y) {
+        Some(#(id, #(rx, ry, rw, rh))) -> {
+          campy_wx.preview_rect(shell, id, rx, ry, rw, rh)
+          loop(shell, state, current, dir, drag)
+        }
+        None -> loop(shell, state, current, dir, drag)
+      }
+    "left_up" -> {
+      campy_wx.release_handle(shell, role)
+      case drag_rect(drag, x, y) {
+        Some(#(id, rect)) -> {
+          let previous = state
+          let state = commit_rect(state, id, rect)
+          let next = view(state)
+          let shell = rebind(shell, current, next)
+          refresh(shell, Some(previous), state)
+          loop(shell, state, next, dir, NoDrag)
+        }
+        None -> loop(shell, state, current, dir, NoDrag)
+      }
+    }
+    _ -> loop(shell, state, current, dir, drag)
+  }
+}
+
+fn start_drag(state: model.State, role: Int, x: Int, y: Int) -> Drag {
+  case state.selection, selection_rect(state) {
+    [id, ..], Some(rect) ->
+      case role == 8 {
+        True -> MoveDrag(id, x, y, rect)
+        False -> ResizeDrag(id, role, x, y, rect)
+      }
+    _, _ -> NoDrag
+  }
+}
+
+fn drag_rect(
+  drag: Drag,
+  x: Int,
+  y: Int,
+) -> Option(#(String, #(Int, Int, Int, Int))) {
+  case drag {
+    NoDrag -> None
+    MoveDrag(id, start_x, start_y, #(rx, ry, rw, rh)) ->
+      Some(#(id, #(rx + x - start_x, ry + y - start_y, rw, rh)))
+    ResizeDrag(id, role, start_x, start_y, #(rx, ry, rw, rh)) -> {
+      let dx = x - start_x
+      let dy = y - start_y
+      let left = case role {
+        0 | 6 | 7 -> rx + dx
+        _ -> rx
+      }
+      let top = case role {
+        0 | 1 | 2 -> ry + dy
+        _ -> ry
+      }
+      let right = case role {
+        2 | 3 | 4 -> rx + rw + dx
+        _ -> rx + rw
+      }
+      let bottom = case role {
+        4 | 5 | 6 -> ry + rh + dy
+        _ -> ry + rh
+      }
+      let #(left, right) = case right - left < campy_design.min_size {
+        True ->
+          case role {
+            0 | 6 | 7 -> #(right - campy_design.min_size, right)
+            _ -> #(left, left + campy_design.min_size)
+          }
+        False -> #(left, right)
+      }
+      let #(top, bottom) = case bottom - top < campy_design.min_size {
+        True ->
+          case role {
+            0 | 1 | 2 -> #(bottom - campy_design.min_size, bottom)
+            _ -> #(top, top + campy_design.min_size)
+          }
+        False -> #(top, bottom)
+      }
+      Some(#(id, #(left, top, right - left, bottom - top)))
+    }
+  }
+}
+
+fn commit_rect(
+  state: model.State,
+  id: String,
+  rect: #(Int, Int, Int, Int),
+) -> model.State {
+  case model.active_module(state) {
+    Error(_) -> state
+    Ok(module) -> {
+      let #(x, y, width, height) = rect
+      let view =
+        campy_design.set_rect(
+          module.form.view,
+          id,
+          campy_design.Rect(x: x, y: y, w: width, h: height),
+        )
+      let document =
+        campy_view.Document(
+          schema: module.form.schema,
+          view: view,
+          extra: module.form.extra,
+        )
+      let updated =
+        campy_project.Module(
+          slug: module.slug,
+          form: document,
+          handlers: module.handlers,
+        )
+      let modules =
+        list.map(state.project.modules, fn(candidate) {
+          case candidate.slug == module.slug {
+            True -> updated
+            False -> candidate
+          }
+        })
+      model.commit(
+        state,
+        campy_project.Project(
+          title: state.project.title,
+          modules: modules,
+          extra: state.project.extra,
+        ),
+      )
+    }
+  }
+}
+
+type Drag {
+  NoDrag
+  MoveDrag(id: String, start_x: Int, start_y: Int, rect: #(Int, Int, Int, Int))
+  ResizeDrag(
+    id: String,
+    role: Int,
+    start_x: Int,
+    start_y: Int,
+    rect: #(Int, Int, Int, Int),
+  )
 }
 
 fn handle(

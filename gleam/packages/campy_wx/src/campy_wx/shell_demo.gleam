@@ -168,6 +168,7 @@ fn loop(shell: campy_wx.Shell) {
       campy_wx.paint(shell, id)
       loop(shell)
     }
+    campy_wx.MouseHandle(_, _, _, _) -> loop(shell)
     campy_wx.Message(_message) -> loop(shell)
     campy_wx.Idle -> loop(shell)
   }

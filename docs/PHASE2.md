@@ -36,9 +36,13 @@ handlers, and Run deploys to a local peer node and attaches a view.**
 - **Gate G1 passed** (human check). M1 is complete.
 - **T2.1 (part 1)** `campy_design` — absolute geometry, hit-testing, move/resize
   (19 tests) — done.
-- **T2.1 (part 2)** canvas rendering and selection — done: native controls on a
-  painted grid, design-mode click selection, four corner handles, Form/Code
-  pages, inspector follows the selection. Drag/resize gestures next.
+- **T2.1 (part 2)** canvas, selection, and gestures — done: native controls on
+  a painted grid, design-mode click selection, nine chrome handles (eight
+  resize + move grip) with mouse capture, live drag preview, and commits
+  through `campy_design.set_rect` + model undo. Form/Code pages; the inspector
+  follows the selection and shows control geometry. Sizer minimum sizes were
+  fixed (previously a zero width skipped the height too, which hid the
+  inspector and console).
 - Toolkit decision: stay on OTP wx/GTK. Qt has no OTP binding; wxQt exists but is
   incomplete and OTP's driver cannot be rebuilt against it. Option 2 (native
   children + selection chrome) is therefore built on wx/GTK: real child
@@ -324,10 +328,14 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   normal select semantics); four raised corner handle widgets; Form and Code
   pages; the inspector reflects the canvas selection, and `campy_design` gives
   the handle rectangle.
-- **Part 2, remaining:** gestures — a move grip, eight resize handles with
-  capture, and `wxOverlay` marquee/drag outlines; committed geometry through
-  `campy_design.set_rect` and `campy_ide_model.commit`. Then Ctrl-toggle and
-  empty-canvas clear are finished off with the gesture pass.
+- **Part 2, delivered:** a move grip and eight resize handles, each a raised
+  sibling widget with mouse capture; live widget previews during the drag; the
+  commit goes through `campy_design.set_rect` and `campy_ide_model.commit` so
+  undo works. Handles stay at the original rect during the gesture and
+  reposition on commit (moving them would shift the captured coordinate base).
+- **Remaining in T2.1:** marquee selection (`wxOverlay`), Ctrl-toggle
+  multi-select, and directional cursors on the handles. These are polish; the
+  palette (T2.2) is the next substantive step.
 - Acceptance: design the demo form's layout by dragging/resizing controls;
   selection and inspector agree; column/row forms stay read-only in the canvas
   (their geometry belongs to the sizer).

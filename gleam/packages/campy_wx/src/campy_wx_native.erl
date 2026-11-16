@@ -14,6 +14,7 @@
     open_dialog/2, save_dialog/3,
     canvas/2, paint_canvas/4, connect_design/2,
     handles_create/2, handle_place/3, handle_show/2, handle_raise/1,
+    capture/1, release/1,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
     set_items/3, set_enabled/2, set_visible/2, focus/1, raise/1, destroy/1,
@@ -137,10 +138,14 @@ resize(Ref, Width, Height) when Width > 0, Height > 0 ->
 resize(_Ref, _Width, _Height) ->
     ok.
 
-set_min_size(Ref, Width, Height) when Width > 0, Height > 0 ->
-    wxWindow:setMinSize(Ref, {Width, Height}),
-    ok;
-set_min_size(_Ref, _Width, _Height) ->
+set_min_size(Ref, Width, Height) ->
+    {CurrentWidth, CurrentHeight} = wxWindow:getMinSize(Ref),
+    W = case Width > 0 of true -> Width; false -> CurrentWidth end,
+    H = case Height > 0 of true -> Height; false -> CurrentHeight end,
+    case W > 0 andalso H > 0 of
+        true -> wxWindow:setMinSize(Ref, {W, H});
+        false -> ok
+    end,
     ok.
 
 %% Properties
@@ -442,16 +447,34 @@ connect_design(Ref, Kind) ->
     ok.
 
 handles_create(Parent, Base) ->
-    [
-        begin
-            Id = Base + Index,
-            Ref = wxPanel:new(Parent, [{winid, Id}, {size, {7, 7}}, {style, 0}]),
-            wxPanel:setBackgroundColour(Ref, {235, 235, 240}),
-            wxWindow:hide(Ref),
-            Ref
-        end
-        || Index <- lists:seq(0, 3)
-    ].
+    [create_handle(Parent, Base + Index, Index) || Index <- lists:seq(0, 8)].
+
+create_handle(Parent, Id, 8) ->
+    Ref = wxPanel:new(Parent, [{winid, Id}, {size, {24, 8}}, {style, 0}]),
+    wxPanel:setBackgroundColour(Ref, {120, 124, 140}),
+    connect_handle(Ref),
+    wxWindow:hide(Ref),
+    Ref;
+create_handle(Parent, Id, _Role) ->
+    Ref = wxPanel:new(Parent, [{winid, Id}, {size, {7, 7}}, {style, 0}]),
+    wxPanel:setBackgroundColour(Ref, {235, 235, 240}),
+    connect_handle(Ref),
+    wxWindow:hide(Ref),
+    Ref.
+
+connect_handle(Ref) ->
+    catch wxWindow:connect(Ref, left_down, []),
+    catch wxWindow:connect(Ref, motion, []),
+    catch wxWindow:connect(Ref, left_up, []),
+    ok.
+
+capture(Ref) ->
+    wxWindow:captureMouse(Ref),
+    ok.
+
+release(Ref) ->
+    catch wxWindow:releaseMouse(Ref),
+    ok.
 
 handle_place(Ref, X, Y) ->
     wxWindow:move(Ref, {X, Y}),
@@ -508,6 +531,13 @@ connect(_Ref, _Kind) ->
 
 next_message(Timeout) ->
     receive
+        {wx, Id, _Obj, _UserData, Event} when is_tuple(Event) ->
+            case element(1, Event) of
+                wxMouse ->
+                    {mouse_event, Id, element(2, Event), element(3, Event), element(4, Event)};
+                _ ->
+                    {wx_event, Id, event_type(Event)}
+            end;
         {wx, Id, _Obj, _UserData, Event} ->
             {wx_event, Id, event_type(Event)};
         Other ->

@@ -29,6 +29,8 @@ pub type Incoming {
   Closed
   /// A canvas needs painting; the caller should call `paint`.
   Paint(id: String)
+  /// Mouse input on a selection handle: role 0..7 resize, 8 move.
+  MouseHandle(role: Int, kind: String, x: Int, y: Int)
 }
 
 pub opaque type Shell {
@@ -654,7 +656,14 @@ fn remove_subtree_registry(shell: Shell, id: String) -> Shell {
 /// The single receive point: wx events are normalised and mapped to declared
 /// view events; every other message is handed back untouched.
 pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
+  let handle_base = shell.handle_base
+
   case native.next_message(timeout_ms) {
+    native.MouseEvent(wx_id, kind, x, y)
+      if wx_id >= handle_base && wx_id < handle_base + 9
+    -> MouseHandle(wx_id - shell.handle_base, kind, x, y)
+    native.MouseEvent(wx_id, "left_down", _x, _y) -> design_event(shell, wx_id)
+    native.MouseEvent(_wx_id, _kind, _x, _y) -> Idle
     native.WxEvent(wx_id, "close") if wx_id == shell.frame_id -> Closed
     native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
     native.WxEvent(wx_id, "mouse") -> design_event(shell, wx_id)
@@ -735,13 +744,18 @@ pub fn show_selection(
   case rect {
     None ->
       list.each(shell.handles, fn(handle) { native.handle_show(handle, False) })
-    Some(#(x, y, w, h)) ->
+    Some(#(x, y, width, height)) ->
       case shell.handles {
-        [nw, ne, sw, se, ..] -> {
+        [nw, n, ne, e, se, s, sw, west, grip, ..] -> {
           place_handle(nw, x - 3, y - 3)
-          place_handle(ne, x + w - 4, y - 3)
-          place_handle(sw, x - 3, y + h - 4)
-          place_handle(se, x + w - 4, y + h - 4)
+          place_handle(n, x + width / 2 - 3, y - 3)
+          place_handle(ne, x + width - 4, y - 3)
+          place_handle(e, x + width - 4, y + height / 2 - 3)
+          place_handle(se, x + width - 4, y + height - 4)
+          place_handle(s, x + width / 2 - 3, y + height - 4)
+          place_handle(sw, x - 3, y + height - 4)
+          place_handle(west, x - 3, y + height / 2 - 3)
+          place_handle(grip, x + width / 2 - 12, int.max(y - 14, 0))
         }
         _ -> Nil
       }
@@ -808,6 +822,46 @@ pub fn set_status(shell: Shell, text: String) -> Nil {
   {
     Ok(widget) -> native.set_status(widget.ref, text)
     Error(Nil) -> Nil
+  }
+}
+
+/// Move/resize a control's live widget without touching the document. Used for
+/// drag previews; the commit goes through `campy_design.set_rect` and the model.
+pub fn preview_rect(
+  shell: Shell,
+  id: String,
+  x: Int,
+  y: Int,
+  width: Int,
+  height: Int,
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> {
+      native.move(widget.ref, x, y)
+      native.resize(widget.ref, width, height)
+    }
+    Error(_) -> Nil
+  }
+}
+
+pub fn capture_handle(shell: Shell, role: Int) -> Nil {
+  case handle_at(shell.handles, role) {
+    Ok(handle) -> native.capture(handle)
+    Error(Nil) -> Nil
+  }
+}
+
+pub fn release_handle(shell: Shell, role: Int) -> Nil {
+  case handle_at(shell.handles, role) {
+    Ok(handle) -> native.release(handle)
+    Error(Nil) -> Nil
+  }
+}
+
+fn handle_at(handles: List(Dynamic), role: Int) -> Result(Dynamic, Nil) {
+  case list.drop(handles, role) {
+    [handle, ..] -> Ok(handle)
+    [] -> Error(Nil)
   }
 }
 
