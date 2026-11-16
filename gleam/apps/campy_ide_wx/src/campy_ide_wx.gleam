@@ -115,6 +115,12 @@ fn loop(
     }
     campy_wx.MouseHandle(role, kind, x, y) ->
       handle_mouse(shell, state, current, dir, drag, role, kind, x, y)
+    campy_wx.Mouse(id, x, y) -> {
+      let previous = state
+      let state = select_at(state, id, x, y)
+      refresh(shell, Some(previous), state)
+      loop(shell, state, current, dir, NoDrag)
+    }
     campy_wx.Event(id, key, value) ->
       case id {
         "menu-quit" -> {
@@ -324,16 +330,43 @@ fn handle(
 
 fn select_or_log(state: model.State, id: String, key: String) -> model.State {
   case id {
-    "canvas" -> model.select_controls(state, [])
-    _ ->
-      case model.active_module(state) {
-        Ok(module) ->
-          case campy_design.find_node(module.form.view, id) {
-            Some(_node) -> model.select_controls(state, [id])
-            None -> model.update(state, model.Log("event " <> id <> "." <> key))
-          }
-        Error(_) -> model.update(state, model.Log("event " <> id <> "." <> key))
+    "canvas" -> state
+    _ -> select_control(state, id, key)
+  }
+}
+
+fn select_control(state: model.State, id: String, key: String) -> model.State {
+  case model.active_module(state) {
+    Ok(module) ->
+      case campy_design.find_node(module.form.view, id) {
+        Some(_node) -> model.select_controls(state, [id])
+        None -> model.update(state, model.Log("event " <> id <> "." <> key))
       }
+    Error(_) -> model.update(state, model.Log("event " <> id <> "." <> key))
+  }
+}
+
+/// Canvas clicks are hit-tested, not trusted to per-control events: GTK labels
+/// do not emit mouse events, and bubbled clicks can otherwise clear a fresh
+/// selection.
+fn select_at(state: model.State, id: String, x: Int, y: Int) -> model.State {
+  case id {
+    "canvas" ->
+      case model.active_module(state) {
+        Error(_) -> state
+        Ok(module) -> {
+          let layout = campy_design.resolve(module.form.view)
+          case campy_design.at(layout, x, y) {
+            Some(placed) ->
+              case placed.id == "canvas" {
+                True -> model.select_controls(state, [])
+                False -> model.select_controls(state, [placed.id])
+              }
+            None -> model.select_controls(state, [])
+          }
+        }
+      }
+    _ -> select_control(state, id, "select")
   }
 }
 

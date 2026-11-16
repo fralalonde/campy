@@ -142,7 +142,7 @@ set_min_size(Ref, Width, Height) ->
     {CurrentWidth, CurrentHeight} = wxWindow:getMinSize(Ref),
     W = case Width > 0 of true -> Width; false -> CurrentWidth end,
     H = case Height > 0 of true -> Height; false -> CurrentHeight end,
-    case W > 0 andalso H > 0 of
+    case W > 0 orelse H > 0 of
         true -> wxWindow:setMinSize(Ref, {W, H});
         false -> ok
     end,

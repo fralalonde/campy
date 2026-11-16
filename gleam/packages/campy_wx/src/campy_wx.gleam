@@ -31,6 +31,8 @@ pub type Incoming {
   Paint(id: String)
   /// Mouse input on a selection handle: role 0..7 resize, 8 move.
   MouseHandle(role: Int, kind: String, x: Int, y: Int)
+  /// A left click on a design widget; coordinates are relative to that widget.
+  Mouse(id: String, x: Int, y: Int)
 }
 
 pub opaque type Shell {
@@ -662,7 +664,8 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
     native.MouseEvent(wx_id, kind, x, y)
       if wx_id >= handle_base && wx_id < handle_base + 9
     -> MouseHandle(wx_id - shell.handle_base, kind, x, y)
-    native.MouseEvent(wx_id, "left_down", _x, _y) -> design_event(shell, wx_id)
+    native.MouseEvent(wx_id, "left_down", x, y) ->
+      design_mouse(shell, wx_id, x, y)
     native.MouseEvent(_wx_id, _kind, _x, _y) -> Idle
     native.WxEvent(wx_id, "close") if wx_id == shell.frame_id -> Closed
     native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
@@ -700,6 +703,21 @@ fn paint_event(shell: Shell, wx_id: Int) -> Incoming {
   case dict.get(shell.by_wx, wx_id) {
     Ok(view_id) -> Paint(view_id)
     Error(Nil) -> Idle
+  }
+}
+
+fn design_mouse(shell: Shell, wx_id: Int, x: Int, y: Int) -> Incoming {
+  case dict.get(shell.by_wx, wx_id) {
+    Error(Nil) -> Idle
+    Ok(view_id) ->
+      case dict.get(shell.widgets, view_id) {
+        Error(Nil) -> Idle
+        Ok(widget) ->
+          case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
+            True -> Mouse(widget.view_id, x, y)
+            False -> Idle
+          }
+      }
   }
 }
 
