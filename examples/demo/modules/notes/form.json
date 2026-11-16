@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "view": {
+    "kind": "form",
+    "id": "root",
+    "props": {
+      "h": 300,
+      "layout": "column",
+      "title": "Notes",
+      "w": 500
+    },
+    "children": [
+      {
+        "kind": "memo",
+        "id": "body",
+        "props": {
+          "h": 160,
+          "text": "Notes",
+          "w": 360
+        }
+      }
+    ]
+  }
+}

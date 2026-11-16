@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "view": {
+    "kind": "form",
+    "id": "root",
+    "props": {
+      "h": 400,
+      "layout": "column",
+      "title": "Greeter",
+      "w": 600
+    },
+    "children": [
+      {
+        "kind": "label",
+        "id": "hello",
+        "props": {
+          "text": "Hello from Campy"
+        }
+      },
+      {
+        "kind": "text",
+        "id": "name",
+        "props": {
+          "text": "your name",
+          "w": 240
+        }
+      }
+    ]
+  }
+}

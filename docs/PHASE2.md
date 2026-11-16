@@ -27,7 +27,9 @@ handlers, and Run deploys to a local peer node and attaches a view.**
   grid, Scintilla, file dialogs; `shell_demo` smoke mounts in ~42 ms
 - **T1.3** `campy_ide_model` — display-free state, commands, console, undo/redo
   (16 tests) — done
-- Next: **T1.4** the shell on wx.
+- **T1.4** `campy_ide_wx` — runnable shell over a project directory, sample
+  fixture, smoke ~38 ms (5 tests) — done
+- Next: **T1.5** removal of the legacy stack, after gate G1 (needs human eyes).
 
 Superseded and not to be built: everything in `docs/PHASE1.md` §5 (P1.3 port
 runner, ETF framing, runner child process). Distribution via `:peer` replaces it.
@@ -260,14 +262,25 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   introduced only if a second observer (MCP/plugin) needs them.
 - Files: `campy_ide_model/**`, `scripts/workspace.py`.
 
-### T1.4 — `campy_ide_wx`: the shell on wx
+### T1.4 — `campy_ide_wx`: the shell on wx — done
 
-- Depends: T0.5, T1.1, T1.3 · Size: L · Branch: `p2/t1.4-shell`
-- Wire `campy_ide` intents to renderer patches and wx events to commands.
-  Menu, quick toolbar, palette, project/module tree, tabbed editor, Scintilla,
-  inspector grid, console, splitters, status line, accelerators, native dialogs.
-- Acceptance: the IDE shape from the brief is usable; every panel is data-driven;
-  no window reload for ordinary edits.
+- Depends: T0.5, T1.1, T1.3 · Size: L · Done (5 tests; smoke ~38 ms).
+- App `gleam/apps/campy_ide_wx`; sample project `examples/demo` (two modules,
+  canonical JSON, ABI v2 handler stubs).
+- Delivered: window with menu bar (File/Edit/View), toolbar, status bar, module
+  tree, tabbed editor (Scintilla), console pane (read-only Scintilla), and an
+  inspector grid. Events dispatch into `campy_ide_model`: tree selection opens a
+  module, Save writes the project, Undo/Redo update history, Toggle flips the
+  code-view flag.
+- Refresh policy: the tree is built once at startup; the code editor is only
+  rewritten when the active module changes; the console only when it grows; the
+  grid and status line update on every command. This preserves editor focus,
+  caret, and scroll across unrelated events.
+- Deviations: no form preview/designer yet (M2); one Code page rather than one
+  tab per module; no Open dialog or MCP yet; `Toggle` changes model state but
+  has no visible second view until the form canvas lands.
+- Launch: `cd gleam/apps/campy_ide_wx && CAMPY_PROJECT=../../../examples/demo
+  gleam run`; smoke with `CAMPY_WX_SMOKE=1`.
 
 ### T1.5 — Delete the legacy stack
 
