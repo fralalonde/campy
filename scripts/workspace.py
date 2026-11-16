@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "gleam/apps/campy_ide"
 PACKAGES = [
     ROOT / "gleam/packages" / name
-    for name in ("campy_ui", "campy_bridge", "campy_runtime", "campy_search_box", "campy_form", "campy_ccl", "campy_manifest", "campy_app", "campy_appgen", "campy_broker", "campy_runner")
+    for name in ("campy_view", "campy_ui", "campy_bridge", "campy_runtime", "campy_search_box", "campy_form", "campy_ccl", "campy_manifest", "campy_app", "campy_appgen", "campy_broker", "campy_runner")
 ] + [APP]
 NATIVE = ROOT / "gleam/packages/campy_bridge/priv/native"
 RELOAD = ROOT / "generated/reload.signal"
