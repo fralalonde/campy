@@ -69,6 +69,14 @@ pub fn event_keys_map_by_kind_test() {
   plan.event_key("window") |> should.equal("close")
 }
 
+pub fn chrome_event_keys_map_test() {
+  plan.event_key("menuitem") |> should.equal("click")
+  plan.event_key("tool") |> should.equal("click")
+  plan.event_key("tree") |> should.equal("select")
+  plan.event_key("notebook") |> should.equal("change")
+  plan.event_key("grid") |> should.equal("change")
+}
+
 pub fn prop_readers_are_typed_test() {
   let props = [#("text", VText("hi")), #("n", VInt(3)), #("on", VBool(True))]
 
@@ -92,5 +100,6 @@ pub fn containers_are_identified_test() {
   plan.is_container("panel") |> should.be_true()
   plan.is_container("group") |> should.be_true()
   plan.is_container("window") |> should.be_true()
+  plan.is_container("page") |> should.be_true()
   plan.is_container("label") |> should.be_false()
 }

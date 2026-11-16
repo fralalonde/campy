@@ -13,6 +13,10 @@ pub type Layout {
   Row
 }
 
+pub type TreeItem {
+  TreeItem(key: String, label: String, children: List(TreeItem))
+}
+
 pub fn layout(node: Node) -> Layout {
   case prop_text(node, "layout") {
     Ok("column") -> Column
@@ -133,14 +137,16 @@ pub fn event_key(kind: String) -> String {
   case kind {
     "window" -> "close"
     "button" | "checkbox" | "radio" | "menu" -> "click"
-    "text" | "memo" | "choice" | "list" | "slider" -> "change"
+    "text" | "memo" | "choice" | "list" | "slider" | "notebook" | "grid" ->
+      "change"
+    "tree" -> "select"
     _ -> "click"
   }
 }
 
 pub fn is_container(kind: String) -> Bool {
   case kind {
-    "window" | "form" | "panel" | "group" -> True
+    "window" | "form" | "panel" | "group" | "page" -> True
     _ -> False
   }
 }

@@ -3,7 +3,15 @@
     new_app/0, destroy_app/0, frame/4, show/1, connect/2, next_message/1,
     panel/2, label/3, button/3, checkbox/3, radio/3, choice/2, listbox/2,
     textctrl/3, memo/3, slider/5, gauge/3, picture/3,
-    box_sizer/1, add/4, insert/5, detach/2, set_sizer/2,
+    box_sizer/1, add/5, insert/6, detach/2, set_sizer/2,
+    menubar/0, menu/0, menuitem/3, append_menu/3, set_menubar/2,
+    toolbar/1, tool/3, realize_toolbar/1,
+    statusbar/1, set_status/2,
+    notebook/2, page/3, notebook_selection/1, select_page/2,
+    tree/2, tree_set/2, tree_selected_key/1,
+    grid/2, grid_set/2, grid_cell/1,
+    editor/2, editor_set/3,
+    open_dialog/2, save_dialog/3,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
     set_items/3, set_enabled/2, set_visible/2, focus/1, raise/1, destroy/1,
@@ -81,25 +89,25 @@ box_sizer(Vertical) ->
         false -> wxBoxSizer:new(?wxHORIZONTAL)
     end.
 
-add(Sizer, Child, Border, Expand) ->
-    wxSizer:add(Sizer, Child, sizer_options(Border, Expand)),
+add(Sizer, Child, Border, Expand, Proportion) ->
+    wxSizer:add(Sizer, Child, sizer_options(Border, Expand, Proportion)),
     ok.
 
-insert(Sizer, Index, Child, Border, Expand) ->
-    wxSizer:insert(Sizer, Index, Child, sizer_options(Border, Expand)),
+insert(Sizer, Index, Child, Border, Expand, Proportion) ->
+    wxSizer:insert(Sizer, Index, Child, sizer_options(Border, Expand, Proportion)),
     ok.
 
 detach(Sizer, Child) ->
     _ = wxSizer:detach(Sizer, Child),
     ok.
 
-sizer_options(Border, Expand) ->
+sizer_options(Border, Expand, Proportion) ->
     Flag =
         case Expand of
             true -> ?wxEXPAND;
             false -> 0
         end,
-    [{flag, Flag}, {border, Border}].
+    [{proportion, Proportion}, {flag, Flag}, {border, Border}].
 
 set_sizer(Window, Sizer) ->
     wxWindow:setSizer(Window, Sizer),
@@ -202,6 +210,181 @@ destroy(Ref) ->
     catch wxWindow:destroy(Ref),
     ok.
 
+%% Chrome
+
+menubar() ->
+    wxMenuBar:new().
+
+menu() ->
+    wxMenu:new().
+
+menuitem(Menu, Id, Label) ->
+    wxMenu:append(Menu, Id, Label),
+    Menu.
+
+append_menu(MenuBar, Menu, Title) ->
+    wxMenuBar:append(MenuBar, Menu, Title),
+    MenuBar.
+
+set_menubar(Frame, MenuBar) ->
+    wxFrame:setMenuBar(Frame, MenuBar),
+    ok.
+
+toolbar(Frame) ->
+    wxFrame:createToolBar(Frame).
+
+tool(ToolBar, Id, Label) ->
+    wxToolBar:addTool(ToolBar, Id, Label, wxBitmap:new()),
+    ToolBar.
+
+realize_toolbar(ToolBar) ->
+    wxToolBar:realize(ToolBar),
+    ok.
+
+statusbar(Frame) ->
+    wxFrame:createStatusBar(Frame).
+
+set_status(StatusBar, Text) ->
+    wxStatusBar:setStatusText(StatusBar, Text),
+    ok.
+
+notebook(Parent, Id) ->
+    wxNotebook:new(Parent, Id, []).
+
+page(Notebook, Id, Title) ->
+    Panel = wxPanel:new(Notebook, [{winid, Id}]),
+    wxNotebook:addPage(Notebook, Panel, Title),
+    Panel.
+
+notebook_selection(Notebook) ->
+    wxNotebook:getSelection(Notebook).
+
+select_page(Notebook, Index) ->
+    wxNotebook:setSelection(Notebook, Index),
+    ok.
+
+tree(Parent, Id) ->
+    wxTreeCtrl:new(Parent, [{id, Id}, {style, ?wxTR_HAS_BUTTONS}]).
+
+tree_set(Tree, Items) ->
+    wxTreeCtrl:deleteAllItems(Tree),
+    Root = wxTreeCtrl:addRoot(Tree, <<"">>),
+    add_tree_items(Tree, Root, Items),
+    wxTreeCtrl:expand(Tree, Root),
+    ok.
+
+add_tree_items(_Tree, _Parent, []) ->
+    ok;
+add_tree_items(Tree, Parent, [{tree_item, Key, Label, Children} | Rest]) ->
+    Item = wxTreeCtrl:appendItem(Tree, Parent, Label),
+    wxTreeCtrl:setItemData(Tree, Item, Key),
+    add_tree_items(Tree, Item, Children),
+    add_tree_items(Tree, Parent, Rest).
+
+tree_selected_key(Tree) ->
+    try
+        Item = wxTreeCtrl:getSelection(Tree),
+        case wxTreeCtrl:getItemData(Tree, Item) of
+            Key when is_binary(Key) -> Key;
+            _ -> <<>>
+        end
+    catch
+        _:_ -> <<>>
+    end.
+
+grid(Parent, Id) ->
+    wxGrid:new(Parent, Id, []).
+
+grid_set(Grid, Rows) ->
+    RowCount = length(Rows),
+    ColCount = case Rows of
+        [] -> 0;
+        [First | _] -> length(First)
+    end,
+    case ColCount of
+        0 -> ok;
+        _ ->
+            adjust_grid(Grid, RowCount, ColCount),
+            wxGrid:beginBatch(Grid),
+            set_grid_rows(Grid, Rows, 0),
+            wxGrid:endBatch(Grid)
+    end,
+    ok.
+
+adjust_grid(Grid, RowCount, ColCount) ->
+    case {wxGrid:getNumberRows(Grid), wxGrid:getNumberCols(Grid)} of
+        {0, 0} ->
+            wxGrid:createGrid(Grid, RowCount, ColCount);
+        {OldRows, OldCols} ->
+            if
+                RowCount > OldRows -> wxGrid:appendRows(Grid, RowCount - OldRows);
+                RowCount < OldRows -> wxGrid:deleteRows(Grid, 0, OldRows - RowCount);
+                true -> ok
+            end,
+            if
+                ColCount > OldCols -> wxGrid:appendCols(Grid, ColCount - OldCols);
+                ColCount < OldCols -> wxGrid:deleteCols(Grid, 0, OldCols - ColCount);
+                true -> ok
+            end
+    end.
+
+set_grid_rows(_Grid, [], _Row) ->
+    ok;
+set_grid_rows(Grid, [Values | Rest], Row) ->
+    set_grid_cells(Grid, Values, Row, 0),
+    set_grid_rows(Grid, Rest, Row + 1).
+
+set_grid_cells(_Grid, [], _Row, _Col) ->
+    ok;
+set_grid_cells(Grid, [Value | Rest], Row, Col) ->
+    wxGrid:setCellValue(Grid, Row, Col, Value),
+    set_grid_cells(Grid, Rest, Row, Col + 1).
+
+grid_cell(Grid) ->
+    Row = wxGrid:getGridCursorRow(Grid),
+    Col = wxGrid:getGridCursorCol(Grid),
+    Text = unicode:characters_to_binary(wxGrid:getCellValue(Grid, Row, Col)),
+    {grid_cell, Row, Col, Text}.
+
+editor(Parent, Id) ->
+    Editor = wxStyledTextCtrl:new(Parent, [{id, Id}]),
+    wxStyledTextCtrl:styleSetFaceName(Editor, 0, <<"monospace">>),
+    wxStyledTextCtrl:styleSetSize(Editor, 0, 11),
+    wxStyledTextCtrl:styleClearAll(Editor),
+    wxStyledTextCtrl:setMarginType(Editor, 0, ?wxSTC_MARGIN_NUMBER),
+    wxStyledTextCtrl:setMarginWidth(Editor, 0, 40),
+    Editor.
+
+editor_set(Editor, Text, ReadOnly) ->
+    wxStyledTextCtrl:setText(Editor, Text),
+    wxStyledTextCtrl:setReadOnly(Editor, ReadOnly),
+    ok.
+
+open_dialog(Frame, Wildcard) ->
+    Dialog = wxFileDialog:new(Frame, [
+        {wildcard, Wildcard},
+        {style, ?wxFD_OPEN bor ?wxFD_FILE_MUST_EXIST}
+    ]),
+    Result = case wxFileDialog:showModal(Dialog) of
+        ?wxID_OK -> unicode:characters_to_binary(wxFileDialog:getPath(Dialog));
+        _ -> <<>>
+    end,
+    wxFileDialog:destroy(Dialog),
+    Result.
+
+save_dialog(Frame, Wildcard, Default) ->
+    Dialog = wxFileDialog:new(Frame, [
+        {wildcard, Wildcard},
+        {defaultFile, Default},
+        {style, ?wxFD_SAVE bor ?wxFD_OVERWRITE_PROMPT}
+    ]),
+    Result = case wxFileDialog:showModal(Dialog) of
+        ?wxID_OK -> unicode:characters_to_binary(wxFileDialog:getPath(Dialog));
+        _ -> <<>>
+    end,
+    wxFileDialog:destroy(Dialog),
+    Result.
+
 %% Events
 
 connect(Ref, <<"window">>) ->
@@ -222,6 +405,16 @@ connect(Ref, <<"list">>) ->
     wxListBox:connect(Ref, command_listbox_selected, []);
 connect(Ref, <<"slider">>) ->
     wxSlider:connect(Ref, command_slider_updated, []);
+connect(Ref, <<"menu">>) ->
+    wxMenu:connect(Ref, command_menu_selected, []);
+connect(Ref, <<"toolbar">>) ->
+    wxToolBar:connect(Ref, command_menu_selected, []);
+connect(Ref, <<"notebook">>) ->
+    wxNotebook:connect(Ref, command_notebook_page_changed, []);
+connect(Ref, <<"tree">>) ->
+    wxTreeCtrl:connect(Ref, command_tree_sel_changed, []);
+connect(Ref, <<"grid">>) ->
+    wxGrid:connect(Ref, grid_cell_changed, []);
 connect(_Ref, _Kind) ->
     ok.
 

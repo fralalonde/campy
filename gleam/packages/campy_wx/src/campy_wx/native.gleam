@@ -4,6 +4,7 @@
 //// as `Dynamic` here and never inspected; the adapter is the only place that
 //// knows wx atoms, options, and record shapes.
 
+import campy_wx/plan.{type TreeItem}
 import gleam/dynamic.{type Dynamic}
 
 pub type NativeMessage {
@@ -76,7 +77,13 @@ pub fn picture(parent: Dynamic, id: Int, path: String) -> Dynamic
 pub fn box_sizer(vertical: Bool) -> Dynamic
 
 @external(erlang, "campy_wx_native", "add")
-pub fn add(sizer: Dynamic, child: Dynamic, border: Int, expand: Bool) -> Nil
+pub fn add(
+  sizer: Dynamic,
+  child: Dynamic,
+  border: Int,
+  expand: Bool,
+  proportion: Int,
+) -> Nil
 
 @external(erlang, "campy_wx_native", "insert")
 pub fn insert(
@@ -85,6 +92,7 @@ pub fn insert(
   child: Dynamic,
   border: Int,
   expand: Bool,
+  proportion: Int,
 ) -> Nil
 
 @external(erlang, "campy_wx_native", "detach")
@@ -155,6 +163,82 @@ pub fn get_bool(ref: Dynamic, kind: String) -> Bool
 
 @external(erlang, "campy_wx_native", "get_selection")
 pub fn get_selection(ref: Dynamic, kind: String) -> Int
+
+pub type GridCell {
+  GridCell(row: Int, col: Int, text: String)
+}
+
+@external(erlang, "campy_wx_native", "menubar")
+pub fn menubar() -> Dynamic
+
+@external(erlang, "campy_wx_native", "menu")
+pub fn menu() -> Dynamic
+
+@external(erlang, "campy_wx_native", "menuitem")
+pub fn menuitem(parent: Dynamic, id: Int, label: String) -> Dynamic
+
+@external(erlang, "campy_wx_native", "append_menu")
+pub fn append_menu(bar: Dynamic, menu: Dynamic, title: String) -> Nil
+
+@external(erlang, "campy_wx_native", "set_menubar")
+pub fn set_menubar(frame: Dynamic, bar: Dynamic) -> Nil
+
+@external(erlang, "campy_wx_native", "toolbar")
+pub fn toolbar(frame: Dynamic) -> Dynamic
+
+@external(erlang, "campy_wx_native", "tool")
+pub fn tool(bar: Dynamic, id: Int, label: String) -> Dynamic
+
+@external(erlang, "campy_wx_native", "realize_toolbar")
+pub fn realize_toolbar(bar: Dynamic) -> Nil
+
+@external(erlang, "campy_wx_native", "statusbar")
+pub fn statusbar(frame: Dynamic) -> Dynamic
+
+@external(erlang, "campy_wx_native", "set_status")
+pub fn set_status(bar: Dynamic, text: String) -> Nil
+
+@external(erlang, "campy_wx_native", "notebook")
+pub fn notebook(parent: Dynamic, id: Int) -> Dynamic
+
+@external(erlang, "campy_wx_native", "page")
+pub fn page(book: Dynamic, id: Int, title: String) -> Dynamic
+
+@external(erlang, "campy_wx_native", "notebook_selection")
+pub fn notebook_selection(book: Dynamic) -> Int
+
+@external(erlang, "campy_wx_native", "select_page")
+pub fn select_page(book: Dynamic, index: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "tree")
+pub fn tree(parent: Dynamic, id: Int) -> Dynamic
+
+@external(erlang, "campy_wx_native", "tree_set")
+pub fn tree_set(tree: Dynamic, items: List(TreeItem)) -> Nil
+
+@external(erlang, "campy_wx_native", "tree_selected_key")
+pub fn tree_selected_key(tree: Dynamic) -> String
+
+@external(erlang, "campy_wx_native", "grid")
+pub fn grid(parent: Dynamic, id: Int) -> Dynamic
+
+@external(erlang, "campy_wx_native", "grid_set")
+pub fn grid_set(grid: Dynamic, rows: List(List(String))) -> Nil
+
+@external(erlang, "campy_wx_native", "grid_cell")
+pub fn grid_cell(grid: Dynamic) -> GridCell
+
+@external(erlang, "campy_wx_native", "editor")
+pub fn editor(parent: Dynamic, id: Int) -> Dynamic
+
+@external(erlang, "campy_wx_native", "editor_set")
+pub fn editor_set(editor: Dynamic, text: String, read_only: Bool) -> Nil
+
+@external(erlang, "campy_wx_native", "open_dialog")
+pub fn open_dialog(frame: Dynamic, wildcard: String) -> String
+
+@external(erlang, "campy_wx_native", "save_dialog")
+pub fn save_dialog(frame: Dynamic, wildcard: String, default: String) -> String
 
 @external(erlang, "campy_wx_native", "now_ms")
 pub fn now_ms() -> Int

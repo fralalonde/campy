@@ -7,7 +7,7 @@
 
 import campy_view.{
   type Node, type Patch, type Value, Insert, Order, Remove, Replace, SetEvents,
-  SetProps, VBool, VInt, VText,
+  SetProps, VBool, VInt, VMap, VText,
 }
 import campy_wx/native
 import campy_wx/plan
@@ -52,6 +52,7 @@ type Widget {
     sizer: Option(Dynamic),
     layout: String,
     border: Int,
+    grow: Bool,
   )
 }
 
@@ -77,6 +78,7 @@ pub fn start(title: String, width: Int, height: Int) -> Shell {
       sizer: Some(sizer),
       layout: "column",
       border: 0,
+      grow: True,
     )
 
   Shell(
@@ -229,12 +231,29 @@ fn create_node(
     "slider" -> Ok(native.slider(parent.ref, wx_id, value, min, max))
     "progress" -> Ok(native.gauge(parent.ref, wx_id, max))
     "picture" -> Ok(native.picture(parent.ref, wx_id, picture_path))
+    "menubar" -> Ok(native.menubar())
+    "menu" -> Ok(native.menu())
+    "menuitem" -> Ok(native.menuitem(parent.ref, wx_id, text))
+    "toolbar" -> Ok(native.toolbar(shell.frame))
+    "tool" -> Ok(native.tool(parent.ref, wx_id, text))
+    "status" -> Ok(native.statusbar(shell.frame))
+    "notebook" -> Ok(native.notebook(parent.ref, wx_id))
+    "page" -> Ok(native.page(parent.ref, wx_id, text))
+    "tree" -> Ok(native.tree(parent.ref, wx_id))
+    "grid" -> Ok(native.grid(parent.ref, wx_id))
+    "editor" -> Ok(native.editor(parent.ref, wx_id))
     "window" | "form" -> Error("nested window is not supported")
     other -> Error("unknown widget kind: " <> other)
   }
 
   use ref <- result.try(created)
   native.connect(ref, kind)
+
+  case kind {
+    "menubar" -> native.set_menubar(shell.frame, ref)
+    "menu" -> native.append_menu(parent.ref, ref, text)
+    _ -> Nil
+  }
 
   let widget =
     Widget(
@@ -249,6 +268,7 @@ fn create_node(
       sizer: None,
       layout: plan.layout_name(node),
       border: plan.border(node),
+      grow: plan.bool_of(node.props, "grow") |> plan.unwrap_or(False),
     )
 
   let shell = register(shell, widget)
@@ -262,6 +282,12 @@ fn create_node(
   }
 
   use shell <- result.try(mount_children(shell, node.id, node.children))
+
+  case kind {
+    "toolbar" -> native.realize_toolbar(ref)
+    _ -> Nil
+  }
+
   Ok(#(shell, widget))
 }
 
@@ -289,10 +315,21 @@ fn attach(
 ) -> Shell {
   case get_widget(shell, parent_id), get_widget(shell, child_id) {
     Ok(parent), Ok(child) -> {
-      case parent.sizer {
-        Some(sizer) ->
-          native.insert(sizer, index, child.ref, parent.border, True)
-        None -> native.raise(child.ref)
+      case is_chrome(child.kind) {
+        True -> Nil
+        False ->
+          case parent.sizer {
+            Some(sizer) ->
+              native.insert(
+                sizer,
+                index,
+                child.ref,
+                parent.border,
+                True,
+                proportion(child),
+              )
+            None -> native.raise(child.ref)
+          }
       }
 
       update_widget(shell, parent_id, fn(parent) {
@@ -300,6 +337,21 @@ fn attach(
       })
     }
     _, _ -> shell
+  }
+}
+
+fn is_chrome(kind: String) -> Bool {
+  case kind {
+    "menubar" | "menu" | "menuitem" | "toolbar" | "tool" | "status" | "page" ->
+      True
+    _ -> False
+  }
+}
+
+fn proportion(widget: Widget) -> Int {
+  case widget.grow {
+    True -> 1
+    False -> 0
   }
 }
 
@@ -368,6 +420,7 @@ fn apply_text(widget: Widget) -> Nil {
   case widget.kind {
     "label" | "button" | "checkbox" | "radio" | "group" | "window" ->
       native.set_label(widget.ref, text)
+    "status" -> native.set_status(widget.ref, text)
     "text" | "memo" -> native.set_text(widget.ref, text)
     _ -> Nil
   }
@@ -508,7 +561,14 @@ fn apply_order(
       list.index_map(ids, fn(id, index) {
         case get_widget(shell, id) {
           Ok(child) ->
-            native.insert(sizer, index, child.ref, parent.border, True)
+            native.insert(
+              sizer,
+              index,
+              child.ref,
+              parent.border,
+              True,
+              proportion(child),
+            )
           Error(_) -> Nil
         }
       })
@@ -610,7 +670,60 @@ fn event_value(widget: Widget) -> Value {
     "choice" | "list" -> VInt(native.get_selection(widget.ref, widget.kind))
     "slider" -> VInt(native.get_int(widget.ref, widget.kind))
     "progress" -> VInt(native.get_int(widget.ref, widget.kind))
+    "notebook" -> VInt(native.notebook_selection(widget.ref))
+    "tree" -> VText(native.tree_selected_key(widget.ref))
+    "grid" ->
+      case native.grid_cell(widget.ref) {
+        native.GridCell(row, col, text) ->
+          VMap([
+            #("col", VInt(col)),
+            #("row", VInt(row)),
+            #("text", VText(text)),
+          ])
+      }
     _ -> VBool(True)
+  }
+}
+
+pub fn set_tree(shell: Shell, id: String, items: List(plan.TreeItem)) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.tree_set(widget.ref, items)
+    Error(_) -> Nil
+  }
+}
+
+pub fn set_grid(shell: Shell, id: String, rows: List(List(String))) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.grid_set(widget.ref, rows)
+    Error(_) -> Nil
+  }
+}
+
+pub fn set_editor(
+  shell: Shell,
+  id: String,
+  text: String,
+  read_only: Bool,
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_set(widget.ref, text, read_only)
+    Error(_) -> Nil
+  }
+}
+
+pub fn set_status(shell: Shell, text: String) -> Nil {
+  case
+    list.find(dict.values(shell.widgets), fn(widget) { widget.kind == "status" })
+  {
+    Ok(widget) -> native.set_status(widget.ref, text)
+    Error(Nil) -> Nil
+  }
+}
+
+pub fn select_page(shell: Shell, id: String, index: Int) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.select_page(widget.ref, index)
+    Error(_) -> Nil
   }
 }
 

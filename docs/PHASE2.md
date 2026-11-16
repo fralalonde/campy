@@ -23,7 +23,9 @@ handlers, and Run deploys to a local peer node and attaches a view.**
 - **T1.2** `campy_project` — project directory, canonical `campy.json`,
   module/form documents, handler files (13 tests) — done; geometry resolution
   moves to T2.1
-- Next: **T1.1** shell primitives, then **T1.3** IDE model.
+- **T1.1** shell primitives — done; menus, toolbar, status, notebook, tree,
+  grid, Scintilla, file dialogs; `shell_demo` smoke mounts in ~42 ms
+- Next: **T1.3** IDE model.
 
 Superseded and not to be built: everything in `docs/PHASE1.md` §5 (P1.3 port
 runner, ETF framing, runner child process). Distribution via `:peer` replaces it.
@@ -198,15 +200,24 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 
 ## 3. M1 — the shell
 
-### T1.1 — wx shell primitives
+### T1.1 — wx shell primitives — done
 
-- Depends: T0.4 · Size: M · Branch: `p2/t1.1-chrome`
-- Add to `campy_wx`: frame with menu bar, toolbar, status bar, splitter panes,
-  `wxAuiNotebook` tabs, `wxTreeCtrl`, `wxGrid`, `wxStyledTextCtrl`, console text
-  control, native file dialogs, accelerator table, and a painter helper for
-  custom-draw panels (`wxBufferedPaintDC`/`wxGraphicsContext`).
-- Expose them as nodes or small typed helpers; no IDE policy in this package.
-- Acceptance: a `shell_demo` window shows every region with placeholder data.
+- Depends: T0.4 · Size: M · Done (14 tests; shell smoke in `dev-raw`).
+- Delivered as view kinds: `menubar`, `menu`, `menuitem` (frame menu bar),
+  `toolbar`, `tool`, `status`, `notebook`, `page`, `tree`, `grid`, `editor`
+  (Scintilla). Chrome kinds are attached by their parent kind rather than a
+  sizer; layout children support a `grow` prop that maps to sizer proportion 1.
+- Imperative fill helpers: `set_tree/3` (keyed tree items; selection reports the
+  key), `set_grid/3` (rows of cells; edits report row/col/text), `set_editor/4`
+  (text + read-only), `set_status/2`, `select_page/3`.
+- Native file dialogs: `open_dialog/2`, `save_dialog/3` in the adapter.
+- Events: menu items and tools arrive as `click`; notebook as `change` (index);
+  tree as `select` (key); grid as `change` (row/col/text map).
+- `campy_wx/shell_demo` assembles every region; `CAMPY_WX_SMOKE=1` fills them,
+  sets status, closes, exits 0.
+- Deviations: `wxNotebook` instead of `wxAuiNotebook` (docking later);
+  splitters/dockable panes deferred to T1.4 if sizers are insufficient; toolbar
+  tools use text labels with an empty bitmap; no custom paint canvas yet (T2.1).
 
 ### T1.2 — `campy_project`: project and form documents — done
 
