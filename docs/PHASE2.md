@@ -8,6 +8,76 @@ Goal of the phase, in one sentence: **Campy is a lean standalone BEAM IDDDE buil
 on OTP wx, where a designed form is canonical JSON, an app is state plus
 handlers, and Run deploys to a local peer node and attaches a view.**
 
+## 0. Resuming cold (handoff)
+
+**Original objective (unchanged).** Phase 2 replaces the Slint/Rust prototype
+with a lean standalone BEAM IDDDE on OTP wx. The lasting asset is the view
+layer: a target-neutral `campy_view` tree + patches, canonical JSON projects,
+an app = state + ABI v2 handlers, and later deploy to local peer nodes. HTMX
+rendering and editor plugins are target-neutral later additions and are **not**
+built now. User priorities: standalone first, plugins lowest, no Slint, no P1.3
+port runner, ABI v2 now, local peers.
+
+**Toolkit decision.** Stay on OTP wx/GTK. Qt was rejected: OTP has no Qt binding,
+wxQt is experimental/incomplete, and OTP's wx driver cannot be rebuilt against
+it. Option 2 (native children + selection chrome) is implemented on wx.
+
+**Current position (2026-11-16, latest commit `3a1f4cb`).**
+- M1 complete (gate G1 passed). **T2.1 complete and verified under Xvfb.**
+- 169 tests green: `campy_view` 71, `campy_wx` 14, `campy_project` 13,
+  `campy_ide_model` 16, `campy_design` 23, `campy_manifest` 27, `campy_ide_wx` 5.
+- `just check` is green headlessly.
+
+**Next task.** T2.2 (palette, placement, adoption, z-order, clipboard, undo),
+then T2.3 (editable inspector + events/stubs), T2.4 (generated Gleam-wx source
+tab), then M3 (ABI v2 runtime, appgen, Run) and M4 (local peer nodes, deploy,
+debug).
+
+**Layout.**
+```
+gleam/packages: campy_view campy_wx campy_project campy_ide_model
+                campy_design campy_manifest
+gleam/apps:     campy_ide_wx
+examples/demo   canonical project (greeter, notes)
+scripts:        workspace.py (build/test runner), ui_probe.sh (X11 probe)
+docs:           PHASE2.md, adr/0003-0005
+```
+
+**Commands (from the repo root; run GUI/wx work in `dev-raw`).**
+```sh
+flatpak-spawn --host toolbox run -c dev-raw sh -lc \
+  'cd /var/home/fralalonde/Code/campy && just check'
+just run          # IDE on examples/demo (CAMPY_PROJECT=<dir> to change)
+just smoke        # scripted mount/open/close
+scripts/ui_probe.sh xvfb   # Xvfb + xdotool; screenshots in generated/ui/
+```
+The probe requires Xvfb, xdotool, ImageMagick, and openbox (installed in
+`dev-raw`). Read `generated/ui/*.png` to verify UI changes.
+
+**Continuation invariants (learned the hard way).**
+1. All wx calls go through `campy_wx_native.erl`. Use **class-specific**
+   `connect` (`wxPanel:connect`, `wxStaticText:connect`, `wxMiniFrame:connect`);
+   generic `wxWindow:connect` silently fails.
+2. Mouse event types are converted to binaries in the adapter; Gleam patterns
+   match strings, not atoms.
+3. Sizer inserts use `sizer_index` (count only layout children); chrome children
+   (menus, toolbar, status, pages) never occupy sizer slots. Min sizes apply per
+   dimension.
+4. Designer hit-testing resolves the **document** layout and compares against
+   `layout.root`; the design view renames the root to `canvas`.
+5. Any geometry commit runs `campy_design.freeze` first (materializes resolved
+   coordinates, sets free layout, drops `border`/`gap`), then `set_rect`; group
+   moves commit every rect in one undo entry.
+6. Selection chrome is 13 borderless always-on-top **mini-frames**: 0-7 resize,
+   8 move grip, 9-12 marquee strips. Child panels draw above controls but do not
+   receive input on GTK; popups were input-dead. Hide all chrome when selection
+   is empty; show resize handles only for a single selection.
+7. The `design` prop selects design-mode events; do not overload `events`
+   containing `select`, because the module tree uses that key for its own
+   selection.
+8. `campy_design.design_view` produces the canvas subtree; the document itself
+   stays the source of truth. The inspector shows resolved rects.
+
 ## Status (2026-11-16)
 
 - **T0.1** ADRs 0003 (wx), 0004 (view/projection/ABI v2), 0005 (source format) —
