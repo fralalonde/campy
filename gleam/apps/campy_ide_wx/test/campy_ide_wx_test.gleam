@@ -1,7 +1,7 @@
 import campy_ide_model as model
 import campy_ide_wx
 import campy_project
-import campy_view.{VText}
+import campy_view.{VInt, VText}
 import campy_wx/plan.{TreeItem}
 import gleam/list
 import gleeunit
@@ -45,11 +45,9 @@ pub fn inspector_reports_the_active_module_test() {
 
   rows
   |> should.equal([
-    ["Field", "Value"],
-    ["Project", "Demo"],
-    ["Module", "greeter"],
-    ["Tabs", "1"],
-    ["History", "0"],
+    ["Field", "Value", "Field", "Value"],
+    ["Project", "Demo", "Module", "greeter"],
+    ["Tabs", "1", "History", "0"],
   ])
 }
 
@@ -128,15 +126,11 @@ pub fn inspector_shows_the_parent_of_a_control_test() {
 
   campy_ide_wx.inspector_rows(state)
   |> should.equal([
-    ["Field", "Value"],
-    ["id", "ok"],
-    ["kind", "button"],
-    ["parent", "root"],
-    ["x", "10"],
-    ["y", "12"],
-    ["w", "80"],
-    ["h", "30"],
-    ["text", ""],
+    ["Field", "Value", "Field", "Value"],
+    ["id", "ok", "kind", "button"],
+    ["parent", "root", "x", "10"],
+    ["y", "12", "w", "80"],
+    ["h", "30", "text", ""],
   ])
 }
 
@@ -179,14 +173,106 @@ pub fn inspector_reports_resolved_geometry_for_column_children_test() {
 
   campy_ide_wx.inspector_rows(state)
   |> should.equal([
-    ["Field", "Value"],
-    ["id", "b"],
-    ["kind", "label"],
-    ["parent", "root"],
-    ["x", "0"],
-    ["y", "24"],
-    ["w", "600"],
-    ["h", "20"],
-    ["text", "B"],
+    ["Field", "Value", "Field", "Value"],
+    ["id", "b", "kind", "label"],
+    ["parent", "root", "x", "0"],
+    ["y", "24", "w", "600"],
+    ["h", "20", "text", "B"],
   ])
+}
+
+// --- T2.3: inspector and events -------------------------------------------
+
+fn state_from(view: campy_view.Node, selection: List(String)) -> model.State {
+  model.new(
+    campy_project.Project(
+      title: "Demo",
+      modules: [
+        campy_project.Module(
+          slug: "main",
+          form: campy_view.Document(schema: 1, view: view, extra: []),
+          handlers: "",
+        ),
+      ],
+      extra: [],
+    ),
+  )
+  |> model.select_controls(selection)
+}
+
+fn design_form(children: List(campy_view.Node)) -> campy_view.Node {
+  campy_view.node("form", "root")
+  |> campy_view.with_props([
+    #("w", VInt(600)),
+    #("h", VInt(400)),
+  ])
+  |> campy_view.with_children(children)
+}
+
+fn sized_button(id: String, text: String, x: Int, y: Int) -> campy_view.Node {
+  campy_view.node("button", id)
+  |> campy_view.with_props([
+    #("x", VInt(x)),
+    #("y", VInt(y)),
+    #("w", VInt(80)),
+    #("h", VInt(30)),
+    #("text", VText(text)),
+  ])
+  |> campy_view.with_events(["click"])
+}
+
+pub fn inspector_reports_absolute_geometry_for_nested_controls_test() {
+  let view =
+    design_form([
+      campy_view.node("panel", "panel")
+      |> campy_view.with_props([
+        #("x", VInt(100)),
+        #("y", VInt(80)),
+        #("w", VInt(300)),
+        #("h", VInt(200)),
+      ])
+      |> campy_view.with_child(sized_button("ok", "Go", 20, 20)),
+    ])
+
+  campy_ide_wx.inspector_rows(state_from(view, ["ok"]))
+  |> should.equal([
+    ["Field", "Value", "Field", "Value"],
+    ["id", "ok", "kind", "button"],
+    ["parent", "panel", "x", "120"],
+    ["y", "100", "w", "80"],
+    ["h", "30", "text", "Go"],
+  ])
+}
+
+pub fn multi_selection_shows_common_values_and_blanks_the_rest_test() {
+  let view =
+    design_form([
+      sized_button("first", "Go", 10, 20),
+      sized_button("second", "Stop", 120, 20),
+    ])
+
+  campy_ide_wx.inspector_rows(state_from(view, ["first", "second"]))
+  |> should.equal([
+    ["Field", "Value", "Field", "Value"],
+    ["selected", "2", "kind", "button"],
+    ["parent", "root", "x", ""],
+    ["y", "20", "w", "80"],
+    ["h", "30", "text", ""],
+  ])
+}
+
+pub fn events_list_follows_the_selected_control_test() {
+  let view =
+    design_form([
+      sized_button("ok", "Go", 10, 10),
+      campy_view.node("text", "name")
+        |> campy_view.with_props([#("text", VText(""))])
+        |> campy_view.with_events(["change"]),
+    ])
+
+  campy_ide_wx.event_items(state_from(view, [])) |> should.equal([])
+  campy_ide_wx.event_items(state_from(view, ["ok"]))
+  |> should.equal(["click"])
+  campy_ide_wx.event_items(state_from(view, ["ok", "name"]))
+  |> should.equal([])
 }

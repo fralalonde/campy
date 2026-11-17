@@ -23,19 +23,18 @@ wxQt is experimental/incomplete, and OTP's wx driver cannot be rebuilt against
 it. Option 2 (native children + selection chrome) is implemented on wx.
 
 **Current position (2026-11-17).**
-- M1 complete (gate G1 passed). **T2.1 and T2.2 complete and verified under
-  Xvfb.**
-- 208 tests green: `campy_view` 71, `campy_wx` 14, `campy_project` 13,
-  `campy_ide_model` 35, `campy_design` 31, `campy_catalog` 9,
-  `campy_manifest` 27, `campy_ide_wx` 8.
+- M1 complete (gate G1 passed). **T2.1, T2.2 and T2.3 complete and verified
+  under Xvfb.**
+- 221 tests green: `campy_view` 71, `campy_wx` 14, `campy_project` 13,
+  `campy_ide_model` 45, `campy_design` 31, `campy_catalog` 9,
+  `campy_manifest` 27, `campy_ide_wx` 11.
 - `just check` is green headlessly. On this Fedora 46 host, OTP 28's crypto NIF
   no longer loads against the system OpenSSL (missing `EVP_sm4_cbc`); run
   `LD_LIBRARY_PATH=<compatible OpenSSL 3 dir> just check` until OTP is rebuilt.
   The IDE and wx tests do not need crypto.
 
-**Next task.** T2.3 (editable inspector + events/stubs), then T2.4 (generated
-Gleam-wx source tab), then M3 (ABI v2 runtime, appgen, Run) and M4 (local peer
-nodes, deploy, debug).
+**Next task.** T2.4 (generated Gleam-wx source tab), then M3 (ABI v2 runtime,
+appgen, Run) and M4 (local peer nodes, deploy, debug).
 
 **Layout.**
 ```
@@ -81,6 +80,9 @@ The probe requires Xvfb, xdotool, ImageMagick, and openbox (installed in
    selection.
 8. `campy_design.design_view` produces the canvas subtree; the document itself
    stays the source of truth. The inspector shows resolved rects.
+9. Grid edits arrive as `wxGridEvent` records, not `wxCommandEvent`s. The
+   adapter reads the event's own row/col and cell text; `getGridCursorRow` is
+   already on the next cell when Enter moves the cursor before the reader.
 
 ## Status (2026-11-16)
 
@@ -136,12 +138,25 @@ The probe requires Xvfb, xdotool, ImageMagick, and openbox (installed in
   move can cross containers; front/back reorder child order. Every command is
   a model undo entry. Verified under Xvfb: panel drag-place, button adoption,
   copy/paste, duplicate, delete, undo, and reparent to root.
+- **T2.3** editable inspector and events — done (2026-11-17). Single selection
+  shows resolved absolute geometry (invariant 8), `kind`, parent and text in a
+  compact two-field-per-row grid; x/y/w/h use wx's integer cell editor and text
+  uses the text editor. Edits dispatch `SetControlRect`/`SetControlProp` through
+  the model, so each one is an undo entry and the canvas diff updates. Multi
+  selection shows only shared properties with differing values blank and is
+  read-only. An events list beside the grid lists the selected control's
+  declared events; clicking one opens Code and appends an ABI v2
+  `pub fn <control>_<event>(state, event)` stub when missing (one undo entry,
+  scrolled into view). Verified under Xvfb: x 477→500, text → `Hello T2.3`,
+  canvas updated, click event appended `button_1_click` and opened its source.
 - Bugs found by the probe: mouse event types were atoms while Gleam patterns
   were binaries; `wxWindow:connect` silently failed for concrete widgets
   (class-specific `connect` is required); sizer inserts used raw child indexes
   (chrome children inflated the index); zero-width min sizes skipped heights;
   column-layout edits snapped back until the container was frozen to free
-  layout; the inspector showed document props instead of resolved geometry.
+  layout; the inspector showed document props instead of resolved geometry;
+  grid edits are `wxGridEvent`s and the cursor has already moved when read;
+  `wxGridCellNumberEditor` needs both min and max or GTK aborts the editor.
 - Toolkit decision: stay on OTP wx/GTK. Qt has no OTP binding; wxQt exists but is
   incomplete and OTP's driver cannot be rebuilt against it. Option 2 (native
   children + selection chrome) is therefore built on wx/GTK: real child
@@ -481,13 +496,39 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   dragging a payload out of the palette list; `wxListBox` does not expose a
   reliable drag source. Categories/search are deferred.
 
-### T2.3 — Inspector and events
+### T2.3 — Inspector and events — done
 
-- Inspector over the shared selection: common properties only for multi-select,
-  typed editors (text, int, bool, choice, color), differing values blank.
-- Events tab creates/opens ABI v2 handler stubs via `campy_project.handler_name`.
-- Acceptance: edit geometry/text in the inspector and see the canvas update;
-  clicking an event opens the handler source.
+- Depends: T2.2 · Size: M · Done (2026-11-17; 221 tests).
+- Delivered:
+  1. The inspector is a compact two-field/value-pairs-per-row grid (rather than
+     one field per row) so all fields stay visible in the fixed 170 px pane
+     without scrolling or reflowing the palette. Each value cell is typed: x/y
+     and w/h use `wxGridCellNumberEditor` (w/h minimum `campy_design.min_size`),
+     everything else uses the text editor.
+  2. Single selection shows id, kind, parent, resolved absolute x/y/w/h, and
+     text. Multi-selection shows only values shared by every selected control;
+     differing values are blank, and grid edits are read-only.
+  3. Model commands `SetControlRect(id, Rect)`, `SetControlProp(id, name,
+     Value)`, `SetHandlers(text)`, and `OpenHandler(control, event)`. Geometry
+     goes through `commit_geometry`, so sizer forms freeze, sizes clamp, and an
+     unchanged rect is a no-op. Every change is one undo entry.
+  4. An events list (~220 px) beside the grid lists the selected control's
+     declared events from the document (the design view rewrites events to
+     `select`, so it must not be read). Clicking an event opens the Code page;
+     a missing handler appends an ABI v2 stub named by
+     `campy_project.handler_name` and scrolls it into view. `handler_exists` is
+     a `pub fn <name>(` substring check.
+  5. `campy_wx` gained `set_items` for list/choice fills, grid editor helpers,
+     and `editor_show_end`; `campy_design.set_prop`/`set_node_prop` are public.
+- Acceptance met: edited a geometry cell (x 477→500) and a text cell
+  (`Hello T2.3`) through the inspector; the canvas updated and undo advanced;
+  clicking the button's `click` event appended `button_1_click` and opened the
+  Code page at the stub. Verified with `scripts/ui_probe.sh xvfb`
+  (`t23-inspector-single`, `t23-inspector-x-edited`,
+  `t23-inspector-text-edited`, `t23-handler-opened`, `t23-handler-stub`).
+- Deviation: the inspector uses two field/value pairs per row (value columns 1
+  and 3) instead of one pair per row; fields are still resolved from the label
+  left of the edited cell, never from a selection-specific row index.
 
 ### T2.4 — Generated source tab
 

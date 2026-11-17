@@ -12,7 +12,7 @@
 import campy_catalog
 import campy_design
 import campy_project.{type Module, type Project}
-import campy_view.{type Node}
+import campy_view.{type Node, type Value}
 import gleam/dict
 import gleam/int
 import gleam/list
@@ -73,6 +73,10 @@ pub type Command {
     items: List(#(String, campy_design.Rect)),
     reparent: Option(#(String, String)),
   )
+  SetControlRect(id: String, rect: campy_design.Rect)
+  SetControlProp(id: String, name: String, value: Value)
+  SetHandlers(String)
+  OpenHandler(control_id: String, event: String)
 }
 
 pub fn new(project: Project) -> State {
@@ -672,6 +676,146 @@ pub fn commit_geometry(
   }
 }
 
+/// Set one control's absolute rectangle, as typed into the inspector. This is
+/// the same path as a finished drag, so sizer forms freeze first, sizes clamp
+/// to `campy_design.min_size`, and an unchanged rectangle is a no-op.
+pub fn set_control_rect(
+  state: State,
+  id: String,
+  rect: campy_design.Rect,
+) -> State {
+  commit_geometry(state, [#(id, rect)], None)
+}
+
+/// Set a non-geometry property (text, checked, items, ...). Geometry belongs in
+/// `SetControlRect`; this keeps clamping and alignment rules in one place.
+pub fn set_control_prop(
+  state: State,
+  id: String,
+  name: String,
+  value: Value,
+) -> State {
+  case active_module(state) {
+    Error(error) -> set_status(state, error)
+    Ok(module) -> {
+      let view = campy_design.set_node_prop(module.form.view, id, name, value)
+      case view == module.form.view {
+        True -> state
+        False ->
+          state |> commit_view(module, view) |> set_status("Set " <> name)
+      }
+    }
+  }
+}
+
+/// Replace the active module's handler source. One undo entry when it changes.
+pub fn set_handlers(state: State, handlers: String) -> State {
+  case active_module(state) {
+    Error(error) -> set_status(state, error)
+    Ok(module) ->
+      state
+      |> commit_handlers(module, handlers)
+      |> set_status("Handlers updated")
+  }
+}
+
+fn commit_handlers(state: State, module: Module, handlers: String) -> State {
+  let updated = campy_project.Module(..module, handlers: handlers)
+
+  let modules =
+    list.map(state.project.modules, fn(candidate) {
+      case candidate.slug == module.slug {
+        True -> updated
+        False -> candidate
+      }
+    })
+
+  commit(
+    state,
+    campy_project.Project(
+      title: state.project.title,
+      modules: modules,
+      extra: state.project.extra,
+    ),
+  )
+}
+
+/// The event keys a control declares in the document. The designer view
+/// rewrites events to `select`, so always read the module's form, not the
+/// canvas subtree.
+pub fn control_events(state: State, id: String) -> List(String) {
+  case active_module(state) {
+    Error(_) -> []
+    Ok(module) ->
+      case campy_design.find_node(module.form.view, id) {
+        Some(node) -> node.events
+        None -> []
+      }
+  }
+}
+
+/// Events shown for the shared selection. Multi-selection stays read-only, so
+/// only a single control contributes events.
+pub fn selected_events(state: State) -> List(String) {
+  case state.selection {
+    [id] -> control_events(state, id)
+    _ -> []
+  }
+}
+
+pub fn handler_name(control_id: String, event: String) -> String {
+  campy_project.handler_name(control_id, event)
+}
+
+/// The inspector's cheap existence check: a `pub fn <name>(` declaration is
+/// enough; parsing Gleam here would duplicate the compiler.
+pub fn handler_exists(handlers: String, name: String) -> Bool {
+  string.contains(handlers, "pub fn " <> name <> "(")
+}
+
+/// The ABI v2 stub appended when an event has no handler yet.
+pub fn handler_stub(name: String) -> String {
+  "pub fn "
+  <> name
+  <> "(state: State, event: Event) -> #(State, List(Effect)) {\n"
+  <> "  let _ = event\n"
+  <> "  #(state, [])\n"
+  <> "}\n"
+}
+
+fn append_handler(handlers: String, stub: String) -> String {
+  case handlers {
+    "" -> stub
+    _ ->
+      case string.ends_with(handlers, "\n") {
+        True -> handlers <> "\n" <> stub
+        False -> handlers <> "\n\n" <> stub
+      }
+  }
+}
+
+/// Open a declared event's handler source. Missing handlers are appended as
+/// ABI v2 stubs in the active module (one undo entry); both paths show Code.
+pub fn open_handler(state: State, control_id: String, event: String) -> State {
+  case active_module(state) {
+    Error(error) -> set_status(state, error)
+    Ok(module) -> {
+      let name = handler_name(control_id, event)
+
+      let #(state, status) = case handler_exists(module.handlers, name) {
+        True -> #(state, "Opened " <> name)
+        False -> {
+          let handlers = append_handler(module.handlers, handler_stub(name))
+          let state = commit_handlers(state, module, handlers)
+          #(state, "Added handler " <> name)
+        }
+      }
+
+      State(..state, code_view: True) |> set_status(status)
+    }
+  }
+}
+
 /// Selected controls whose ancestors are not also selected. Deleting or
 /// copying a container already covers its children.
 fn selected_top(root: Node, ids: List(String)) -> List(Node) {
@@ -835,6 +979,10 @@ pub fn update(state: State, command: Command) -> State {
     BringToFront -> bring_to_front(state)
     SendToBack -> send_to_back(state)
     CommitGeometry(items, reparent) -> commit_geometry(state, items, reparent)
+    SetControlRect(id, rect) -> set_control_rect(state, id, rect)
+    SetControlProp(id, name, value) -> set_control_prop(state, id, name, value)
+    SetHandlers(handlers) -> set_handlers(state, handlers)
+    OpenHandler(control_id, event) -> open_handler(state, control_id, event)
   }
 }
 

@@ -10,6 +10,10 @@ import gleam/dynamic.{type Dynamic}
 pub type NativeMessage {
   WxEvent(wx_id: Int, event_type: String)
   MouseEvent(wx_id: Int, event_type: String, x: Int, y: Int, control: Bool)
+  /// A grid edit carries the edited cell explicitly. Reading the grid cursor
+  /// after the event can point at the next cell: Enter moves the cursor before
+  /// the application reads it.
+  GridEvent(wx_id: Int, row: Int, col: Int, text: String)
   Other(message: Dynamic)
   Idle
 }
@@ -232,11 +236,23 @@ pub fn grid_set(grid: Dynamic, rows: List(List(String))) -> Nil
 @external(erlang, "campy_wx_native", "grid_cell")
 pub fn grid_cell(grid: Dynamic) -> GridCell
 
+@external(erlang, "campy_wx_native", "grid_number_cell")
+pub fn grid_number_cell(grid: Dynamic, row: Int, col: Int, min: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "grid_text_cell")
+pub fn grid_text_cell(grid: Dynamic, row: Int, col: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "grid_read_only")
+pub fn grid_read_only(grid: Dynamic, row: Int, col: Int, read_only: Bool) -> Nil
+
 @external(erlang, "campy_wx_native", "editor")
 pub fn editor(parent: Dynamic, id: Int) -> Dynamic
 
 @external(erlang, "campy_wx_native", "editor_set")
 pub fn editor_set(editor: Dynamic, text: String, read_only: Bool) -> Nil
+
+@external(erlang, "campy_wx_native", "editor_show_end")
+pub fn editor_show_end(editor: Dynamic) -> Nil
 
 @external(erlang, "campy_wx_native", "open_dialog")
 pub fn open_dialog(frame: Dynamic, wildcard: String) -> String

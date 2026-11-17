@@ -39,14 +39,16 @@ project directory to open another project.
 - **Designer** (`campy_design`): absolute geometry, hit-testing, resize/move,
   structural edits, drop adoption, and reparenting.
 - **IDE model** (`campy_ide_model`): tabs, active module, selection, console,
-  undo/redo, palette placement, clipboard, duplicate/delete, and z-order.
+  undo/redo, palette placement, clipboard, duplicate/delete, z-order, inspector
+  geometry/text edits, and ABI v2 handler stubs.
 - **IDE shell** (`gleam/apps/campy_ide_wx`): module tree, widget palette, form
-  canvas with selection chrome, Scintilla code view, console, inspector, save,
-  undo/redo.
+  canvas with selection chrome, Scintilla code view, console, an editable
+  inspector with typed geometry cells, an events list that opens or creates
+  handler source, save, undo/redo.
 - **Sample project**: `examples/demo`.
 
-Not built yet: editable inspector/events, generated source, form preview in the
-IDE, Run/hot update, the ABI v2 runtime, and peer-node deploy. See
+Not built yet: generated source tab, form preview in the IDE, Run/hot update,
+the ABI v2 runtime, and peer-node deploy. See
 [`docs/PHASE2.md`](docs/PHASE2.md).
 
 ## Development

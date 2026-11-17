@@ -262,9 +262,22 @@ fn update_node(node: Node, id: String, change: fn(Node) -> Node) -> Node {
   }
 }
 
-fn set_prop(node: Node, name: String, value: Value) -> Node {
+/// Set or replace a single node property. Geometry edits should prefer
+/// `set_rect`/`set_absolute_rect` so sizes clamp and alignment clears.
+pub fn set_prop(node: Node, name: String, value: Value) -> Node {
   let props = list.filter(node.props, fn(prop) { prop.0 != name })
   campy_view.with_props(node, list.append(props, [#(name, value)]))
+}
+
+/// Set one property on a control found by id. Unknown ids leave the tree
+/// unchanged, which keeps callers from having to check first.
+pub fn set_node_prop(
+  root: Node,
+  id: String,
+  name: String,
+  value: Value,
+) -> Node {
+  update_node(root, id, fn(node) { set_prop(node, name, value) })
 }
 
 fn inset(rect: Rect, amount: Int) -> Rect {

@@ -163,3 +163,39 @@ shot reparented-into-earlier-sibling
 xdotool mousemove 1130 527 click 1
 sleep 1
 shot reparented-widget-alive
+
+# --- T2.3: inspector edits and events --------------------------------------
+# The inspector packs two field/value pairs per row. Client coordinates below
+# are calibrated from reparented-widget-alive.png (window client origin adds
+# ~164 px vertically to the root screenshot):
+#   row 2 = parent | x   row 3 = y | w   row 4 = h | text
+#   value columns are 1 and 3; the events list starts at x ~784.
+# The selected control is button_1 (parent panel_1) and declares click.
+shot t23-inspector-single
+# Edit x (row 2, right-hand value column) to 500.
+xdotool mousemove --window "$win" 609 592 click --repeat 2 --delay 80 1
+sleep 0.5
+xdotool key ctrl+a
+xdotool type --delay 30 "500"
+xdotool key Return
+sleep 1
+shot t23-inspector-x-edited
+# Edit text (row 4, right-hand value column).
+xdotool mousemove --window "$win" 609 640 click --repeat 2 --delay 80 1
+sleep 0.5
+xdotool key ctrl+a
+xdotool type --delay 30 "Hello T2.3"
+xdotool key Return
+sleep 1
+shot t23-inspector-text-edited
+# Click the declared click event: the missing handler is appended as an ABI v2
+# stub and the Code page opens.
+xdotool mousemove --window "$win" 784 569 click 1
+sleep 1
+shot t23-handler-opened
+# The stub is appended at the end; scroll the code editor to prove the ABI v2
+# shape (the opened page starts at the top of handlers.gleam).
+xdotool mousemove --window "$win" 900 250 click 1
+xdotool key ctrl+End
+sleep 1
+shot t23-handler-stub

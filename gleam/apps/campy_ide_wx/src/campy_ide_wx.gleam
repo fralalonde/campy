@@ -11,7 +11,7 @@ import campy_catalog
 import campy_design
 import campy_ide_model as model
 import campy_project
-import campy_view.{type Node, VBool, VInt, VList, VText}
+import campy_view.{type Node, VBool, VInt, VList, VMap, VText}
 import campy_view/diff
 import campy_wx
 import campy_wx/plan
@@ -19,6 +19,7 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 
 pub fn main() {
   let dir = case campy_wx.getenv("CAMPY_PROJECT") {
@@ -608,6 +609,8 @@ fn handle(
     "menu-back" -> model.update(state, model.SendToBack)
     "menu-cancel-place" -> model.update(state, model.Disarm)
     "palette" -> palette_selected(state, value)
+    "inspector" -> inspector_changed(state, value)
+    "events" -> event_selected(state, value)
     "modules" -> {
       case key, value {
         "select", VText(slug) -> tree_selected(state, slug)
@@ -629,6 +632,112 @@ fn palette_selected(
         [] -> state
       }
     _ -> state
+  }
+}
+
+/// A grid edit arrives as row/col/text. Row 0 is the header; the inspector packs
+/// two field/value pairs per row, so columns 1 and 3 are values. The field comes
+/// from the label immediately left of the edited cell, never from a hard-coded
+/// row index, so single and multi-selection layouts can differ.
+fn inspector_changed(
+  state: model.State,
+  value: campy_view.Value,
+) -> model.State {
+  case value {
+    VMap(fields) ->
+      case
+        field_int(fields, "row"),
+        field_int(fields, "col"),
+        field_text(fields, "text")
+      {
+        Some(row), Some(col), Some(text) ->
+          case col {
+            1 | 3 ->
+              case list.drop(inspector_rows(state), row) {
+                [row_values, ..] -> inspector_edit(state, row_values, col, text)
+                [] -> state
+              }
+            _ -> state
+          }
+        _, _, _ -> state
+      }
+    _ -> state
+  }
+}
+
+fn field_int(
+  fields: List(#(String, campy_view.Value)),
+  name: String,
+) -> Option(Int) {
+  case list.find(fields, fn(field) { field.0 == name }) {
+    Ok(#(_, VInt(value))) -> Some(value)
+    _ -> None
+  }
+}
+
+fn field_text(
+  fields: List(#(String, campy_view.Value)),
+  name: String,
+) -> Option(String) {
+  case list.find(fields, fn(field) { field.0 == name }) {
+    Ok(#(_, VText(value))) -> Some(value)
+    _ -> None
+  }
+}
+
+fn inspector_edit(
+  state: model.State,
+  row: List(String),
+  col: Int,
+  text: String,
+) -> model.State {
+  case list.drop(row, col - 1), state.selection {
+    [label, _], [id] ->
+      case label {
+        "x" | "y" | "w" | "h" -> edit_geometry(state, id, label, text)
+        "text" ->
+          model.update(state, model.SetControlProp(id, "text", VText(text)))
+        _ -> state
+      }
+    _, _ -> state
+  }
+}
+
+fn edit_geometry(
+  state: model.State,
+  id: String,
+  field: String,
+  text: String,
+) -> model.State {
+  case int.parse(string.trim(text)), geometry_of(state, id) {
+    Ok(value), Some(rect) -> {
+      let next = case field {
+        "x" -> campy_design.Rect(x: value, y: rect.y, w: rect.w, h: rect.h)
+        "y" -> campy_design.Rect(x: rect.x, y: value, w: rect.w, h: rect.h)
+        "w" -> campy_design.Rect(x: rect.x, y: rect.y, w: value, h: rect.h)
+        _ -> campy_design.Rect(x: rect.x, y: rect.y, w: rect.w, h: value)
+      }
+      model.update(state, model.SetControlRect(id, next))
+    }
+    _, _ -> state
+  }
+}
+
+fn geometry_of(state: model.State, id: String) -> Option(campy_design.Rect) {
+  case model.active_module(state) {
+    Ok(module) -> campy_design.absolute(module.form.view, id)
+    Error(_) -> None
+  }
+}
+
+fn event_selected(state: model.State, value: campy_view.Value) -> model.State {
+  case value, state.selection {
+    VInt(index), [id] ->
+      case list.drop(event_items(state), index) {
+        [event, ..] -> model.update(state, model.OpenHandler(id, event))
+        [] -> state
+      }
+    _, _ -> state
   }
 }
 
@@ -706,8 +815,17 @@ fn refresh(
         Some(_), None -> campy_wx.set_selection(shell, "palette", -1)
         _, _ -> Nil
       }
-      case previous.active == state.active {
-        False -> set_code(shell, state)
+      // Handler edits and module changes must both refresh the Scintilla page;
+      // otherwise a stub is committed but the old source stays visible.
+      let handlers_changed = handlers_of(previous) != handlers_of(state)
+      case previous.active == state.active && !handlers_changed {
+        False -> {
+          set_code(shell, state)
+          case handlers_changed {
+            True -> campy_wx.scroll_editor_to_end(shell, "code")
+            False -> Nil
+          }
+        }
         True -> Nil
       }
       case previous.console == state.console {
@@ -721,7 +839,10 @@ fn refresh(
     }
   }
 
-  campy_wx.set_grid(shell, "inspector", inspector_rows(state))
+  let rows = inspector_rows(state)
+  campy_wx.set_grid(shell, "inspector", rows)
+  typed_grid_editors(shell, rows, list.length(state.selection) != 1)
+  campy_wx.set_items(shell, "events", event_items(state))
   campy_wx.set_status(shell, status_text(state))
   campy_wx.show_selection(
     shell,
@@ -742,6 +863,75 @@ fn set_code(shell: campy_wx.Shell, state: model.State) {
     Ok(module) -> campy_wx.set_editor(shell, "code", module.handlers, False)
     Error(_) -> campy_wx.set_editor(shell, "code", "", True)
   }
+}
+
+fn handlers_of(state: model.State) -> String {
+  case model.active_module(state) {
+    Ok(module) -> module.handlers
+    Error(_) -> ""
+  }
+}
+
+/// x/y/w/h are integer cells; the rest stay text. Multi-selection is
+/// read-only, so those cells reject edits instead of silently changing one of
+/// several controls.
+fn typed_grid_editors(
+  shell: campy_wx.Shell,
+  rows: List(List(String)),
+  read_only: Bool,
+) -> Nil {
+  let _ =
+    list.index_map(rows, fn(row, index) {
+      list.each([0, 2], fn(label_col) {
+        case list.drop(row, label_col) {
+          [label, _] -> {
+            let value_col = label_col + 1
+            // Field names are display only; only the value cell is editable.
+            campy_wx.set_grid_read_only(
+              shell,
+              "inspector",
+              index,
+              label_col,
+              True,
+            )
+            case label {
+              "x" | "y" ->
+                campy_wx.set_grid_number_cell(
+                  shell,
+                  "inspector",
+                  index,
+                  value_col,
+                  0,
+                )
+              "w" | "h" ->
+                campy_wx.set_grid_number_cell(
+                  shell,
+                  "inspector",
+                  index,
+                  value_col,
+                  campy_design.min_size,
+                )
+              _ ->
+                campy_wx.set_grid_text_cell(
+                  shell,
+                  "inspector",
+                  index,
+                  value_col,
+                )
+            }
+            campy_wx.set_grid_read_only(
+              shell,
+              "inspector",
+              index,
+              value_col,
+              read_only || index == 0,
+            )
+          }
+          _ -> Nil
+        }
+      })
+    })
+  Nil
 }
 
 fn set_console(shell: campy_wx.Shell, state: model.State) {
@@ -801,28 +991,93 @@ pub fn inspector_rows(state: model.State) -> List(List(String)) {
   }
 }
 
+/// Event keys for the events list beside the inspector. Only a single selected
+/// control contributes; the list stays empty for multi-selection.
+pub fn event_items(state: model.State) -> List(String) {
+  model.selected_events(state)
+}
+
+/// Multi-selection shows only properties every selected control shares; a
+/// differing value is blank. Geometry stays absolute (invariant 8), so nested
+/// controls compare their canvas rectangles, not parent-relative props.
 fn multi_rows(state: model.State, ids: List(String)) -> List(List(String)) {
-  let #(x, y, w, h) = case selection_rect(state) {
-    Some(rect) -> rect
-    None -> #(0, 0, 0, 0)
+  case model.active_module(state) {
+    Error(_) -> summary_rows(state)
+    Ok(module) -> {
+      let nodes =
+        list.filter_map(ids, fn(id) {
+          case campy_design.find_node(module.form.view, id) {
+            Some(node) -> Ok(node)
+            None -> Error(Nil)
+          }
+        })
+      let rects =
+        list.filter_map(ids, fn(id) {
+          case campy_design.absolute(module.form.view, id) {
+            Some(rect) -> Ok(rect)
+            None -> Error(Nil)
+          }
+        })
+
+      [
+        ["Field", "Value", "Field", "Value"],
+        [
+          "selected",
+          int.to_string(list.length(ids)),
+          "kind",
+          common(list.map(nodes, fn(node) { node.kind })),
+        ],
+        [
+          "parent",
+          common(
+            list.map(nodes, fn(node) { parent_label(module.form.view, node.id) }),
+          ),
+          "x",
+          common(list.map(rects, fn(rect) { int.to_string(rect.x) })),
+        ],
+        [
+          "y",
+          common(list.map(rects, fn(rect) { int.to_string(rect.y) })),
+          "w",
+          common(list.map(rects, fn(rect) { int.to_string(rect.w) })),
+        ],
+        [
+          "h",
+          common(list.map(rects, fn(rect) { int.to_string(rect.h) })),
+          "text",
+          common(list.map(nodes, text_of)),
+        ],
+      ]
+    }
   }
-  [
-    ["Field", "Value"],
-    ["selected", int.to_string(list.length(ids))],
-    ["x", int.to_string(x)],
-    ["y", int.to_string(y)],
-    ["w", int.to_string(w)],
-    ["h", int.to_string(h)],
-  ]
+}
+
+fn common(values: List(String)) -> String {
+  case values {
+    [] -> ""
+    [first, ..rest] ->
+      case list.all(rest, fn(value) { value == first }) {
+        True -> first
+        False -> ""
+      }
+  }
 }
 
 fn summary_rows(state: model.State) -> List(List(String)) {
   [
-    ["Field", "Value"],
-    ["Project", state.project.title],
-    ["Module", active_slug(state)],
-    ["Tabs", int.to_string(list.length(state.open_tabs))],
-    ["History", int.to_string(list.length(state.undo))],
+    ["Field", "Value", "Field", "Value"],
+    [
+      "Project",
+      state.project.title,
+      "Module",
+      active_slug(state),
+    ],
+    [
+      "Tabs",
+      int.to_string(list.length(state.open_tabs)),
+      "History",
+      int.to_string(list.length(state.undo)),
+    ],
   ]
 }
 
@@ -838,15 +1093,16 @@ fn control_rows(state: model.State, id: String) -> List(List(String)) {
             None -> campy_design.Rect(0, 0, 0, 0)
           }
           [
-            ["Field", "Value"],
-            ["id", id],
-            ["kind", node.kind],
-            ["parent", parent_label(module.form.view, id)],
-            ["x", int.to_string(rect.x)],
-            ["y", int.to_string(rect.y)],
-            ["w", int.to_string(rect.w)],
-            ["h", int.to_string(rect.h)],
-            ["text", text_of(node)],
+            ["Field", "Value", "Field", "Value"],
+            ["id", id, "kind", node.kind],
+            [
+              "parent",
+              parent_label(module.form.view, id),
+              "x",
+              int.to_string(rect.x),
+            ],
+            ["y", int.to_string(rect.y), "w", int.to_string(rect.w)],
+            ["h", int.to_string(rect.h), "text", text_of(node)],
           ]
         }
       }
@@ -1044,7 +1300,28 @@ fn code_page() -> Node {
 }
 
 fn inspector() -> Node {
-  campy_view.node("grid", "inspector")
-  |> campy_view.with_props([#("h", VInt(170))])
-  |> campy_view.with_events(["change"])
+  campy_view.node("panel", "inspector-pane")
+  |> campy_view.with_props([
+    #("layout", VText("row")),
+    #("h", VInt(170)),
+    #("border", VInt(0)),
+  ])
+  |> campy_view.with_children([
+    campy_view.node("grid", "inspector")
+      |> campy_view.with_props([#("grow", VBool(True))])
+      |> campy_view.with_events(["change"]),
+    campy_view.node("panel", "events-pane")
+      |> campy_view.with_props([
+        #("layout", VText("column")),
+        #("w", VInt(220)),
+        #("border", VInt(4)),
+      ])
+      |> campy_view.with_children([
+        campy_view.node("label", "events-title")
+          |> campy_view.with_props([#("text", VText("Events"))]),
+        campy_view.node("list", "events")
+          |> campy_view.with_props([#("grow", VBool(True))])
+          |> campy_view.with_events(["change"]),
+      ]),
+  ])
 }

@@ -9,8 +9,9 @@
     statusbar/1, set_status/2,
     notebook/2, page/3, notebook_selection/1, select_page/2,
     tree/2, tree_set/2, tree_selected_key/1,
-    grid/2, grid_set/2, grid_cell/1,
-    editor/2, editor_set/3,
+    grid/2, grid_set/2, grid_cell/1, grid_number_cell/4, grid_text_cell/3,
+    grid_read_only/4,
+    editor/2, editor_set/3, editor_show_end/1,
     open_dialog/2, save_dialog/3,
     canvas/2, paint_canvas/4, connect_design/2,
     handles_create/2, handle_place/6, handle_show/2, handle_raise/1,
@@ -317,6 +318,9 @@ grid_set(Grid, Rows) ->
         0 -> ok;
         _ ->
             adjust_grid(Grid, RowCount, ColCount),
+            %% The inspector is a compact form, not a data sheet: 24 px rows
+            %% let the two field/value pairs per row fit without scrolling.
+            catch wxGrid:setDefaultRowSize(Grid, 24, [{resizeExistingRows, true}]),
             wxGrid:beginBatch(Grid),
             set_grid_rows(Grid, Rows, 0),
             wxGrid:endBatch(Grid)
@@ -326,7 +330,18 @@ grid_set(Grid, Rows) ->
 adjust_grid(Grid, RowCount, ColCount) ->
     case {wxGrid:getNumberRows(Grid), wxGrid:getNumberCols(Grid)} of
         {0, 0} ->
-            wxGrid:createGrid(Grid, RowCount, ColCount);
+            wxGrid:createGrid(Grid, RowCount, ColCount),
+            %% The first row is the field/value header, so wx's own row numbers
+            %% and A/B column letters are noise. Freeing that space keeps the
+            %% inspector compact without scrolling.
+            catch wxGrid:setColLabelSize(Grid, 0),
+            catch wxGrid:setRowLabelSize(Grid, 0),
+            %% Two field/value pairs per row: narrow label columns, wide value
+            %% columns, so the inspector fits without scrolling.
+            catch wxGrid:setColSize(Grid, 0, 110),
+            catch wxGrid:setColSize(Grid, 1, 260),
+            catch wxGrid:setColSize(Grid, 2, 110),
+            catch wxGrid:setColSize(Grid, 3, 260);
         {OldRows, OldCols} ->
             if
                 RowCount > OldRows ->
@@ -362,6 +377,24 @@ grid_cell(Grid) ->
     Text = unicode:characters_to_binary(wxGrid:getCellValue(Grid, Row, Col)),
     {grid_cell, Row, Col, Text}.
 
+%% Inspector cells are typed: geometry gets the integer editor, everything else
+%% stays a text editor. The grid takes ownership of each editor it is given.
+grid_number_cell(Grid, Row, Col, Min) ->
+    %% wx's number editor creates a GTK spin button with min/max; supplying
+    %% only one leaves the other at 0/-1 and GTK aborts the editor on open.
+    Editor = wxGridCellNumberEditor:new([{min, Min}, {max, 1000000}]),
+    wxGrid:setCellEditor(Grid, Row, Col, Editor),
+    ok.
+
+grid_text_cell(Grid, Row, Col) ->
+    Editor = wxGridCellTextEditor:new(),
+    wxGrid:setCellEditor(Grid, Row, Col, Editor),
+    ok.
+
+grid_read_only(Grid, Row, Col, ReadOnly) ->
+    wxGrid:setReadOnly(Grid, Row, Col, [{isReadOnly, ReadOnly}]),
+    ok.
+
 editor(Parent, Id) ->
     Editor = wxStyledTextCtrl:new(Parent, [{id, Id}]),
     wxStyledTextCtrl:styleSetFaceName(Editor, 0, <<"monospace">>),
@@ -374,6 +407,14 @@ editor(Parent, Id) ->
 editor_set(Editor, Text, ReadOnly) ->
     wxStyledTextCtrl:setText(Editor, Text),
     wxStyledTextCtrl:setReadOnly(Editor, ReadOnly),
+    ok.
+
+%% Show the end of a freshly rewritten source file, so an appended ABI stub is
+%% visible immediately after the event click opens the Code page.
+editor_show_end(Editor) ->
+    Pos = wxStyledTextCtrl:getTextLength(Editor),
+    wxStyledTextCtrl:gotoPos(Editor, Pos),
+    wxStyledTextCtrl:ensureCaretVisible(Editor),
     ok.
 
 open_dialog(Frame, Wildcard) ->
@@ -577,12 +618,21 @@ connect(_Ref, _Kind) ->
 
 next_message(Timeout) ->
     receive
-        {wx, Id, _Obj, _UserData, Event} when is_tuple(Event) ->
+        {wx, Id, Obj, _UserData, Event} when is_tuple(Event) ->
             case element(1, Event) of
                 wxMouse ->
                     Type = atom_to_binary(element(2, Event), utf8),
                     {mouse_event, Id, Type, element(3, Event), element(4, Event),
                      element(8, Event) =:= true};
+                wxGrid ->
+                    % Use the event's row/col, not the grid cursor: Enter moves
+                    % the cursor to the next cell before the app reads it.
+                    % #wxGrid type, row, col, pos, ...
+                    Row = element(3, Event),
+                    Col = element(4, Event),
+                    Text = unicode:characters_to_binary(
+                        wxGrid:getCellValue(Obj, Row, Col)),
+                    {grid_event, Id, Row, Col, Text};
                 _ ->
                     {wx_event, Id, event_type(Event)}
             end;
@@ -600,6 +650,8 @@ timeout(_) -> infinity.
 
 event_type(Event) when is_tuple(Event) ->
     case element(1, Event) of
+        % wxGrid edits arrive as wxGridEvent records, not wxCommandEvent.
+        wxGrid -> <<"command">>;
         wxCommand -> <<"command">>;
         wxClose -> <<"close">>;
         wxSize -> <<"size">>;

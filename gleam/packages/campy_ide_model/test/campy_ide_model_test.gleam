@@ -5,6 +5,7 @@ import campy_view.{VInt, VText}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 import gleeunit
 import gleeunit/should
 
@@ -693,4 +694,186 @@ pub fn opening_a_module_clears_an_armed_kind_test() {
 
   let assert Ok(state) = campy_ide_model.open_module(state, "b")
   state.armed |> should.equal(None)
+}
+
+// --- T2.3: inspector edits, events, and handler stubs ----------------------
+
+fn text_button(id: String, text: String, x: Int, y: Int) -> campy_view.Node {
+  control("button", id, [
+    #("x", VInt(x)),
+    #("y", VInt(y)),
+    #("w", VInt(80)),
+    #("h", VInt(30)),
+    #("text", VText(text)),
+  ])
+  |> campy_view.with_events(["click"])
+}
+
+pub fn set_control_rect_clamps_size_and_records_one_undo_test() {
+  let state =
+    design_state(design_root([text_button("btn", "Go", 10, 10)]))
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["btn"]))
+    |> campy_ide_model.update(campy_ide_model.SetControlRect(
+      "btn",
+      campy_design.Rect(40, 50, 2, 3),
+    ))
+
+  campy_design.absolute(form_view(state), "btn")
+  |> should.equal(Some(campy_design.Rect(40, 50, campy_design.min_size, 8)))
+  list.length(state.undo) |> should.equal(1)
+
+  let state = campy_ide_model.update(state, campy_ide_model.Undo)
+  campy_design.absolute(form_view(state), "btn")
+  |> should.equal(Some(campy_design.Rect(10, 10, 80, 30)))
+}
+
+pub fn set_control_rect_uses_absolute_coordinates_in_a_nested_container_test() {
+  let root =
+    design_root([
+      panel_node("panel", 100, 80, 300, 200)
+      |> campy_view.with_child(text_button("btn", "Go", 20, 20)),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.SetControlRect(
+      "btn",
+      campy_design.Rect(150, 120, 2, 2),
+    ))
+
+  prop(state, "btn", "x") |> should.equal(Ok(VInt(50)))
+  prop(state, "btn", "y") |> should.equal(Ok(VInt(40)))
+  campy_design.absolute(form_view(state), "btn")
+  |> should.equal(Some(campy_design.Rect(150, 120, 8, 8)))
+}
+
+pub fn set_control_prop_text_records_one_undo_test() {
+  let state =
+    design_state(design_root([text_button("btn", "Go", 10, 10)]))
+    |> campy_ide_model.update(campy_ide_model.SetControlProp(
+      "btn",
+      "text",
+      VText("Hello"),
+    ))
+
+  prop(state, "btn", "text") |> should.equal(Ok(VText("Hello")))
+  list.length(state.undo) |> should.equal(1)
+
+  let state = campy_ide_model.update(state, campy_ide_model.Undo)
+  prop(state, "btn", "text") |> should.equal(Ok(VText("Go")))
+  list.length(state.undo) |> should.equal(0)
+}
+
+pub fn set_control_prop_to_the_same_value_is_not_undone_test() {
+  let state =
+    design_state(design_root([text_button("btn", "Go", 10, 10)]))
+    |> campy_ide_model.update(campy_ide_model.SetControlProp(
+      "btn",
+      "text",
+      VText("Go"),
+    ))
+
+  state.undo |> should.equal([])
+}
+
+pub fn set_handlers_records_undo_test() {
+  let state =
+    design_state(design_root([]))
+    |> campy_ide_model.update(campy_ide_model.SetHandlers(
+      "pub fn init() {\n  Nil\n}\n",
+    ))
+
+  let assert Ok(module) = campy_ide_model.active_module(state)
+  module.handlers |> should.equal("pub fn init() {\n  Nil\n}\n")
+  list.length(state.undo) |> should.equal(1)
+
+  let state = campy_ide_model.update(state, campy_ide_model.Undo)
+  let assert Ok(module) = campy_ide_model.active_module(state)
+  module.handlers |> should.equal("")
+}
+
+pub fn handler_name_and_existence_use_the_abi_v2_shape_test() {
+  campy_ide_model.handler_name("save_button", "click")
+  |> should.equal("save_button_click")
+
+  campy_ide_model.handler_exists(
+    "pub fn save_button_click(state: State, event: Event) -> #(State, List(Effect)) {\n",
+    "save_button_click",
+  )
+  |> should.be_true()
+
+  campy_ide_model.handler_exists("pub fn other(", "save_button_click")
+  |> should.be_false()
+}
+
+pub fn handler_stub_is_an_abi_v2_function_test() {
+  campy_ide_model.handler_stub("ok_click")
+  |> should.equal(
+    "pub fn ok_click(state: State, event: Event) -> #(State, List(Effect)) {\n"
+    <> "  let _ = event\n"
+    <> "  #(state, [])\n"
+    <> "}\n",
+  )
+}
+
+pub fn open_handler_appends_one_stub_and_shows_code_test() {
+  let state =
+    design_state(design_root([text_button("btn", "Go", 10, 10)]))
+    |> campy_ide_model.update(campy_ide_model.OpenHandler("btn", "click"))
+
+  state.code_view |> should.be_true()
+  let assert Ok(module) = campy_ide_model.active_module(state)
+  string.contains(module.handlers, "pub fn btn_click(")
+  |> should.be_true()
+  list.length(string.split(module.handlers, "pub fn btn_click("))
+  |> should.equal(2)
+  list.length(state.undo) |> should.equal(1)
+  state.status |> should.equal("Added handler btn_click")
+
+  let state =
+    campy_ide_model.update(state, campy_ide_model.OpenHandler("btn", "click"))
+  let assert Ok(module) = campy_ide_model.active_module(state)
+  list.length(string.split(module.handlers, "pub fn btn_click("))
+  |> should.equal(2)
+  list.length(state.undo) |> should.equal(1)
+  state.status |> should.equal("Opened btn_click")
+}
+
+pub fn open_handler_keeps_existing_handlers_verbatim_test() {
+  let state =
+    design_state(design_root([text_button("btn", "Go", 10, 10)]))
+    |> campy_ide_model.update(campy_ide_model.SetHandlers(
+      "pub fn btn_click(state: State, event: Event) -> #(State, List(Effect)) {\n"
+      <> "  #(state, [])\n"
+      <> "}\n",
+    ))
+
+  let handlers_before = case campy_ide_model.active_module(state) {
+    Ok(module) -> module.handlers
+    Error(_) -> ""
+  }
+
+  let state =
+    campy_ide_model.update(state, campy_ide_model.OpenHandler("btn", "click"))
+  let assert Ok(module) = campy_ide_model.active_module(state)
+  module.handlers |> should.equal(handlers_before)
+  list.length(state.undo) |> should.equal(1)
+}
+
+pub fn selected_events_follow_the_single_selection_test() {
+  let state =
+    design_state(
+      design_root([
+        text_button("btn", "Go", 10, 10),
+        text_button("other", "Stop", 120, 10),
+      ]),
+    )
+
+  campy_ide_model.selected_events(state) |> should.equal([])
+
+  let state = campy_ide_model.select_controls(state, ["btn"])
+  campy_ide_model.selected_events(state) |> should.equal(["click"])
+
+  let state = campy_ide_model.select_controls(state, ["btn", "other"])
+  campy_ide_model.selected_events(state) |> should.equal([])
 }

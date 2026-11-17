@@ -738,6 +738,8 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
       if kind == "left_down" || kind == "motion" || kind == "left_up"
     -> design_mouse(shell, wx_id, kind, x, y, control)
     native.MouseEvent(_wx_id, _kind, _x, _y, _control) -> Idle
+    native.GridEvent(wx_id, row, col, text) ->
+      grid_event(shell, wx_id, row, col, text)
     native.WxEvent(wx_id, "close") if wx_id == shell.frame_id -> Closed
     native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
     native.WxEvent(wx_id, "command") -> command_event(shell, wx_id)
@@ -765,6 +767,38 @@ fn command_event(shell: Shell, wx_id: Int) -> Incoming {
             }
           }
         }
+      }
+  }
+}
+
+/// A grid edit reports the cell from the wxGridEvent itself, so Enter moving
+/// the cursor to the next cell cannot misattribute the value.
+fn grid_event(
+  shell: Shell,
+  wx_id: Int,
+  row: Int,
+  col: Int,
+  text: String,
+) -> Incoming {
+  case dict.get(shell.by_wx, wx_id) {
+    Error(Nil) -> Idle
+    Ok(view_id) ->
+      case dict.get(shell.widgets, view_id) {
+        Error(Nil) -> Idle
+        Ok(widget) ->
+          case list.contains(widget.events, "change") {
+            False -> Idle
+            True ->
+              Event(
+                widget.view_id,
+                "change",
+                VMap([
+                  #("col", VInt(col)),
+                  #("row", VInt(row)),
+                  #("text", VText(text)),
+                ]),
+              )
+          }
       }
   }
 }
@@ -956,6 +990,50 @@ pub fn set_grid(shell: Shell, id: String, rows: List(List(String))) -> Nil {
   }
 }
 
+/// Give a grid cell the integer editor. Cells outside the number rows keep the
+/// default text editor, so labels and text values remain editable as text.
+pub fn set_grid_number_cell(
+  shell: Shell,
+  id: String,
+  row: Int,
+  col: Int,
+  min: Int,
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.grid_number_cell(widget.ref, row, col, min)
+    Error(_) -> Nil
+  }
+}
+
+pub fn set_grid_text_cell(shell: Shell, id: String, row: Int, col: Int) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.grid_text_cell(widget.ref, row, col)
+    Error(_) -> Nil
+  }
+}
+
+pub fn set_grid_read_only(
+  shell: Shell,
+  id: String,
+  row: Int,
+  col: Int,
+  read_only: Bool,
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.grid_read_only(widget.ref, row, col, read_only)
+    Error(_) -> Nil
+  }
+}
+
+/// Fill a list/choice in place. Unlike `set_grid`, the widget owns no view
+/// state beyond its items, so list boxes can be refreshed freely.
+pub fn set_items(shell: Shell, id: String, items: List(String)) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.set_items(widget.ref, widget.kind, items)
+    Error(_) -> Nil
+  }
+}
+
 pub fn set_editor(
   shell: Shell,
   id: String,
@@ -964,6 +1042,15 @@ pub fn set_editor(
 ) -> Nil {
   case get_widget(shell, id) {
     Ok(widget) -> native.editor_set(widget.ref, text, read_only)
+    Error(_) -> Nil
+  }
+}
+
+/// Scroll an editor to its end. Used when a handler stub is appended so the
+/// new source is visible instead of leaving the view at the top of the file.
+pub fn scroll_editor_to_end(shell: Shell, id: String) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_show_end(widget.ref)
     Error(_) -> Nil
   }
 }
