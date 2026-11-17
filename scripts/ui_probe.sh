@@ -100,8 +100,8 @@ sleep 1
 shot t25-inspector-redo
 
 # --- T2.2/T2.5: palette strip and placement --------------------------------
-# Palette order: Panel, Group, Label, Button ... at client x 82 + 44*n.
-click 214 76
+# Palette order: Panel, Group, Label, Button, ... at client x ~87 + 58*n.
+click 261 76
 shot t25-palette-armed
 # Drag-place a Button on empty canvas.
 xdotool mousemove --window "$win" 600 430 mousedown 1
@@ -118,7 +118,7 @@ click 1086 157
 shot t25-events
 # The placed button declares `click`; opening it appends an ABI v2 handler
 # stub and switches the centre notebook to Code.
-click 1050 236
+click 1050 224
 sleep 1
 shot t25-handler-opened
 
@@ -162,7 +162,7 @@ shot t25-help-dialog
 xdotool key Escape
 sleep 0.5
 # Hover a palette button long enough for GTK's tooltip.
-xdotool mousemove --window "$win" 126 76
+xdotool mousemove --window "$win" 145 76
 sleep 2.5
 shot t25-tooltip
 

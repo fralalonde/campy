@@ -47,9 +47,11 @@ pub fn inspector_reports_the_active_module_test() {
 
   rows
   |> should.equal([
-    ["project", "Demo"],
+    ["title", "greeter"],
+    ["w", "640"],
+    ["h", "480"],
+    ["layout", "free"],
     ["module", "greeter"],
-    ["tabs", "1"],
     ["undo", "0"],
     ["redo", "0"],
   ])
@@ -356,7 +358,7 @@ pub fn selection_title_names_the_control_test() {
   let view = design_form([sized_button("button_1", "Go", 10, 20)])
   let state = state_from(view, [])
 
-  campy_ide_wx.selection_title(state) |> should.equal("No selection")
+  campy_ide_wx.selection_title(state) |> should.equal("Window — main")
   campy_ide_wx.selection_title(model.select_controls(state, ["root"]))
   |> should.equal("Window — root")
   campy_ide_wx.selection_title(model.select_controls(state, ["button_1"]))
@@ -435,10 +437,10 @@ pub fn accelerator_actions_map_to_shortcuts_test() {
   |> should.equal(campy_ide_wx.NoShortcut)
 }
 
-pub fn events_display_has_a_placeholder_first_row_test() {
+pub fn events_display_lists_only_declared_events_test() {
   let view = design_form([sized_button("ok", "Go", 10, 10)])
   campy_ide_wx.events_display(state_from(view, ["ok"]))
-  |> should.equal(["—", "click"])
+  |> should.equal(["click"])
   campy_ide_wx.events_display(state_from(view, []))
-  |> should.equal(["—"])
+  |> should.equal([])
 }

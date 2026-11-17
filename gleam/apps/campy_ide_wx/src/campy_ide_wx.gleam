@@ -157,6 +157,7 @@ fn loop(
           // canvas so the frame shortcuts keep working.
           case id {
             "inspector" -> campy_wx.focus(shell, "canvas")
+            "tabs" -> focus_page(shell, state)
             _ -> Nil
           }
           loop(shell, state, next, dir, NoDrag)
@@ -250,8 +251,20 @@ fn dispatch_shortcut(
       let next = view(state)
       let shell = rebind(shell, current, next)
       refresh(shell, Some(previous), state)
+      case action {
+        ShowFormPage | ShowCodePage | ShowSourcePage -> focus_page(shell, state)
+        _ -> Nil
+      }
       loop(shell, state, next, dir, NoDrag)
     }
+  }
+}
+
+fn focus_page(shell: campy_wx.Shell, state: model.State) -> Nil {
+  case state.code_view, state.source_view {
+    True, _ -> campy_wx.focus(shell, "code")
+    False, True -> campy_wx.focus(shell, "source")
+    False, False -> campy_wx.focus(shell, "canvas")
   }
 }
 
@@ -511,6 +524,7 @@ fn handle_design_mouse(
                       let next = view(state)
                       let shell = rebind(shell, current, next)
                       refresh(shell, Some(previous), state)
+                      campy_wx.focus(shell, "canvas")
                       loop(shell, state, next, dir, NoDrag)
                     }
                     False -> {
@@ -522,6 +536,7 @@ fn handle_design_mouse(
                       let next = view(state)
                       let shell = rebind(shell, current, next)
                       refresh(shell, Some(previous), state)
+                      campy_wx.focus(shell, "canvas")
                       begin_body_move(shell, state, next, dir, x, y)
                     }
                   }
@@ -544,6 +559,7 @@ fn handle_design_mouse(
                   let next = view(state)
                   let shell = rebind(shell, current, next)
                   refresh(shell, Some(previous), state)
+                  campy_wx.focus(shell, "canvas")
                   loop(shell, state, next, dir, NoDrag)
                 }
                 False -> {
@@ -555,6 +571,7 @@ fn handle_design_mouse(
                   let next = view(state)
                   let shell = rebind(shell, current, next)
                   refresh(shell, Some(previous), state)
+                  campy_wx.focus(shell, "canvas")
                   let #(ax, ay) = event_absolute(state, id, x, y)
                   begin_body_move(shell, state, next, dir, ax, ay)
                 }
@@ -1044,7 +1061,24 @@ fn inspector_edit(
         "x" | "y" | "w" | "h" -> edit_geometry(state, id, label, text)
         "text" ->
           model.update(state, model.SetControlProp(id, "text", VText(text)))
+        "title" ->
+          model.update(state, model.SetControlProp(id, "title", VText(text)))
         _ -> state
+      }
+    [] ->
+      case model.active_module(state) {
+        Ok(module) ->
+          case label {
+            "w" | "h" ->
+              edit_root_dimension(state, module.form.view.id, label, text)
+            "title" ->
+              model.update(
+                state,
+                model.SetControlProp(module.form.view.id, "title", VText(text)),
+              )
+            _ -> state
+          }
+        Error(_) -> state
       }
     _ -> state
   }
@@ -1070,6 +1104,29 @@ fn edit_geometry(
   }
 }
 
+/// The window is the layout root: changing its width/height must not freeze a
+/// column/row form. Set the root property directly instead of going through
+/// `SetControlRect`.
+fn edit_root_dimension(
+  state: model.State,
+  root_id: String,
+  field: String,
+  text: String,
+) -> model.State {
+  case int.parse(string.trim(text)) {
+    Ok(value) ->
+      model.update(
+        state,
+        model.SetControlProp(
+          root_id,
+          field,
+          VInt(int.max(value, campy_design.min_size)),
+        ),
+      )
+    Error(_) -> state
+  }
+}
+
 fn geometry_of(state: model.State, id: String) -> Option(campy_design.Rect) {
   case model.active_module(state) {
     Ok(module) -> campy_design.absolute(module.form.view, id)
@@ -1079,11 +1136,8 @@ fn geometry_of(state: model.State, id: String) -> Option(campy_design.Rect) {
 
 fn event_selected(state: model.State, value: campy_view.Value) -> model.State {
   case value, state.selection {
-    // Index 0 is the list's placeholder row. wxListBox auto-selects it when
-    // the Events page becomes visible; that must not open a handler.
-    VInt(0), _ -> state
     VInt(index), [id] ->
-      case list.drop(event_items(state), index - 1) {
+      case list.drop(event_items(state), index) {
         [event, ..] -> model.update(state, model.OpenHandler(id, event))
         [] -> state
       }
@@ -1092,7 +1146,7 @@ fn event_selected(state: model.State, value: campy_view.Value) -> model.State {
 }
 
 pub fn events_display(state: model.State) -> List(String) {
-  ["—", ..event_items(state)]
+  event_items(state)
 }
 
 fn select_or_log(state: model.State, id: String, key: String) -> model.State {
@@ -1302,7 +1356,7 @@ fn typed_grid_editors(
             _ -> campy_wx.set_grid_text_cell(shell, "inspector", index, 1)
           }
           let editable = case label {
-            "x" | "y" | "w" | "h" | "text" -> True
+            "x" | "y" | "w" | "h" | "text" | "title" -> True
             _ -> False
           }
           campy_wx.set_grid_read_only(
@@ -1403,7 +1457,16 @@ fn index_of_item_loop(items: List(String), item: String, index: Int) -> Int {
 
 pub fn selection_title(state: model.State) -> String {
   case state.selection {
-    [] -> "No selection"
+    [] ->
+      case model.active_module(state) {
+        Ok(module) ->
+          "Window — "
+          <> case campy_view.prop(module.form.view, "title") {
+            Ok(VText(title)) -> title
+            _ -> module.slug
+          }
+        Error(_) -> "No selection"
+      }
     [id] ->
       case model.active_module(state) {
         Ok(module) ->
@@ -1506,16 +1569,45 @@ fn common(values: List(String)) -> String {
   }
 }
 
-/// No selection: the dock shows project/module context instead of pretending a
-/// control is selected. Every value is read-only.
+/// No selection: the dock inspects the window/form itself, matching the
+/// reference IDE's default "Window" inspector. w/h and title are editable;
+/// the rest is context.
 fn summary_rows(state: model.State) -> List(List(String)) {
-  [
-    ["project", state.project.title],
-    ["module", active_slug(state)],
-    ["tabs", int.to_string(list.length(state.open_tabs))],
-    ["undo", int.to_string(list.length(state.undo))],
-    ["redo", int.to_string(list.length(state.redo))],
-  ]
+  case model.active_module(state) {
+    Error(_) -> [
+      ["project", state.project.title],
+      ["module", active_slug(state)],
+    ]
+    Ok(module) -> {
+      let root = module.form.view
+      let layout = campy_design.resolve(root)
+      let rect = case campy_design.placed(layout, layout.root) {
+        Some(placed) -> placed.rect
+        None -> campy_design.Rect(0, 0, 600, 400)
+      }
+      [
+        [
+          "title",
+          case campy_view.prop(root, "title") {
+            Ok(VText(title)) -> title
+            _ -> module.slug
+          },
+        ],
+        ["w", int.to_string(rect.w)],
+        ["h", int.to_string(rect.h)],
+        [
+          "layout",
+          case campy_view.prop(root, "layout") {
+            Ok(VText(layout)) -> layout
+            _ -> "free"
+          },
+        ],
+        ["module", module.slug],
+        ["undo", int.to_string(list.length(state.undo))],
+        ["redo", int.to_string(list.length(state.redo))],
+      ]
+    }
+  }
 }
 
 /// One field per row, in a stable order. Identity fields come first and are
@@ -1899,9 +1991,10 @@ fn palette_strip(state: model.State) -> Node {
       let armed = state.armed == Some(widget.kind)
       campy_view.node("button", "palette-" <> widget.kind)
       |> campy_view.with_props([
-        #("text", VText(palette_symbol(widget.kind))),
+        #("text", VText(palette_label(widget.kind))),
         #("tooltip", VText(palette_tooltip(widget))),
-        #("w", VInt(40)),
+        #("w", VInt(62)),
+        #("h", VInt(28)),
         #("highlight", VBool(armed)),
       ])
       |> campy_view.with_events(["click"])
@@ -1920,32 +2013,8 @@ fn palette_label(kind: String) -> String {
   }
 }
 
-/// Compact glyphs keep all 16 tools in one row under the toolbar; the full
-/// name is in the tooltip (`Name — click, then drag on the form`).
-fn palette_symbol(kind: String) -> String {
-  case kind {
-    "panel" -> "▭"
-    "group" -> "▢"
-    "label" -> "A"
-    "button" -> "◉"
-    "text" -> "T"
-    "memo" -> "≣"
-    "checkbox" -> "☑"
-    "radio" -> "⊚"
-    "choice" -> "▾"
-    "list" -> "☰"
-    "slider" -> "↔"
-    "progress" -> "▰"
-    "picture" -> "▧"
-    "tree" -> "⑂"
-    "grid" -> "▦"
-    "editor" -> "⌨"
-    _ -> "?"
-  }
-}
-
 fn palette_tooltip(widget: campy_catalog.Widget) -> String {
-  widget.label <> " — click, then drag on the form"
+  palette_label(widget.kind) <> " — click, then drag on the form"
 }
 
 pub fn palette_labels() -> List(String) {

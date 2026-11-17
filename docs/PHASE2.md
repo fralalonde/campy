@@ -77,10 +77,11 @@ The probe requires Xvfb, xdotool, ImageMagick, and openbox (installed in
 5. Any geometry commit runs `campy_design.freeze` first (materializes resolved
    coordinates, sets free layout, drops `border`/`gap`), then `set_rect`; group
    moves commit every rect in one undo entry.
-6. Selection chrome is 13 borderless always-on-top **mini-frames**: 0-7 resize,
-   8 move grip, 9-12 marquee strips. Child panels draw above controls but do not
-   receive input on GTK; popups were input-dead. Hide all chrome when selection
-   is empty; show resize handles only for a single selection.
+6. Selection chrome is 17 borderless always-on-top **mini-frames**: 0-7 resize,
+   8 move grip, 9-12 marquee strips, 13-16 selection outline strips. Child
+   panels draw above controls but do not receive input on GTK; popups were
+   input-dead. Hide all chrome when selection is empty; show resize handles only
+   for a single selection.
 7. The `design` prop selects design-mode events; do not overload `events`
    containing `select`, because the module tree uses that key for its own
    selection.
@@ -614,7 +615,7 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 - Delivered:
   1. **Navigator + palette.** Left pane is two `wxListBox` sections (project
      title, module slugs, active module highlighted). The palette moved to a
-     compact strip under the toolbar: 16 Unicode/text buttons with
+     compact strip under the toolbar: 16 full-name text buttons with
      `Name — click, then drag on the form` tooltips. Clicking arms placement;
      the armed button is highlighted and the status bar shows a hint.
   2. **Centre.** Active module + `Canvas 600 × 400` header, Form/Code/Source
@@ -624,12 +625,14 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
      `Window — root`, `N selected`) + Delete button; native `wxNotebook` with
      `Properties` and `Events`. Properties is a one-field-per-row `wxGrid` with
      wx row/column labels and grid lines hidden, 22 px rows, a 110 px label
-     column and the value column filling the rest. The first row is the field
-     name; identity fields are read-only; x/y/w/h use numeric validation and
-     text uses the text editor. Multi-selection shows common values with blanks
-     and is read-only. Events lists the selected control's declared events (with
-     a placeholder row so page activation cannot open a handler accidentally);
-     selecting one appends the ABI v2 stub when missing and opens Code.
+     column and the value column filling the rest. Each row is label + value;
+     identity fields are read-only; x/y/w/h use numeric validation and
+     text/title use the text editor. Multi-selection shows common values with blanks
+     and is read-only. With no selection the dock inspects the window
+     (title/w/h/layout/module/history); window w/h are set as root properties and
+     do not freeze a column/row form. Events lists only the selected control's
+     declared events; selecting one appends the ABI v2 stub when missing and
+     opens Code.
   4. **Selection UX.** 2 px blue outline strips just outside the control, eight
      9 px blue resize handles and a 12 px blue grip. Outline strips are drawn
      outside the control so they do not swallow body clicks. Dragging a
