@@ -629,6 +629,10 @@ set_shortcuts(Frame, Editing) ->
     catch wxWindow:setAcceleratorTable(Frame, Table),
     %% Keep both the table and its entries alive for the window's lifetime.
     put(campy_accel_table, {Table, Entries}),
+    %% char_hook sees Ctrl+C/X/V/Y/D/Delete before GTK's text-widget
+    %% bindings consume them. It is only enabled on the Form page; Code/Source
+    %% keep their editor shortcuts. The app deliberately ignores the keys that
+    %% the accelerator table already handles (save, quit, pages, escape).
     ok.
 
 %% Apply the current accelerator table to a child as well. wx only consults
@@ -642,28 +646,15 @@ apply_shortcuts(Ref) ->
         _ -> ok
     end.
 
-accelerator_entries(Editing) ->
-    Base = [
+accelerator_entries(_Editing) ->
+    [
         accel(?wxACCEL_CTRL, $S, 9101),
         accel(?wxACCEL_CTRL, $Q, 9102),
         accel(?wxACCEL_CTRL, $1, 9111),
         accel(?wxACCEL_CTRL, $2, 9112),
         accel(?wxACCEL_CTRL, $3, 9113),
         accel(0, ?WXK_ESCAPE, 9114)
-    ],
-    case Editing of
-        true -> Base;
-        false -> Base ++ [
-            accel(?wxACCEL_CTRL, $Z, 9103),
-            accel(?wxACCEL_CTRL bor ?wxACCEL_SHIFT, $Z, 9104),
-            accel(?wxACCEL_CTRL, $Y, 9105),
-            accel(?wxACCEL_CTRL, $X, 9106),
-            accel(?wxACCEL_CTRL, $C, 9107),
-            accel(?wxACCEL_CTRL, $V, 9108),
-            accel(?wxACCEL_CTRL, $D, 9109),
-            accel(0, ?WXK_DELETE, 9110)
-        ]
-    end.
+    ].
 
 accel(Flags, KeyCode, Command) ->
     wxAcceleratorEntry:new([
@@ -745,20 +736,22 @@ connect(Ref, <<"memo">>) ->
     wxTextCtrl:connect(Ref, command_text_updated, []);
 connect(Ref, <<"choice">>) ->
     wxChoice:connect(Ref, command_choice_selected, []);
-connect(Ref, <<"list">>) ->
-    wxListBox:connect(Ref, command_listbox_selected, []);
 connect(Ref, <<"slider">>) ->
     wxSlider:connect(Ref, command_slider_updated, []);
 connect(Ref, <<"menu">>) ->
     wxMenu:connect(Ref, command_menu_selected, []);
 connect(Ref, <<"toolbar">>) ->
     wxToolBar:connect(Ref, command_menu_selected, []);
-connect(Ref, <<"notebook">>) ->
-    wxNotebook:connect(Ref, command_notebook_page_changed, []);
 connect(Ref, <<"tree">>) ->
     wxTreeCtrl:connect(Ref, command_tree_sel_changed, []);
 connect(Ref, <<"grid">>) ->
     wxGrid:connect(Ref, grid_cell_changed, []);
+connect(Ref, <<"notebook">>) ->
+    wxNotebook:connect(Ref, command_notebook_page_changed, []),
+    catch wxNotebook:connect(Ref, char_hook, [{skip, true}]);
+connect(Ref, <<"list">>) ->
+    wxListBox:connect(Ref, command_listbox_selected, []),
+    catch wxListBox:connect(Ref, char_hook, [{skip, true}]);
 connect(_Ref, _Kind) ->
     ok.
 

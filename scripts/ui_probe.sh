@@ -161,6 +161,21 @@ sleep 1
 shot t25-help-dialog
 xdotool key Escape
 sleep 0.5
+# --- T2.5: clipboard and undo shortcuts ------------------------------------
+# Back to Form, select the placed button, then use the frame shortcuts.
+click 225 147
+click 650 475
+shot t25-shortcut-selected
+xdotool key ctrl+c
+xdotool key ctrl+v
+sleep 1
+shot t25-shortcut-paste
+xdotool key ctrl+z
+sleep 0.5
+xdotool key ctrl+y
+sleep 1
+shot t25-shortcut-redo
+
 # Hover a palette button long enough for GTK's tooltip.
 xdotool mousemove --window "$win" 145 76
 sleep 2.5

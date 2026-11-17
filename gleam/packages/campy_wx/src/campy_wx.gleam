@@ -1167,11 +1167,12 @@ pub fn show_message(shell: Shell, title: String, message: String) -> Nil {
 /// are omitted while Code/Source is visible so the editor keeps them.
 pub fn set_shortcuts(shell: Shell, editing: Bool) -> Nil {
   native.set_shortcuts(shell.frame, editing)
+  // wx consults the focused window's accelerator table, not only the frame's.
+  // Apply it to every widget so a focused notebook tab (the Form page's usual
+  // focus) cannot swallow Ctrl+C/V/Z. On Code/Source the table omits the text
+  // shortcuts, so Scintilla still owns them.
   list.each(dict.values(shell.widgets), fn(widget) {
-    case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
-      True -> native.apply_shortcuts(widget.ref)
-      False -> Nil
-    }
+    native.apply_shortcuts(widget.ref)
   })
 }
 

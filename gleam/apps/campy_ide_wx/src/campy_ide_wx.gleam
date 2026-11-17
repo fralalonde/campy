@@ -183,7 +183,15 @@ fn handle_key(
   drag: Drag,
   key: campy_wx.Key,
 ) {
-  dispatch_shortcut(shell, state, current, dir, drag, shortcut(state, key))
+  // char_hook handles the editing keys; the accelerator table handles the
+  // base keys (save/quit/pages/escape). Ignore the latter here so a key is
+  // never applied twice.
+  let action = case shortcut(state, key) {
+    Save | Quit | ShowFormPage | ShowCodePage | ShowSourcePage | Cancel ->
+      NoShortcut
+    action -> action
+  }
+  dispatch_shortcut(shell, state, current, dir, drag, action)
 }
 
 fn handle_accelerator(
@@ -1254,7 +1262,7 @@ fn refresh(
   // Design controls are not text editors; letting one keep focus makes it
   // consume Ctrl+C/V/Y before the frame accelerators see them.
   case page_index(state) {
-    0 -> campy_wx.focus(shell, "tabs")
+    0 -> campy_wx.focus(shell, "canvas")
     _ -> Nil
   }
 

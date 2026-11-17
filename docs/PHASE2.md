@@ -639,30 +639,28 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
      control's body moves the current selection (single or group) using GTK's
      implicit grab; a click without motion is a model no-op. Ctrl-click toggles,
      marquee still selects; chrome hides off the Form page.
-  5. **Shortcuts.** Native `wxAcceleratorTable`, rebuilt when Form/Code/Source
-     changes: Ctrl+S/Q, Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y, Ctrl+X/C/V, Ctrl+D,
-     Delete, Escape, Ctrl+1/2/3. Text-editing shortcuts are omitted on
-     Code/Source so Scintilla keeps them. Menu labels carry the same hints, and
-     Help > Keyboard shortcuts opens a native dialog. Toolbar/menu actions remain
-     the reliable path for clipboard commands while a native design widget has
-     focus (see deviation).
+  5. **Shortcuts.** A page-aware `wxAcceleratorTable` handles Ctrl+S/Q,
+     Ctrl+1/2/3 and Escape even inside grid editors; `char_hook` on the canvas
+     and design widgets handles Ctrl+Z/Y, Ctrl+X/C/V, Ctrl+D and Delete on the
+     Form page. Text shortcuts are omitted on Code/Source so Scintilla keeps
+     them. Menu labels carry the same hints, and Help > Keyboard shortcuts opens
+     a native dialog. Toolbar/menu actions remain the reliable clipboard path
+     while a native text widget owns focus (see deviation).
   6. **Probe.** `scripts/ui_probe.sh` uses a 1600×1000 Xvfb screen and
      recalibrated client coordinates; new screenshots cover the full shell,
      selection outline, body drag, vertical Properties, inspector edit/undo/redo,
      palette armed, placement, Events, handler stub, text edit, Source, menus,
      Help dialog and tooltip.
 - Deviations:
-  - `char_hook` alone could not be shipped: on this GTK build it consumed
-    character events for `wxGrid`'s editor and double-fired with accelerators
-    (one Ctrl+Z applied two undos). The frame accelerator table is the single
-    shortcut path; it is page-aware and keeps editor text shortcuts intact.
-  - While a native design control (notably a text field) owns GTK focus, the
-    focused widget consumes Ctrl+C/X/V/Y before the frame receives them. The
-    toolbar/menu equivalents always work. Ctrl+S/Q, Ctrl+Z, Ctrl+1/2/3 and
-    Delete work from the normal canvas focus; this is documented as a remaining
-    G2 polish item rather than hidden.
-  - The palette uses Unicode glyphs instead of full names to fit all 16 tools in
-    one 1280 px row; full names and the placement sentence are in tooltips.
+  - `char_hook` is connected to the canvas and design widgets, not the frame:
+    the frame connection consumed character events for `wxGrid`'s editor and
+    double-fired with accelerators on this GTK build.
+  - While a native text widget owns GTK focus, GTK consumes Ctrl+C/X/V before
+    the app receives them. The toolbar/menu equivalents always work. Ctrl+S/Q,
+    Ctrl+Z, Ctrl+1/2/3, Delete and Escape work from the normal canvas focus;
+    this is a remaining G2 polish item rather than hidden.
+  - The palette strip uses full names (16 buttons fit at 1280 px); the placement
+    sentence is in each tooltip.
   - wx's `wxGridCellNumberEditor` spin field refused keyboard text in this build,
     but the numeric cells work when the value column is clicked (the probe
     clicks the value column, not the label column); no workaround was needed in
