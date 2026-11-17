@@ -33,11 +33,12 @@ it. Option 2 (native children + selection chrome) is implemented on wx.
   `LD_LIBRARY_PATH=<compatible OpenSSL 3 dir> just check` until OTP is rebuilt.
   The IDE and wx tests do not need crypto.
 
-**Next task.** **Gate G2**: stop for the human designer-feel check after M2.
-Until M3 exists, G2 covers designing a form, saving, inspecting/diffing the
-canonical JSON, and reopening it (the plan's "run it" step belongs to M3).
-Reopen proof can use `CAMPY_WX_SMOKE=1` on the saved project. Do not start M3
-(ABI v2 runtime, appgen, Run) until G2 passes.
+**Next task.** **T2.5** — IDE shell redesign, from the failed G2 review. The
+reference is the Phase 1 Slint IDE (`docs/images/campy-studio.png` and
+`main:gleam/apps/campy_ide/src/campy_ide/shell.gleam`). The current panes are in
+the wrong places, the inspector is horizontal, events is a separate pane, and
+the designer chrome is too coarse. Rebuild the shell layout before re-running
+G2. Do not start M3 (ABI v2 runtime, appgen, Run) until G2 passes.
 
 **Layout.**
 ```
@@ -599,8 +600,38 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 - Deviation: Source is a third notebook page plus a View menu item; no toolbar
   button was added to keep the calibrated probe/toolbar coordinates stable.
 
-- Gate G2: design the demo form from scratch, run it, reopen it, and diff the
-  JSON.
+### T2.5 — IDE shell redesign (G2 feedback)
+
+- Depends: T2.4 · Size: L · In progress.
+- Reference: `docs/images/campy-studio.png` and
+  `main:gleam/apps/campy_ide/src/campy_ide/shell.gleam`. Match the information
+  architecture: top menus + compact action/palette strip, left Projects/Modules
+  navigator, centre module editor with a bottom console, right 320–330 px
+  inspector dock with Properties/Events tabs, and a status bar.
+- Required corrections:
+  1. Move the widget palette out of the left sidebar into a compact toolbar/
+     palette strip. Use text/Unicode tool buttons and tooltips; no black
+     placeholder bitmaps.
+  2. Left navigator: Projects and Modules sections; no palette.
+  3. Centre: Form/Code/Source tabs, then the Console below them; not in the
+     right pane.
+  4. Right dock: selection header + Delete, then a native Properties/Events
+     notebook. Properties is a vertical one-field-per-row grid with row/column
+     headers hidden and sensible column widths. Events is the second tab, not
+     a separate pane.
+  5. Selection chrome: thin blue outline strips, small blue resize handles and
+     a small grip (no thick red bar).
+  6. Move a control by dragging its body, not only the grip; keep Ctrl-toggle
+     and marquee.
+  7. Discoverability: menu labels show shortcuts; frame-level key handling for
+     Save/Quit, Undo/Redo, Cut/Copy/Paste/Duplicate/Delete, page switching, and
+     Escape-to-cancel; tooltips on palette buttons; status hints for placement.
+  8. Default window 1280×860; probe screen 1600×1000.
+- Acceptance: side-by-side screenshots show the reference layout; all T2.1–T2.4
+  behaviour still works; probe updated and read; `just check` green.
+
+- Gate G2: after T2.5, design the demo form from scratch, save, inspect/diff
+  the JSON, and reopen it. The plan's "run it" step belongs to M3.
 
 ## 5. M3/M4 — run, deploy, debug
 
