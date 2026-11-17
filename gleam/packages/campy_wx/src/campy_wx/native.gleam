@@ -9,7 +9,7 @@ import gleam/dynamic.{type Dynamic}
 
 pub type NativeMessage {
   WxEvent(wx_id: Int, event_type: String)
-  MouseEvent(wx_id: Int, event_type: String, x: Int, y: Int)
+  MouseEvent(wx_id: Int, event_type: String, x: Int, y: Int, control: Bool)
   Other(message: Dynamic)
   Idle
 }
@@ -255,6 +255,7 @@ pub fn handles_create(parent: Dynamic, base: Int) -> List(Dynamic)
 
 @external(erlang, "campy_wx_native", "handle_place")
 pub fn handle_place(
+  canvas: Dynamic,
   ref: Dynamic,
   x: Int,
   y: Int,

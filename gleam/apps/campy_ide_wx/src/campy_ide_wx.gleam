@@ -115,9 +115,9 @@ fn loop(
     }
     campy_wx.MouseHandle(role, kind, x, y) ->
       handle_mouse(shell, state, current, dir, drag, role, kind, x, y)
-    campy_wx.Mouse(id, x, y) -> {
+    campy_wx.Mouse(id, x, y, control) -> {
       let previous = state
-      let state = select_at(state, id, x, y)
+      let state = select_at(state, id, x, y, control)
       refresh(shell, Some(previous), state)
       loop(shell, state, current, dir, NoDrag)
     }
@@ -163,26 +163,29 @@ fn handle_mouse(
         }
       }
     }
-    "motion" ->
-      case drag_rect(drag, x, y) {
-        Some(#(id, #(rx, ry, rw, rh))) -> {
-          campy_wx.preview_rect(shell, id, rx, ry, rw, rh)
-          loop(shell, state, current, dir, drag)
-        }
-        None -> loop(shell, state, current, dir, drag)
+    "motion" -> {
+      case drag_previews(drag, x, y) {
+        [] -> Nil
+        previews ->
+          list.each(previews, fn(preview) {
+            let #(id, #(rx, ry, rw, rh)) = preview
+            campy_wx.preview_rect(shell, id, rx, ry, rw, rh)
+          })
       }
+      loop(shell, state, current, dir, drag)
+    }
     "left_up" -> {
       campy_wx.release_handle(shell, role)
-      case drag_rect(drag, x, y) {
-        Some(#(id, rect)) -> {
+      case drag_previews(drag, x, y) {
+        [] -> loop(shell, state, current, dir, NoDrag)
+        previews -> {
           let previous = state
-          let state = commit_rect(state, id, rect)
+          let state = commit_rects(state, previews)
           let next = view(state)
           let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
           loop(shell, state, next, dir, NoDrag)
         }
-        None -> loop(shell, state, current, dir, NoDrag)
       }
     }
     _ -> loop(shell, state, current, dir, drag)
@@ -190,25 +193,57 @@ fn handle_mouse(
 }
 
 fn start_drag(state: model.State, role: Int, x: Int, y: Int) -> Drag {
-  case state.selection, selection_rect(state) {
-    [id, ..], Some(rect) ->
-      case role == 8 {
-        True -> MoveDrag(id, x, y, rect)
-        False -> ResizeDrag(id, role, x, y, rect)
+  case role == 8 {
+    True ->
+      case selection_items(state) {
+        [] -> NoDrag
+        items -> MoveDrag(items, x, y)
       }
-    _, _ -> NoDrag
+    False ->
+      case state.selection {
+        [id] ->
+          case selection_items(state) {
+            [#(_, rect), ..] -> ResizeDrag(id, role, x, y, rect)
+            [] -> NoDrag
+          }
+        _ -> NoDrag
+      }
   }
 }
 
-fn drag_rect(
+fn selection_items(
+  state: model.State,
+) -> List(#(String, #(Int, Int, Int, Int))) {
+  case model.active_module(state) {
+    Error(_) -> []
+    Ok(module) -> {
+      let layout = campy_design.resolve(module.form.view)
+      list.filter_map(state.selection, fn(id) {
+        case campy_design.placed(layout, id) {
+          Some(placed) ->
+            Ok(#(
+              id,
+              #(placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h),
+            ))
+          None -> Error(Nil)
+        }
+      })
+    }
+  }
+}
+
+fn drag_previews(
   drag: Drag,
   x: Int,
   y: Int,
-) -> Option(#(String, #(Int, Int, Int, Int))) {
+) -> List(#(String, #(Int, Int, Int, Int))) {
   case drag {
-    NoDrag -> None
-    MoveDrag(id, start_x, start_y, #(rx, ry, rw, rh)) ->
-      Some(#(id, #(rx + x - start_x, ry + y - start_y, rw, rh)))
+    NoDrag -> []
+    MoveDrag(items, start_x, start_y) ->
+      list.map(items, fn(item) {
+        let #(id, #(rx, ry, rw, rh)) = item
+        #(id, #(rx + x - start_x, ry + y - start_y, rw, rh))
+      })
     ResizeDrag(id, role, start_x, start_y, #(rx, ry, rw, rh)) -> {
       let dx = x - start_x
       let dy = y - start_y
@@ -244,26 +279,28 @@ fn drag_rect(
           }
         False -> #(top, bottom)
       }
-      Some(#(id, #(left, top, right - left, bottom - top)))
+      [#(id, #(left, top, right - left, bottom - top))]
     }
   }
 }
 
-fn commit_rect(
+fn commit_rects(
   state: model.State,
-  id: String,
-  rect: #(Int, Int, Int, Int),
+  items: List(#(String, #(Int, Int, Int, Int))),
 ) -> model.State {
   case model.active_module(state) {
     Error(_) -> state
     Ok(module) -> {
-      let #(x, y, width, height) = rect
+      let frozen = campy_design.freeze(module.form.view)
       let view =
-        campy_design.set_rect(
-          module.form.view,
-          id,
-          campy_design.Rect(x: x, y: y, w: width, h: height),
-        )
+        list.fold(items, frozen, fn(view, item) {
+          let #(id, #(x, y, width, height)) = item
+          campy_design.set_rect(
+            view,
+            id,
+            campy_design.Rect(x: x, y: y, w: width, h: height),
+          )
+        })
       let document =
         campy_view.Document(
           schema: module.form.schema,
@@ -297,7 +334,11 @@ fn commit_rect(
 
 type Drag {
   NoDrag
-  MoveDrag(id: String, start_x: Int, start_y: Int, rect: #(Int, Int, Int, Int))
+  MoveDrag(
+    items: List(#(String, #(Int, Int, Int, Int))),
+    start_x: Int,
+    start_y: Int,
+  )
   ResizeDrag(
     id: String,
     role: Int,
@@ -319,11 +360,12 @@ fn handle(
     "menu-undo" | "tool-undo" -> model.update(state, model.Undo)
     "menu-redo" | "tool-redo" -> model.update(state, model.Redo)
     "menu-toggle" | "tool-toggle" -> model.update(state, model.ToggleCodeView)
-    "modules" ->
+    "modules" -> {
       case key, value {
         "select", VText(slug) -> tree_selected(state, slug)
         _, _ -> state
       }
+    }
     _ -> select_or_log(state, id, key)
   }
 }
@@ -349,24 +391,54 @@ fn select_control(state: model.State, id: String, key: String) -> model.State {
 /// Canvas clicks are hit-tested, not trusted to per-control events: GTK labels
 /// do not emit mouse events, and bubbled clicks can otherwise clear a fresh
 /// selection.
-fn select_at(state: model.State, id: String, x: Int, y: Int) -> model.State {
-  case id {
+fn select_at(
+  state: model.State,
+  id: String,
+  x: Int,
+  y: Int,
+  control: Bool,
+) -> model.State {
+  let target = case id {
     "canvas" ->
       case model.active_module(state) {
-        Error(_) -> state
+        Error(_) -> None
         Ok(module) -> {
           let layout = campy_design.resolve(module.form.view)
           case campy_design.at(layout, x, y) {
             Some(placed) ->
               case placed.id == "canvas" {
-                True -> model.select_controls(state, [])
-                False -> model.select_controls(state, [placed.id])
+                True -> None
+                False -> Some(placed.id)
               }
-            None -> model.select_controls(state, [])
+            None -> None
           }
         }
       }
-    _ -> select_control(state, id, "select")
+    _ -> Some(id)
+  }
+
+  case target {
+    None ->
+      case control {
+        True -> state
+        False -> model.select_controls(state, [])
+      }
+    Some(target) ->
+      case control {
+        True -> toggle_selection(state, target)
+        False -> model.select_controls(state, [target])
+      }
+  }
+}
+
+fn toggle_selection(state: model.State, id: String) -> model.State {
+  case list.contains(state.selection, id) {
+    True ->
+      model.select_controls(
+        state,
+        list.filter(state.selection, fn(selected) { selected != id }),
+      )
+    False -> model.select_controls(state, list.append(state.selection, [id]))
   }
 }
 
@@ -414,7 +486,11 @@ fn refresh(
 
   campy_wx.set_grid(shell, "inspector", inspector_rows(state))
   campy_wx.set_status(shell, status_text(state))
-  campy_wx.show_selection(shell, selection_rect(state))
+  campy_wx.show_selection(
+    shell,
+    selection_rect(state),
+    list.length(state.selection) == 1,
+  )
 }
 
 fn page_index(state: model.State) -> Int {
@@ -436,19 +512,29 @@ fn set_console(shell: campy_wx.Shell, state: model.State) {
 }
 
 fn selection_rect(state: model.State) -> Option(#(Int, Int, Int, Int)) {
-  case state.selection {
+  case selection_items(state) {
     [] -> None
-    [id, ..] ->
-      case model.active_module(state) {
-        Error(_) -> None
-        Ok(module) ->
-          case campy_design.placed(campy_design.resolve(module.form.view), id) {
-            Some(placed) ->
-              Some(#(placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h))
-            None -> None
-          }
-      }
+    [#(_, first), ..rest] ->
+      Some(
+        list.fold(rest, first, fn(acc, item) {
+          let #(_, rect) = item
+          union(acc, rect)
+        }),
+      )
   }
+}
+
+fn union(
+  a: #(Int, Int, Int, Int),
+  b: #(Int, Int, Int, Int),
+) -> #(Int, Int, Int, Int) {
+  let #(ax, ay, aw, ah) = a
+  let #(bx, by, bw, bh) = b
+  let x = int.min(ax, bx)
+  let y = int.min(ay, by)
+  let right = int.max(ax + aw, bx + bw)
+  let bottom = int.max(ay + ah, by + bh)
+  #(x, y, right - x, bottom - y)
 }
 
 fn status_text(state: model.State) -> String {
@@ -473,8 +559,24 @@ pub fn tree_items(state: model.State) -> List(plan.TreeItem) {
 pub fn inspector_rows(state: model.State) -> List(List(String)) {
   case state.selection {
     [] -> summary_rows(state)
-    [id, ..] -> control_rows(state, id)
+    [id] -> control_rows(state, id)
+    ids -> multi_rows(state, ids)
   }
+}
+
+fn multi_rows(state: model.State, ids: List(String)) -> List(List(String)) {
+  let #(x, y, w, h) = case selection_rect(state) {
+    Some(rect) -> rect
+    None -> #(0, 0, 0, 0)
+  }
+  [
+    ["Field", "Value"],
+    ["selected", int.to_string(list.length(ids))],
+    ["x", int.to_string(x)],
+    ["y", int.to_string(y)],
+    ["w", int.to_string(w)],
+    ["h", int.to_string(h)],
+  ]
 }
 
 fn summary_rows(state: model.State) -> List(List(String)) {

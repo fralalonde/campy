@@ -13,7 +13,7 @@
     editor/2, editor_set/3,
     open_dialog/2, save_dialog/3,
     canvas/2, paint_canvas/4, connect_design/2,
-    handles_create/2, handle_place/5, handle_show/2, handle_raise/1,
+    handles_create/2, handle_place/6, handle_show/2, handle_raise/1,
     capture/1, release/1,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
@@ -469,22 +469,30 @@ handles_create(Parent, Base) ->
     [create_handle(Parent, Base + Index, Index) || Index <- lists:seq(0, 8)].
 
 create_handle(Parent, Id, 8) ->
-    Ref = wxPanel:new(Parent, [{winid, Id}, {size, {24, 8}}, {style, 0}]),
-    wxPanel:setBackgroundColour(Ref, {120, 124, 140}),
-    connect_handle(Ref),
-    wxWindow:hide(Ref),
-    Ref;
-create_handle(Parent, Id, _Role) ->
-    Ref = wxPanel:new(Parent, [{winid, Id}, {size, {7, 7}}, {style, 0}]),
-    wxPanel:setBackgroundColour(Ref, {235, 235, 240}),
+    mini_handle(Parent, Id, {36, 12}, {196, 72, 60}, ?wxCURSOR_SIZING);
+create_handle(Parent, Id, Role) ->
+    mini_handle(Parent, Id, {12, 12}, {48, 52, 62}, handle_cursor(Role)).
+
+mini_handle(Parent, Id, Size, Colour, Cursor) ->
+    Ref = wxMiniFrame:new(Parent, Id, <<"">>, [
+        {style, ?wxFRAME_NO_TASKBAR bor ?wxBORDER_NONE bor ?wxSTAY_ON_TOP},
+        {size, Size}
+    ]),
+    wxMiniFrame:setBackgroundColour(Ref, Colour),
+    wxMiniFrame:setCursor(Ref, wxCursor:new(Cursor)),
     connect_handle(Ref),
     wxWindow:hide(Ref),
     Ref.
 
+handle_cursor(Role) when Role =:= 0; Role =:= 4 -> ?wxCURSOR_SIZENWSE;
+handle_cursor(Role) when Role =:= 2; Role =:= 6 -> ?wxCURSOR_SIZENESW;
+handle_cursor(Role) when Role =:= 1; Role =:= 5 -> ?wxCURSOR_SIZENS;
+handle_cursor(_) -> ?wxCURSOR_SIZEWE.
+
 connect_handle(Ref) ->
-    catch wxPanel:connect(Ref, left_down, []),
-    catch wxPanel:connect(Ref, motion, []),
-    catch wxPanel:connect(Ref, left_up, []),
+    catch wxMiniFrame:connect(Ref, left_down, []),
+    catch wxMiniFrame:connect(Ref, motion, []),
+    catch wxMiniFrame:connect(Ref, left_up, []),
     ok.
 
 capture(Ref) ->
@@ -495,8 +503,9 @@ release(Ref) ->
     catch wxWindow:releaseMouse(Ref),
     ok.
 
-handle_place(Ref, X, Y, Width, Height) ->
-    wxWindow:move(Ref, {X, Y}),
+handle_place(Canvas, Ref, X, Y, Width, Height) ->
+    {CX, CY} = wxWindow:getScreenPosition(Canvas),
+    wxWindow:move(Ref, {CX + X, CY + Y}),
     wxWindow:setSize(Ref, {Width, Height}),
     ok.
 
@@ -508,7 +517,7 @@ handle_show(Ref, Visible) ->
     ok.
 
 handle_raise(Ref) ->
-    wxWindow:raise(Ref),
+    wxMiniFrame:raise(Ref),
     ok.
 
 %% Events
@@ -554,7 +563,8 @@ next_message(Timeout) ->
             case element(1, Event) of
                 wxMouse ->
                     Type = atom_to_binary(element(2, Event), utf8),
-                    {mouse_event, Id, Type, element(3, Event), element(4, Event)};
+                    {mouse_event, Id, Type, element(3, Event), element(4, Event),
+                     element(8, Event) =:= true};
                 _ ->
                     {wx_event, Id, event_type(Event)}
             end;

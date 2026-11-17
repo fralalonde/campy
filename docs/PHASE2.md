@@ -36,11 +36,17 @@ handlers, and Run deploys to a local peer node and attaches a view.**
 - **Gate G1 passed** (human check). M1 is complete.
 - **T2.1 (part 1)** `campy_design` — absolute geometry, hit-testing, move/resize
   (19 tests) — done.
-- **T2.1 (part 2)** canvas, selection, and gestures — done and **verified under
+- **T2.1 (part 2)** canvas, selection, and gestures — **done and verified under
   Xvfb with xdotool + screenshots** (`scripts/ui_probe.sh`): native controls on
-  a painted grid, hit-tested canvas selection, nine chrome handles (eight
-  resize + move grip) with mouse capture, live previews, commits through
-  `campy_design.freeze` + `set_rect` + model undo, and module-switch persistence.
+  a painted grid, hit-tested canvas selection, Ctrl-toggle multi-selection,
+  group move, nine chrome handles (eight resize + move grip) with capture,
+  live previews, commits through `campy_design.freeze` + `set_rect` + model
+  undo, and module-switch persistence.
+- Selection chrome lives in borderless, always-on-top **mini-frames**, not child
+  panels: GTK draws child panels above controls but routes input to the control
+  underneath, so panels could not be clicked. Popups were also input-dead in
+  this environment; mini-frames work. The inspector shows the union rectangle
+  for a multi-selection.
 - Bugs found by the probe: mouse event types were atoms while Gleam patterns
   were binaries; `wxWindow:connect` silently failed for concrete widgets
   (class-specific `connect` is required); sizer inserts used raw child indexes

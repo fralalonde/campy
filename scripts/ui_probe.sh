@@ -47,7 +47,7 @@ xdotool windowactivate --sync "$win" 2>/dev/null || true
 sleep 2
 echo "win=$win"
 xdotool getwindowgeometry "$win"
-shot() { import -window "$win" "$OUT/$1.png"; echo "shot=$OUT/$1.png"; }
+shot() { import -window root "$OUT/$1.png"; echo "shot=$OUT/$1.png"; }
 click() { xdotool mousemove --window "$win" "$1" "$2" click 1; sleep 1; }
 
 shot initial
@@ -58,14 +58,15 @@ click 300 140
 shot selected-label
 click 300 166
 shot selected-text
+xwininfo -root -tree > "$OUT/windows.txt" 2>&1 || true
 # resize via the south-east handle (+40, +12)
-xdotool mousemove --window "$win" 820 178 mousedown 1
+xdotool mousemove --window "$win" 820 176 mousedown 1
 xdotool mousemove_relative --sync 40 12
 xdotool mouseup 1
 sleep 1
 shot resized-text
 # move via the grip (+30, +30)
-xdotool mousemove --window "$win" 520 140 mousedown 1
+xdotool mousemove --window "$win" 240 160 mousedown 1
 xdotool mousemove_relative --sync 30 30
 xdotool mouseup 1
 sleep 1
@@ -77,3 +78,17 @@ click 70 125
 click 70 147
 click 70 125
 shot module-return
+# select the moved text field, then Ctrl-click the label: multi-selection
+click 500 200
+xdotool windowfocus --sync "$win" 2>/dev/null || true
+xdotool keydown ctrl
+xdotool mousemove --window "$win" 400 133 click 1
+xdotool keyup ctrl
+sleep 1
+shot multi-select
+# drag the group grip (+20, +20)
+xdotool mousemove --window "$win" 240 136 mousedown 1
+xdotool mousemove_relative --sync 20 20
+xdotool mouseup 1
+sleep 1
+shot moved-group

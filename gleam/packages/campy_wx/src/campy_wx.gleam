@@ -32,7 +32,7 @@ pub type Incoming {
   /// Mouse input on a selection handle: role 0..7 resize, 8 move.
   MouseHandle(role: Int, kind: String, x: Int, y: Int)
   /// A left click on a design widget; coordinates are relative to that widget.
-  Mouse(id: String, x: Int, y: Int)
+  Mouse(id: String, x: Int, y: Int, control: Bool)
 }
 
 pub opaque type Shell {
@@ -676,15 +676,14 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
   let handle_base = shell.handle_base
 
   case native.next_message(timeout_ms) {
-    native.MouseEvent(wx_id, kind, x, y)
+    native.MouseEvent(wx_id, kind, x, y, _control)
       if wx_id >= handle_base && wx_id < handle_base + 9
     -> MouseHandle(wx_id - shell.handle_base, kind, x, y)
-    native.MouseEvent(wx_id, "left_down", x, y) ->
-      design_mouse(shell, wx_id, x, y)
-    native.MouseEvent(_wx_id, _kind, _x, _y) -> Idle
+    native.MouseEvent(wx_id, "left_down", x, y, control) ->
+      design_mouse(shell, wx_id, x, y, control)
+    native.MouseEvent(_wx_id, _kind, _x, _y, _control) -> Idle
     native.WxEvent(wx_id, "close") if wx_id == shell.frame_id -> Closed
     native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
-    native.WxEvent(wx_id, "mouse") -> design_event(shell, wx_id)
     native.WxEvent(wx_id, "command") -> command_event(shell, wx_id)
     native.WxEvent(_wx_id, _event_type) -> Idle
     native.Other(message) -> Message(message)
@@ -721,7 +720,13 @@ fn paint_event(shell: Shell, wx_id: Int) -> Incoming {
   }
 }
 
-fn design_mouse(shell: Shell, wx_id: Int, x: Int, y: Int) -> Incoming {
+fn design_mouse(
+  shell: Shell,
+  wx_id: Int,
+  x: Int,
+  y: Int,
+  control: Bool,
+) -> Incoming {
   case dict.get(shell.by_wx, wx_id) {
     Error(Nil) -> Idle
     Ok(view_id) ->
@@ -729,7 +734,7 @@ fn design_mouse(shell: Shell, wx_id: Int, x: Int, y: Int) -> Incoming {
         Error(Nil) -> Idle
         Ok(widget) ->
           case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
-            True -> Mouse(widget.view_id, x, y)
+            True -> Mouse(widget.view_id, x, y, control)
             False -> Idle
           }
       }
@@ -773,39 +778,64 @@ pub fn paint(shell: Shell, id: String) -> Nil {
 pub fn show_selection(
   shell: Shell,
   rect: Option(#(Int, Int, Int, Int)),
+  resizable: Bool,
 ) -> Nil {
   case rect {
     None ->
       list.each(shell.handles, fn(handle) { native.handle_show(handle, False) })
     Some(#(x, y, width, height)) -> {
-      let #(canvas_w, canvas_h) = canvas_size(shell)
-      let clamp_x = fn(x: Int) { int.max(0, int.min(x, canvas_w - 7)) }
-      let clamp_y = fn(y: Int) { int.max(0, int.min(y, canvas_h - 7)) }
-      let mid_x = clamp_x(x + width / 2 - 3)
-      let mid_y = clamp_y(y + height / 2 - 3)
+      let #(canvas, canvas_w, canvas_h) = canvas_widget(shell)
+      let clamp_x = fn(x: Int) { int.max(0, int.min(x, canvas_w - 12)) }
+      let clamp_y = fn(y: Int) { int.max(0, int.min(y, canvas_h - 12)) }
+      let mid_x = clamp_x(x + width / 2 - 6)
+      let mid_y = clamp_y(y + height / 2 - 6)
 
       case shell.handles {
         [nw, n, ne, e, se, s, sw, west, grip, ..] -> {
-          place_handle(nw, clamp_x(x - 3), clamp_y(y - 3), 7, 7)
-          place_handle(n, mid_x, clamp_y(y - 3), 7, 7)
-          place_handle(ne, clamp_x(x + width - 4), clamp_y(y - 3), 7, 7)
-          place_handle(e, clamp_x(x + width - 4), mid_y, 7, 7)
+          case resizable {
+            True -> {
+              place_handle(canvas, nw, clamp_x(x - 6), clamp_y(y - 6), 12, 12)
+              place_handle(canvas, n, mid_x, clamp_y(y - 6), 12, 12)
+              place_handle(
+                canvas,
+                ne,
+                clamp_x(x + width - 6),
+                clamp_y(y - 6),
+                12,
+                12,
+              )
+              place_handle(canvas, e, clamp_x(x + width - 6), mid_y, 12, 12)
+              place_handle(
+                canvas,
+                se,
+                clamp_x(x + width - 6),
+                clamp_y(y + height - 6),
+                12,
+                12,
+              )
+              place_handle(canvas, s, mid_x, clamp_y(y + height - 6), 12, 12)
+              place_handle(
+                canvas,
+                sw,
+                clamp_x(x - 6),
+                clamp_y(y + height - 6),
+                12,
+                12,
+              )
+              place_handle(canvas, west, clamp_x(x - 6), mid_y, 12, 12)
+            }
+            False ->
+              list.each([nw, n, ne, e, se, s, sw, west], fn(handle) {
+                native.handle_show(handle, False)
+              })
+          }
           place_handle(
-            se,
-            clamp_x(x + width - 4),
-            clamp_y(y + height - 4),
-            7,
-            7,
-          )
-          place_handle(s, mid_x, clamp_y(y + height - 4), 7, 7)
-          place_handle(sw, clamp_x(x - 3), clamp_y(y + height - 4), 7, 7)
-          place_handle(west, clamp_x(x - 3), mid_y, 7, 7)
-          place_handle(
+            canvas,
             grip,
-            int.max(0, int.min(x + width / 2 - 12, canvas_w - 24)),
-            int.max(0, y - 14),
-            24,
-            8,
+            int.max(0, int.min(x + 4, canvas_w - 36)),
+            int.max(0, int.min(y + 4, canvas_h - 12)),
+            36,
+            12,
           )
         }
         _ -> Nil
@@ -814,20 +844,28 @@ pub fn show_selection(
   }
 }
 
-fn canvas_size(shell: Shell) -> #(Int, Int) {
+fn canvas_widget(shell: Shell) -> #(Dynamic, Int, Int) {
   case
     list.find(dict.values(shell.widgets), fn(widget) { widget.kind == "canvas" })
   {
     Ok(widget) -> #(
+      widget.ref,
       plan.int_of(widget.props, "w") |> plan.unwrap_or(600),
       plan.int_of(widget.props, "h") |> plan.unwrap_or(400),
     )
-    Error(Nil) -> #(600, 400)
+    Error(Nil) -> #(shell.frame, 600, 400)
   }
 }
 
-fn place_handle(handle: Dynamic, x: Int, y: Int, w: Int, h: Int) -> Nil {
-  native.handle_place(handle, x, y, w, h)
+fn place_handle(
+  canvas: Dynamic,
+  handle: Dynamic,
+  x: Int,
+  y: Int,
+  w: Int,
+  h: Int,
+) -> Nil {
+  native.handle_place(canvas, handle, x, y, w, h)
   native.handle_show(handle, True)
   native.handle_raise(handle)
 }
