@@ -38,7 +38,7 @@ pub fn main() {
 }
 
 fn interactive(project: campy_project.Project, dir: String) {
-  let shell = campy_wx.start("Campy", 1280, 860)
+  let shell = campy_wx.start("Campy — " <> project.title, 1280, 860)
   let state =
     model.new(project)
     |> model.update(model.Log("Loaded " <> dir))
@@ -51,7 +51,7 @@ fn interactive(project: campy_project.Project, dir: String) {
 }
 
 fn smoke(project: campy_project.Project, dir: String) {
-  let shell = campy_wx.start("Campy smoke", 1280, 860)
+  let shell = campy_wx.start("Campy — " <> project.title, 1280, 860)
   let started = campy_wx.now_ms()
   let state =
     model.new(project)
