@@ -199,3 +199,40 @@ xdotool mousemove --window "$win" 900 250 click 1
 xdotool key ctrl+End
 sleep 1
 shot t23-handler-stub
+
+# --- T2.4: generated source tab --------------------------------------------
+# The notebook has Form, Code, Source. Tabs are at client y 107; the Source tab
+# follows Code (client x ~390).
+click 390 107
+shot t24-source
+# Show the deepest generated node (button_1) at the end of the read-only source.
+xdotool mousemove --window "$win" 900 300 click 1
+xdotool key ctrl+End
+sleep 1
+shot t24-source-end
+# Edit button_1 on the Form page: x 500 -> 550 through the inspector.
+click 263 107
+click 720 363
+xdotool mousemove --window "$win" 609 592 click --repeat 2 --delay 80 1
+sleep 0.5
+xdotool key ctrl+a
+xdotool type --delay 30 "550"
+xdotool key Return
+sleep 1
+shot t24-form-edited
+# Back to Source: the generated coordinate changed.
+click 390 107
+xdotool mousemove --window "$win" 900 300 click 1
+xdotool key ctrl+End
+sleep 1
+shot t24-source-updated
+# Switch modules: the Source header and tree must change (notes row center).
+click 70 159
+click 390 107
+shot t24-source-notes
+# The View menu entry is the model-driven path to the Source page.
+click 263 107
+click 109 12
+shot t24-view-menu
+click 135 59
+shot t24-menu-source

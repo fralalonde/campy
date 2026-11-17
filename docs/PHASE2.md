@@ -23,23 +23,24 @@ wxQt is experimental/incomplete, and OTP's wx driver cannot be rebuilt against
 it. Option 2 (native children + selection chrome) is implemented on wx.
 
 **Current position (2026-11-17).**
-- M1 complete (gate G1 passed). **T2.1, T2.2 and T2.3 complete and verified
-  under Xvfb.**
-- 226 tests green: `campy_view` 73, `campy_wx` 14, `campy_project` 13,
-  `campy_ide_model` 48, `campy_design` 31, `campy_catalog` 9,
-  `campy_manifest` 27, `campy_ide_wx` 11.
+- M1 complete (gate G1 passed). **T2.1, T2.2, T2.3 and T2.4 complete and
+  verified under Xvfb.**
+- 240 tests green: `campy_view` 73, `campy_wx` 14, `campy_project` 13,
+  `campy_ide_model` 50, `campy_design` 31, `campy_catalog` 9,
+  `campy_manifest` 27, `campy_source` 9, `campy_ide_wx` 14.
 - `just check` is green headlessly. On this Fedora 46 host, OTP 28's crypto NIF
   no longer loads against the system OpenSSL (missing `EVP_sm4_cbc`); run
   `LD_LIBRARY_PATH=<compatible OpenSSL 3 dir> just check` until OTP is rebuilt.
   The IDE and wx tests do not need crypto.
 
-**Next task.** T2.4 (generated Gleam-wx source tab), then M3 (ABI v2 runtime,
-appgen, Run) and M4 (local peer nodes, deploy, debug).
+**Next task.** **Gate G2**: stop for the human designer-feel check after M2
+(design the demo form from scratch, run it, reopen it, and diff the JSON). Do
+not start M3 (ABI v2 runtime, appgen, Run) until G2 passes.
 
 **Layout.**
 ```
 gleam/packages: campy_view campy_wx campy_project campy_ide_model
-                campy_design campy_catalog campy_manifest
+                campy_design campy_catalog campy_manifest campy_source
 gleam/apps:     campy_ide_wx
 examples/demo   canonical project (greeter, notes)
 scripts:        workspace.py (build/test runner), ui_probe.sh (X11 probe)
@@ -83,6 +84,11 @@ The probe requires Xvfb, xdotool, ImageMagick, and openbox (installed in
 9. Grid edits arrive as `wxGridEvent` records, not `wxCommandEvent`s. The
    adapter reads the event's own row/col and cell text; `getGridCursorRow` is
    already on the next cell when Enter moves the cursor before the reader.
+10. Read-only Scintilla panes ignore `SCI_SETTEXT` in this wx build. Clear
+    read-only, set the text, then restore the flag (`editor_set/3`).
+11. Tree selection arrives as a `wxTreeEvent` (`command_tree_sel_changed`), not
+    a `wxCommandEvent`; map that one type to `command` and leave
+    expand/collapse as non-events.
 
 ## Status (2026-11-16)
 
@@ -157,6 +163,8 @@ The probe requires Xvfb, xdotool, ImageMagick, and openbox (installed in
   layout; the inspector showed document props instead of resolved geometry;
   grid edits are `wxGridEvent`s and the cursor has already moved when read;
   `wxGridCellNumberEditor` needs both min and max or GTK aborts the editor.
+- **T2.4** generated source tab — done (2026-11-17). See §4 for delivered and
+  deviations. 240 tests.
 - Toolkit decision: stay on OTP wx/GTK. Qt has no OTP binding; wxQt exists but is
   incomplete and OTP's driver cannot be rebuilt against it. Option 2 (native
   children + selection chrome) is therefore built on wx/GTK: real child
@@ -207,6 +215,7 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 | `gleam/packages/campy_project` | project directory, module/form documents |
 | `gleam/packages/campy_ide_model` | display-free IDE state and commands |
 | `gleam/packages/campy_manifest` | artifact manifest, migration, compatibility |
+| `gleam/packages/campy_source` | generated `campy_view` construction source (read-only output) |
 | `gleam/apps/campy_ide_wx` | the IDE shell on wx |
 | `examples/demo` | two-module fixture project in the canonical format |
 | to build | `campy_peer`, `campy_runner`, `campy_app`, `campy_appgen`, `campy_broker` (M3/M4) |
@@ -217,8 +226,8 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 2. New packages go to `gleam/packages/<name>/`, `target = "erlang"`,
    `gleam = ">= 1.16.0 and < 2.0.0"`, gleeunit as a dev dependency. Add the name
    to `PACKAGES` in `scripts/workspace.py`.
-3. `campy_view`, `campy_form`, `campy_ccl`, `campy_manifest` stay pure: no wx,
-   no distribution, no IO beyond document files.
+3. `campy_view`, `campy_catalog`, `campy_source`, `campy_manifest` stay pure:
+   no wx, no distribution, no IO beyond document files.
 4. On-disk documents are canonical JSON per ADR 0005. Never add a second source
    format.
 5. `just fmt` then `just check` must pass before finishing. The thinker machine
@@ -535,12 +544,52 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   and 3) instead of one pair per row; fields are still resolved from the label
   left of the edited cell, never from a selection-specific row index.
 
-### T2.4 — Generated source tab
+### T2.4 — Generated source tab — done (2026-11-17)
 
-- Read-only generated Gleam-wx construction source for the active form,
-  replacing the Slint source tab of the prototype. Doubles as the export path.
-- Acceptance: generated code matches the canvas structure and compiles as a
-  standalone module skeleton.
+- Read-only generated Gleam construction source for the active form, replacing
+  the Slint source tab of the prototype. Doubles as the export path.
+- Interpretation: the output is a target-neutral `campy_view.Node` construction
+  module (ADR 0004), not direct wx native calls. `form.json` remains the only
+  source format (ADR 0005); the text is derived, read-only output and is never
+  loaded back.
+- Delivered:
+  1. `campy_source` (new pure package, no wx/IO): `generate(slug, document)`
+     renders a deterministic module header, the public `campy_view` DSL import,
+     and `pub fn view() -> Node` with `with_key` / `with_props` /
+     `with_events` / `with_children` only when set. Props are normalized and
+     sorted; strings are escaped for Gleam (quotes, backslash, LF, CR, TAB,
+     other control chars as `\u{...}`); floats carry a decimal point or
+     exponent; 2-space indent and one trailing newline. `Node.extra` is omitted
+     from the runtime view (documented in the header) because it is document
+     metadata, not render data.
+  2. The IDE notebook has Form, Code, and Source pages. Model state gains
+     `source_view` plus `ToggleSourceView`; Form/Code/Source are mutually
+     exclusive. The View menu has a "Generated source" entry, and OpenHandler
+     still opens Code. `page_index` selects page 2 for Source.
+  3. `refresh` regenerates and rewrites the read-only `source` editor on module
+     change and form change; it compares the rendered text so console, status,
+     and selection events leave it untouched. The Source page updates after a
+     designer edit (absolute x 500→550 became parent-relative `VInt(71)` →
+     `VInt(121)` inside `panel_1`) and after switching modules (greeter →
+     notes).
+  4. Tests: `campy_source` exact output, escaping, floats, deterministic prop
+     order, empty children, nested values, `extra` omission, demo greeter
+     structure; model page exclusivity and command dispatch; app `page_index`
+     plus `source_text` regeneration on form edits. 240 tests total.
+  5. Compile proof: both `examples/demo` modules were generated into a throwaway
+     package under `/tmp/opencode` with only a path dependency on `campy_view`
+     and `gleam build` succeeded (only unused-import warnings; the required
+     import line lists every value constructor).
+- Acceptance met: generated code matches the canvas structure and compiles as a
+  standalone module skeleton. Verified with `scripts/ui_probe.sh xvfb`
+  (`t24-source`, `t24-source-end`, `t24-form-edited`, `t24-source-updated`,
+  `t24-source-notes`, `t24-view-menu`, `t24-menu-source`).
+- Bugs found by the probe: read-only Scintilla silently ignores `SCI_SETTEXT`
+  (clear read-only around the write), and tree selection arrives as a
+  `wxTreeEvent` rather than a `wxCommandEvent`, so module switching never
+  dispatched. Both are fixed in the adapter (invariants 10–11).
+- Deviation: Source is a third notebook page plus a View menu item; no toolbar
+  button was added to keep the calibrated probe/toolbar coordinates stable.
 
 - Gate G2: design the demo form from scratch, run it, reopen it, and diff the
   JSON.

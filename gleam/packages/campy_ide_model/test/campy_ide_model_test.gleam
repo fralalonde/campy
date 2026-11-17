@@ -151,6 +151,38 @@ pub fn toggle_code_view_test() {
   campy_ide_model.toggle_code_view(state).code_view |> should.be_true()
 }
 
+pub fn source_page_is_exclusive_with_form_and_code_test() {
+  let form = state()
+  form.code_view |> should.be_false()
+  form.source_view |> should.be_false()
+
+  let source = campy_ide_model.toggle_source_view(form)
+  source.source_view |> should.be_true()
+  source.code_view |> should.be_false()
+
+  let code = campy_ide_model.toggle_code_view(source)
+  code.code_view |> should.be_true()
+  code.source_view |> should.be_false()
+
+  let source = campy_ide_model.toggle_source_view(code)
+  source.source_view |> should.be_true()
+  source.code_view |> should.be_false()
+
+  let back_to_form = campy_ide_model.toggle_source_view(source)
+  back_to_form.code_view |> should.be_false()
+  back_to_form.source_view |> should.be_false()
+
+  let back_to_form = campy_ide_model.toggle_code_view(code)
+  back_to_form.code_view |> should.be_false()
+  back_to_form.source_view |> should.be_false()
+}
+
+pub fn update_dispatches_source_view_test() {
+  let state = campy_ide_model.update(state(), campy_ide_model.ToggleSourceView)
+  state.source_view |> should.be_true()
+  state.code_view |> should.be_false()
+}
+
 pub fn active_module_returns_the_module_test() {
   case campy_ide_model.active_module(state()) {
     Ok(module) -> module.slug |> should.equal("a")

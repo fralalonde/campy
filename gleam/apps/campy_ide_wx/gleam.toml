@@ -9,6 +9,7 @@ campy_catalog = { path = "../../packages/campy_catalog" }
 campy_design = { path = "../../packages/campy_design" }
 campy_ide_model = { path = "../../packages/campy_ide_model" }
 campy_project = { path = "../../packages/campy_project" }
+campy_source = { path = "../../packages/campy_source" }
 campy_view = { path = "../../packages/campy_view" }
 campy_wx = { path = "../../packages/campy_wx" }
 

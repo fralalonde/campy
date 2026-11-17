@@ -4,6 +4,7 @@ import campy_project
 import campy_view.{VInt, VText}
 import campy_wx/plan.{TreeItem}
 import gleam/list
+import gleam/string
 import gleeunit
 import gleeunit/should
 
@@ -275,4 +276,51 @@ pub fn events_list_follows_the_selected_control_test() {
   |> should.equal(["click"])
   campy_ide_wx.event_items(state_from(view, ["ok", "name"]))
   |> should.equal([])
+}
+
+pub fn page_index_tracks_form_code_and_source_test() {
+  let state = model.new(project())
+  campy_ide_wx.page_index(state) |> should.equal(0)
+
+  let code = model.update(state, model.ToggleCodeView)
+  campy_ide_wx.page_index(code) |> should.equal(1)
+
+  let source = model.update(code, model.ToggleSourceView)
+  campy_ide_wx.page_index(source) |> should.equal(2)
+  source.source_view |> should.be_true()
+  source.code_view |> should.be_false()
+
+  let form = model.update(source, model.ToggleSourceView)
+  campy_ide_wx.page_index(form) |> should.equal(0)
+}
+
+pub fn source_text_is_generated_for_the_active_module_test() {
+  let state = model.new(project())
+  let source = campy_ide_wx.source_text(state)
+
+  string.contains(source, "modules/greeter/form.json") |> should.be_true()
+  string.contains(source, "pub fn view() -> Node") |> should.be_true()
+  string.contains(source, "campy_view.node(\"form\", \"root\")")
+  |> should.be_true()
+}
+
+pub fn source_text_changes_when_the_form_changes_test() {
+  let state = model.new(project())
+  let before = campy_ide_wx.source_text(state)
+  let assert Ok(module) = model.active_module(state)
+
+  let edited =
+    campy_view.node("form", "root")
+    |> campy_view.with_props([#("title", VText("Edited in T2.4"))])
+    |> campy_view.with_children([
+      campy_view.node("label", "hello")
+      |> campy_view.with_props([#("text", VText("Changed"))]),
+    ])
+
+  let state = model.commit_view(state, module, edited)
+  let after = campy_ide_wx.source_text(state)
+  let unchanged = after == before
+  unchanged |> should.be_false()
+  string.contains(after, "Edited in T2.4") |> should.be_true()
+  string.contains(after, "Changed") |> should.be_true()
 }

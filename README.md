@@ -36,20 +36,24 @@ project directory to open another project.
   survive a round trip.
 - **Widget catalog** (`campy_catalog`): the target-neutral widget table (kinds,
   labels, events, default geometry and properties).
+- **Generated source** (`campy_source`): deterministic, read-only Gleam source
+  that builds the form's `campy_view.Node` tree through the public DSL. It is a
+  target-neutral projection of `form.json` (not a second source format, not
+  direct wx calls) and doubles as the export path.
 - **Designer** (`campy_design`): absolute geometry, hit-testing, resize/move,
   structural edits, drop adoption, and reparenting.
 - **IDE model** (`campy_ide_model`): tabs, active module, selection, console,
   undo/redo, palette placement, clipboard, duplicate/delete, z-order, inspector
-  geometry/text edits, and ABI v2 handler stubs.
+  geometry/text edits, ABI v2 handler stubs, and Form/Code/Source page state.
 - **IDE shell** (`gleam/apps/campy_ide_wx`): module tree, widget palette, form
-  canvas with selection chrome, Scintilla code view, console, an editable
-  inspector with typed geometry cells, an events list that opens or creates
-  handler source, save, undo/redo.
+  canvas with selection chrome, Scintilla code view, read-only generated-source
+  view, console, an editable inspector with typed geometry cells, an events list
+  that opens or creates handler source, save, undo/redo.
 - **Sample project**: `examples/demo`.
 
-Not built yet: generated source tab, form preview in the IDE, Run/hot update,
-the ABI v2 runtime, and peer-node deploy. See
-[`docs/PHASE2.md`](docs/PHASE2.md).
+Not built yet: live app preview in the IDE, Run/hot update, the ABI v2
+runtime, and peer-node deploy. Gate G2 (the human designer-feel check after M2)
+is next; see [`docs/PHASE2.md`](docs/PHASE2.md).
 
 ## Development
 

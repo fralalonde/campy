@@ -35,6 +35,9 @@ pub type State {
     redo: List(Project),
     status: String,
     code_view: Bool,
+    /// The generated-source page. At most one of `code_view` and
+    /// `source_view` is true; both false means the design canvas (Form).
+    source_view: Bool,
     /// Copied subtrees with their canvas-absolute rectangles, in selection
     /// order. Copies are cloned again on paste so pasting twice does not
     /// create duplicate ids; the rect keeps sizer/aligned children placeable.
@@ -59,6 +62,7 @@ pub type Command {
   Log(String)
   SetStatus(String)
   ToggleCodeView
+  ToggleSourceView
   Arm(String)
   Disarm
   PlaceWidget(kind: String, x: Int, y: Int, w: Int, h: Int)
@@ -91,6 +95,7 @@ pub fn new(project: Project) -> State {
       redo: [],
       status: "",
       code_view: False,
+      source_view: False,
       clipboard: [],
       armed: None,
     )
@@ -198,8 +203,32 @@ pub fn set_status(state: State, text: String) -> State {
   State(..state, status: text)
 }
 
+/// Exactly one editor page is active at a time: Form (neither flag), Code, or
+/// Source. Toggling the visible page returns to Form.
 pub fn toggle_code_view(state: State) -> State {
-  State(..state, code_view: !state.code_view)
+  case state.code_view {
+    True -> show_form(state)
+    False -> show_code(state)
+  }
+}
+
+pub fn toggle_source_view(state: State) -> State {
+  case state.source_view {
+    True -> show_form(state)
+    False -> show_source(state)
+  }
+}
+
+fn show_form(state: State) -> State {
+  State(..state, code_view: False, source_view: False)
+}
+
+fn show_code(state: State) -> State {
+  State(..state, code_view: True, source_view: False)
+}
+
+fn show_source(state: State) -> State {
+  State(..state, code_view: False, source_view: True)
 }
 
 pub fn arm(state: State, kind: String) -> State {
@@ -850,7 +879,7 @@ pub fn open_handler(state: State, control_id: String, event: String) -> State {
         }
       }
 
-      State(..state, code_view: True) |> set_status(status)
+      State(..state, code_view: True, source_view: False) |> set_status(status)
     }
   }
 }
@@ -1007,6 +1036,7 @@ pub fn update(state: State, command: Command) -> State {
     Log(line) -> log(state, line)
     SetStatus(text) -> set_status(state, text)
     ToggleCodeView -> toggle_code_view(state)
+    ToggleSourceView -> toggle_source_view(state)
     Arm(kind) -> arm(state, kind)
     Disarm -> disarm(state)
     PlaceWidget(kind, x, y, w, h) -> place_widget(state, kind, x, y, w, h)

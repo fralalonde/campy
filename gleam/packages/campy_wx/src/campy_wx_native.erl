@@ -405,6 +405,10 @@ editor(Parent, Id) ->
     Editor.
 
 editor_set(Editor, Text, ReadOnly) ->
+    %% SCI_SETTEXT is ignored while the control is read-only in this wx build,
+    %% so clear the flag, replace the document, then restore it. Without this,
+    %% refreshing a read-only pane (Generated source, console) silently no-ops.
+    wxStyledTextCtrl:setReadOnly(Editor, false),
     wxStyledTextCtrl:setText(Editor, Text),
     wxStyledTextCtrl:setReadOnly(Editor, ReadOnly),
     ok.
@@ -643,6 +647,13 @@ event_type(Event) when is_tuple(Event) ->
     case element(1, Event) of
         % wxGrid edits arrive as wxGridEvent records, not wxCommandEvent.
         wxGrid -> <<"command">>;
+        % Tree selection is a wxTreeEvent; only the selection change is a
+        % logical command. Expanding/collapsing must not fire `select`.
+        wxTree ->
+            case element(2, Event) of
+                command_tree_sel_changed -> <<"command">>;
+                _ -> <<"other">>
+            end;
         wxCommand -> <<"command">>;
         wxClose -> <<"close">>;
         wxSize -> <<"size">>;
