@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Headless X11 probe: run the IDE under Xvfb and capture screenshots.
 # Usage: scripts/ui_probe.sh [xvfb|xwayland]
+#
+# T2.5 recalibration: the window is 1280x860 and the probe screen is
+# 1600x1000. Coordinates below are window-client coordinates (xdotool
+# --window); they were read from the screenshots, not guessed.
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/generated/ui"
@@ -16,7 +20,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "$MODE" == "xvfb" ]]; then
-  Xvfb :99 -screen 0 1400x900x24 >/dev/null 2>&1 & XVFB_PID=$!
+  Xvfb :99 -screen 0 1600x1000x24 >/dev/null 2>&1 & XVFB_PID=$!
   export DISPLAY=:99
   sleep 1
   openbox >/dev/null 2>&1 & WM_PID=$!
@@ -49,199 +53,124 @@ echo "win=$win"
 xdotool getwindowgeometry "$win"
 shot() { import -window root "$OUT/$1.png"; echo "shot=$OUT/$1.png"; }
 click() { xdotool mousemove --window "$win" "$1" "$2" click 1; sleep 1; }
+dblclick() {
+  xdotool mousemove --window "$win" "$1" "$2" click --repeat 2 --delay 90 1
+  sleep 0.7
+}
+type_text() { xdotool type --delay 80 "$1"; }
 
-shot initial
-click 263 107
-click 400 300
-shot empty-click
-click 300 140
-shot selected-label
-click 300 166
-shot selected-text
-xwininfo -root -tree > "$OUT/windows.txt" 2>&1 || true
-# resize via the south-east handle (+40, +12)
-xdotool mousemove --window "$win" 820 176 mousedown 1
-xdotool mousemove_relative --sync 40 12
-xdotool mouseup 1
-sleep 1
-shot resized-text
-# move via the grip (+30, +30)
-xdotool mousemove --window "$win" 240 160 mousedown 1
-xdotool mousemove_relative --sync 30 30
-xdotool mouseup 1
-sleep 1
-shot moved-text
-# expand the tree, switch modules, come back: geometry must persist
-click 14 103
-shot tree-expanded
-click 70 125
-click 70 147
-click 70 125
-shot module-return
-# select the moved text field, then Ctrl-click the label: multi-selection
-click 500 200
-xdotool windowfocus --sync "$win" 2>/dev/null || true
-xdotool keydown ctrl
-xdotool mousemove --window "$win" 400 133 click 1
-xdotool keyup ctrl
-sleep 1
-shot multi-select
-# drag the group grip (+20, +20)
-xdotool mousemove --window "$win" 240 136 mousedown 1
-xdotool mousemove_relative --sync 20 20
-xdotool mouseup 1
-sleep 1
-shot moved-group
-# marquee: drag on empty canvas across both controls
-xdotool mousemove --window "$win" 500 250 mousedown 1
-xdotool mousemove --window "$win" 240 130
-sleep 1
-shot marquee
-xdotool mouseup 1
-sleep 1
-shot marquee-result
+# --- T2.5: full shell ------------------------------------------------------
+# 1280x860: menubar, text toolbar, 16-button palette strip, Projects/Modules
+# navigator, centre Form/Code/Source + console, right Properties/Events dock.
+shot t25-full-shell
 
-# --- T2.2: palette, placement, adoption, clipboard, reparent --------------
-# Palette rows (window coordinates): Panel 342, Group 372, Label 402,
-# Button 432, Text 462, Memo 492. Toolbar row: y 72.
-click 100 342
-shot palette-armed-panel
-# Drag a panel onto empty canvas: (650,320) -> (800,410).
-xdotool mousemove --window "$win" 650 320 mousedown 1
-xdotool mousemove --window "$win" 800 410
+# --- T2.1/T2.5: selection chrome and body drag ------------------------------
+# The text control is at canvas (0,24), 600x28; canvas origin is client (202,194).
+click 499 205
+shot t25-selection-outline
+# Drag the control body (not a handle) by 60x40. Screenshot mid-gesture to show
+# the preview and the outline following it; then commit.
+xdotool mousemove --window "$win" 499 205 mousedown 1
+sleep 0.3
+xdotool mousemove --sync --window "$win" 559 245
 sleep 1
-shot placing-panel
 xdotool mouseup 1
 sleep 1
-shot placed-panel
-# Arm Button and click inside the new panel: it must adopt the control.
-click 100 432
-click 700 365
-shot placed-button-in-panel
-# Copy the selected button, then paste it as a sibling.
-click 370 72
-click 444 72
-shot pasted-button
-# Duplicate and delete, then undo the delete.
-click 524 72
-shot duplicated-button
-click 605 72
-shot deleted-button
-click 123 72
-shot undo-delete
-# Move the original button out of the panel back to the root by its grip.
-click 700 365
-xdotool mousemove --window "$win" 720 375 mousedown 1
-xdotool mousemove --window "$win" 520 350
-sleep 1
-shot moving-out-of-panel
-xdotool mouseup 1
-sleep 1
-shot moved-out-of-panel
-# Ctrl-click a native widget (button) while the panel is selected. This is the
-# path that used to ignore the modifier because the click did not fall through
-# to the canvas.
-click 670 400
-shot selected-panel-again
-xdotool keydown ctrl
-xdotool mousemove --window "$win" 520 350 click 1
-xdotool keyup ctrl
-sleep 1
-shot ctrl-widget-select
-# Move the button back into the panel. The diff inserts into panel_1 before
-# removing the root-level button; removals must be applied first or the old
-# widget is destroyed under the new id.
-click 520 350
-xdotool mousemove 942 512 mousedown 1
-xdotool mousemove 1140 525
-sleep 1
-shot reparent-into-earlier-sibling
-xdotool mouseup 1
-sleep 1
-shot reparented-into-earlier-sibling
-# It must still be selectable (not a ghost).
-xdotool mousemove 1130 527 click 1
-sleep 1
-shot reparented-widget-alive
+shot t25-body-drag
 
-# --- T2.3: inspector edits and events --------------------------------------
-# The inspector packs two field/value pairs per row. Client coordinates below
-# are calibrated from reparented-widget-alive.png (window client origin adds
-# ~164 px vertically to the root screenshot):
-#   row 2 = parent | x   row 3 = y | w   row 4 = h | text
-#   value columns are 1 and 3; the events list starts at x ~784.
-# The selected control is button_1 (parent panel_1) and declares click.
-shot t23-inspector-single
-# Edit x (row 2, right-hand value column) to 500.
-xdotool mousemove --window "$win" 609 592 click --repeat 2 --delay 80 1
-sleep 0.5
+# --- T2.3/T2.5: vertical property grid -------------------------------------
+# One field per row; value column starts around client x=1119. Row order:
+# id, kind, parent, x, y, w, h, text at client y 189..343 (22 px rows).
+shot t25-inspector-properties
+dblclick 1119 255
 xdotool key ctrl+a
-xdotool type --delay 30 "500"
+type_text "120"
 xdotool key Return
 sleep 1
-shot t23-inspector-x-edited
-# Edit text (row 4, right-hand value column).
-xdotool mousemove --window "$win" 609 640 click --repeat 2 --delay 80 1
-sleep 0.5
-xdotool key ctrl+a
-xdotool type --delay 30 "Hello T2.3"
-xdotool key Return
+shot t25-inspector-edit
+# Undo/redo the inspector edit through the frame-level shortcuts.
+xdotool key ctrl+z
 sleep 1
-shot t23-inspector-text-edited
-# Click the declared click event: the missing handler is appended as an ABI v2
-# stub and the Code page opens.
-xdotool mousemove --window "$win" 784 569 click 1
+shot t25-inspector-undo
+# Redo through the Edit menu: GTK consumes Ctrl+Y inside the focused native
+# text control on this build, so the menu is the reliable redo path.
+click 48 12
+click 80 66
 sleep 1
-shot t23-handler-opened
-# The stub is appended at the end; scroll the code editor to prove the ABI v2
-# shape (the opened page starts at the top of handlers.gleam).
-xdotool mousemove --window "$win" 900 250 click 1
-xdotool key ctrl+End
-sleep 1
-shot t23-handler-stub
+shot t25-inspector-redo
 
-# --- T2.4: generated source tab --------------------------------------------
-# The notebook has Form, Code, Source. Tabs are at client y 107; the Source tab
-# follows Code (client x ~390).
-click 390 107
-shot t24-source
-# Show the deepest generated node (button_1) at the end of the read-only source.
-xdotool mousemove --window "$win" 900 300 click 1
-xdotool key ctrl+End
+# --- T2.2/T2.5: palette strip and placement --------------------------------
+# Palette order: Panel, Group, Label, Button ... at client x 82 + 44*n.
+click 214 76
+shot t25-palette-armed
+# Drag-place a Button on empty canvas.
+xdotool mousemove --window "$win" 600 430 mousedown 1
+sleep 0.3
+xdotool mousemove --sync --window "$win" 700 480
 sleep 1
-shot t24-source-end
-# Edit button_1 on the Form page: x 500 -> 550 through the inspector.
-click 263 107
-click 720 363
-xdotool mousemove --window "$win" 609 592 click --repeat 2 --delay 80 1
+shot t25-placing-button
+xdotool mouseup 1
+sleep 1
+shot t25-placed-button
+
+# --- T2.3/T2.5: Events tab and handler stub --------------------------------
+click 1086 157
+shot t25-events
+# The placed button declares `click`; opening it appends an ABI v2 handler
+# stub and switches the centre notebook to Code.
+click 1050 236
+sleep 1
+shot t25-handler-opened
+
+# --- T2.3/T2.5: edit a text property --------------------------------------
+xdotool key ctrl+1
+sleep 1
+click 1009 157
 sleep 0.5
+click 622 248
+dblclick 1119 343
 xdotool key ctrl+a
-xdotool type --delay 30 "550"
+type_text "Hello T2.5"
 xdotool key Return
 sleep 1
-shot t24-form-edited
-# Back to Source: the generated coordinate changed.
-click 390 107
-xdotool mousemove --window "$win" 900 300 click 1
+shot t25-inspector-text-edit
+
+# --- T2.4/T2.5: generated source, module switch ----------------------------
+click 370 147
+sleep 1
+shot t25-source
+xdotool mousemove --window "$win" 500 300 click 1
 xdotool key ctrl+End
 sleep 1
-shot t24-source-updated
-# Switch modules: the Source header and tree must change (notes row center).
-click 70 159
-click 390 107
-shot t24-source-notes
-# The View menu entry is the model-driven path to the Source page.
-click 263 107
-click 109 12
-shot t24-view-menu
-click 135 59
-shot t24-menu-source
+shot t25-source-end
+click 30 239
+sleep 1
+shot t25-module-notes
+click 30 212
+sleep 1
+
+# --- T2.5: menus, shortcuts and tooltips -----------------------------------
+click 22 12
+shot t25-file-menu
+xdotool key Escape
+sleep 0.5
+click 155 12
+shot t25-help-menu
+xdotool key Down Return
+sleep 1
+shot t25-help-dialog
+xdotool key Escape
+sleep 0.5
+# Hover a palette button long enough for GTK's tooltip.
+xdotool mousemove --window "$win" 126 76
+sleep 2.5
+shot t25-tooltip
 
 # Optional end-to-end persistence check: save the edited project. Run with a
 # throwaway CAMPY_PROJECT so the demo fixture stays clean:
 #   CAMPY_PROJECT=/tmp/opencode/g2-demo CAMPY_PROBE_SAVE=1 scripts/ui_probe.sh xvfb
 if [ "${CAMPY_PROBE_SAVE:-0}" = "1" ]; then
-  click 42 72
+  click 54 47
   sleep 1
-  shot saved-project
+  shot t25-saved
 fi

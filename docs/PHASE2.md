@@ -23,22 +23,24 @@ wxQt is experimental/incomplete, and OTP's wx driver cannot be rebuilt against
 it. Option 2 (native children + selection chrome) is implemented on wx.
 
 **Current position (2026-11-17).**
-- M1 complete (gate G1 passed). **T2.1, T2.2, T2.3 and T2.4 complete and
-  verified under Xvfb.**
-- 240 tests green: `campy_view` 73, `campy_wx` 14, `campy_project` 13,
-  `campy_ide_model` 50, `campy_design` 31, `campy_catalog` 9,
-  `campy_manifest` 27, `campy_source` 9, `campy_ide_wx` 14.
+- M1 complete (gate G1 passed). **T2.1, T2.2, T2.3, T2.4 and T2.5 complete
+  and verified under Xvfb.** The IDE now uses the reference information
+  architecture (menus + compact toolbar/palette strip, Projects/Modules
+  navigator, centre Form/Code/Source + console, right Properties/Events dock,
+  status bar) and thin blue selection chrome with body-drag movement.
+- 250 tests green: `campy_view` 73, `campy_wx` 14, `campy_project` 13,
+  `campy_ide_model` 52, `campy_design` 31, `campy_catalog` 9,
+  `campy_manifest` 27, `campy_source` 9, `campy_ide_wx` 22.
 - `just check` is green headlessly. On this Fedora 46 host, OTP 28's crypto NIF
   no longer loads against the system OpenSSL (missing `EVP_sm4_cbc`); run
   `LD_LIBRARY_PATH=<compatible OpenSSL 3 dir> just check` until OTP is rebuilt.
   The IDE and wx tests do not need crypto.
+- Save/reopen on a throwaway copy writes canonical `form.json`/`handlers.gleam`
+  and `CAMPY_WX_SMOKE=1` mounts the saved project.
 
-**Next task.** **T2.5** — IDE shell redesign, from the failed G2 review. The
-reference is the Phase 1 Slint IDE (`docs/images/campy-studio.png` and
-`main:gleam/apps/campy_ide/src/campy_ide/shell.gleam`). The current panes are in
-the wrong places, the inspector is horizontal, events is a separate pane, and
-the designer chrome is too coarse. Rebuild the shell layout before re-running
-G2. Do not start M3 (ABI v2 runtime, appgen, Run) until G2 passes.
+**Next step.** **Gate G2**: design the demo form from scratch in the shell,
+save it, inspect/diff the canonical JSON, and reopen it. Do not start M3 (ABI v2
+runtime, appgen, Run) until G2 passes.
 
 **Layout.**
 ```
@@ -600,38 +602,76 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 - Deviation: Source is a third notebook page plus a View menu item; no toolbar
   button was added to keep the calibrated probe/toolbar coordinates stable.
 
-### T2.5 — IDE shell redesign (G2 feedback)
+### T2.5 — IDE shell redesign (G2 feedback) — done (2026-11-17)
 
-- Depends: T2.4 · Size: L · In progress.
+- Depends: T2.4 · Size: L · Done. 250 tests.
 - Reference: `docs/images/campy-studio.png` and
-  `main:gleam/apps/campy_ide/src/campy_ide/shell.gleam`. Match the information
-  architecture: top menus + compact action/palette strip, left Projects/Modules
-  navigator, centre module editor with a bottom console, right 320–330 px
-  inspector dock with Properties/Events tabs, and a status bar.
-- Required corrections:
-  1. Move the widget palette out of the left sidebar into a compact toolbar/
-     palette strip. Use text/Unicode tool buttons and tooltips; no black
-     placeholder bitmaps.
-  2. Left navigator: Projects and Modules sections; no palette.
-  3. Centre: Form/Code/Source tabs, then the Console below them; not in the
-     right pane.
-  4. Right dock: selection header + Delete, then a native Properties/Events
-     notebook. Properties is a vertical one-field-per-row grid with row/column
-     headers hidden and sensible column widths. Events is the second tab, not
-     a separate pane.
-  5. Selection chrome: thin blue outline strips, small blue resize handles and
-     a small grip (no thick red bar).
-  6. Move a control by dragging its body, not only the grip; keep Ctrl-toggle
-     and marquee.
-  7. Discoverability: menu labels show shortcuts; frame-level key handling for
-     Save/Quit, Undo/Redo, Cut/Copy/Paste/Duplicate/Delete, page switching, and
-     Escape-to-cancel; tooltips on palette buttons; status hints for placement.
-  8. Default window 1280×860; probe screen 1600×1000.
-- Acceptance: side-by-side screenshots show the reference layout; all T2.1–T2.4
-  behaviour still works; probe updated and read; `just check` green.
+  `main:gleam/apps/campy_ide/src/campy_ide/shell.gleam`. The shell now matches
+  that information architecture: menus with shortcut hints, a compact text-only
+  toolbar, a 16-button palette strip, left Projects/Modules navigator, centre
+  Form/Code/Source notebook with a bottom console, right 330 px
+  Properties/Events dock, and a status bar. Window 1280×860; probe 1600×1000.
+- Delivered:
+  1. **Navigator + palette.** Left pane is two `wxListBox` sections (project
+     title, module slugs, active module highlighted). The palette moved to a
+     compact strip under the toolbar: 16 Unicode/text buttons with
+     `Name — click, then drag on the form` tooltips. Clicking arms placement;
+     the armed button is highlighted and the status bar shows a hint.
+  2. **Centre.** Active module + `Canvas 600 × 400` header, Form/Code/Source
+     notebook, `Console` header with stopped/running state and Clear, and a
+     read-only ~150 px console editor.
+  3. **Inspector dock.** Selection header (`button_1 — button`,
+     `Window — root`, `N selected`) + Delete button; native `wxNotebook` with
+     `Properties` and `Events`. Properties is a one-field-per-row `wxGrid` with
+     wx row/column labels and grid lines hidden, 22 px rows, a 110 px label
+     column and the value column filling the rest. The first row is the field
+     name; identity fields are read-only; x/y/w/h use numeric validation and
+     text uses the text editor. Multi-selection shows common values with blanks
+     and is read-only. Events lists the selected control's declared events (with
+     a placeholder row so page activation cannot open a handler accidentally);
+     selecting one appends the ABI v2 stub when missing and opens Code.
+  4. **Selection UX.** 2 px blue outline strips just outside the control, eight
+     9 px blue resize handles and a 12 px blue grip. Outline strips are drawn
+     outside the control so they do not swallow body clicks. Dragging a
+     control's body moves the current selection (single or group) using GTK's
+     implicit grab; a click without motion is a model no-op. Ctrl-click toggles,
+     marquee still selects; chrome hides off the Form page.
+  5. **Shortcuts.** Native `wxAcceleratorTable`, rebuilt when Form/Code/Source
+     changes: Ctrl+S/Q, Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y, Ctrl+X/C/V, Ctrl+D,
+     Delete, Escape, Ctrl+1/2/3. Text-editing shortcuts are omitted on
+     Code/Source so Scintilla keeps them. Menu labels carry the same hints, and
+     Help > Keyboard shortcuts opens a native dialog. Toolbar/menu actions remain
+     the reliable path for clipboard commands while a native design widget has
+     focus (see deviation).
+  6. **Probe.** `scripts/ui_probe.sh` uses a 1600×1000 Xvfb screen and
+     recalibrated client coordinates; new screenshots cover the full shell,
+     selection outline, body drag, vertical Properties, inspector edit/undo/redo,
+     palette armed, placement, Events, handler stub, text edit, Source, menus,
+     Help dialog and tooltip.
+- Deviations:
+  - `char_hook` alone could not be shipped: on this GTK build it consumed
+    character events for `wxGrid`'s editor and double-fired with accelerators
+    (one Ctrl+Z applied two undos). The frame accelerator table is the single
+    shortcut path; it is page-aware and keeps editor text shortcuts intact.
+  - While a native design control (notably a text field) owns GTK focus, the
+    focused widget consumes Ctrl+C/X/V/Y before the frame receives them. The
+    toolbar/menu equivalents always work. Ctrl+S/Q, Ctrl+Z, Ctrl+1/2/3 and
+    Delete work from the normal canvas focus; this is documented as a remaining
+    G2 polish item rather than hidden.
+  - The palette uses Unicode glyphs instead of full names to fit all 16 tools in
+    one 1280 px row; full names and the placement sentence are in tooltips.
+  - wx's `wxGridCellNumberEditor` spin field refused keyboard text in this build,
+    but the numeric cells work when the value column is clicked (the probe
+    clicks the value column, not the label column); no workaround was needed in
+    the app.
+- Acceptance: the full-shell screenshot matches the reference IA side by side;
+  all T2.1–T2.4 behaviour still works; the probe runs and was read; `just check`
+  is green (250 tests). Save/reopen on a throwaway copy writes canonical
+  `form.json` (free layout, `button_1`, text `Hello T2.5`) and the
+  `button_1_click` ABI v2 stub; `CAMPY_WX_SMOKE=1` reopens it.
 
-- Gate G2: after T2.5, design the demo form from scratch, save, inspect/diff
-  the JSON, and reopen it. The plan's "run it" step belongs to M3.
+- Gate G2: design the demo form from scratch, save, inspect/diff the JSON, and
+  reopen it. The plan's "run it" step belongs to M3.
 
 ## 5. M3/M4 — run, deploy, debug
 
@@ -660,7 +700,7 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 | --- | --- | --- |
 | G0 | T0.5 | Gallery runs in `dev-raw`; focus/caret/scroll survive patches; 500-row update is incremental; mount/patch timings recorded |
 | G1 | T1.5 | IDE shape usable; no Rust; `just check` green; legacy gone |
-| G2 | T2.4 | Form designed, run, reopened, and diffed from JSON |
+| G2 | T2.5 | Form designed, saved, reopened, and diffed from JSON (Run is M3) |
 | G3 | T3.4 | Handler state flows; failed update is a no-op with a report |
 | G4 | T4.4 | Peer deploy/restart/rollback/debug demonstrated |
 

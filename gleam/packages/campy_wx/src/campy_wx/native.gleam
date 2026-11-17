@@ -14,6 +14,12 @@ pub type NativeMessage {
   /// after the event can point at the next cell: Enter moves the cursor before
   /// the application reads it.
   GridEvent(wx_id: Int, row: Int, col: Int, text: String)
+  /// A frame-level char_hook key press, normalised to a lower-case code plus
+  /// modifier flags. The app maps it to one of its shortcuts.
+  KeyEvent(code: String, control: Bool, shift: Bool, alt: Bool)
+  /// A frame accelerator (Ctrl+S, Ctrl+1, ...) matched before the focused
+  /// control; unlike char_hook it still works inside a wxGrid editor.
+  ShortcutEvent(action: String)
   Other(message: Dynamic)
   Idle
 }
@@ -154,6 +160,12 @@ pub fn set_background(ref: Dynamic, r: Int, g: Int, b: Int) -> Nil
 @external(erlang, "campy_wx_native", "focus")
 pub fn focus(ref: Dynamic) -> Nil
 
+@external(erlang, "campy_wx_native", "focus_ignoring_children")
+pub fn focus_ignoring_children(ref: Dynamic) -> Nil
+
+@external(erlang, "campy_wx_native", "set_editable")
+pub fn set_editable(ref: Dynamic, editable: Bool) -> Nil
+
 @external(erlang, "campy_wx_native", "raise")
 pub fn raise(ref: Dynamic) -> Nil
 
@@ -197,6 +209,9 @@ pub fn toolbar(frame: Dynamic) -> Dynamic
 @external(erlang, "campy_wx_native", "tool")
 pub fn tool(bar: Dynamic, id: Int, label: String) -> Dynamic
 
+@external(erlang, "campy_wx_native", "tool_separator")
+pub fn tool_separator(bar: Dynamic) -> Dynamic
+
 @external(erlang, "campy_wx_native", "realize_toolbar")
 pub fn realize_toolbar(bar: Dynamic) -> Nil
 
@@ -233,6 +248,15 @@ pub fn grid(parent: Dynamic, id: Int) -> Dynamic
 @external(erlang, "campy_wx_native", "grid_set")
 pub fn grid_set(grid: Dynamic, rows: List(List(String))) -> Nil
 
+@external(erlang, "campy_wx_native", "grid_configure")
+pub fn grid_configure(
+  grid: Dynamic,
+  show_labels: Bool,
+  show_lines: Bool,
+  row_height: Int,
+  label_width: Int,
+) -> Nil
+
 @external(erlang, "campy_wx_native", "grid_cell")
 pub fn grid_cell(grid: Dynamic) -> GridCell
 
@@ -259,6 +283,18 @@ pub fn open_dialog(frame: Dynamic, wildcard: String) -> String
 
 @external(erlang, "campy_wx_native", "save_dialog")
 pub fn save_dialog(frame: Dynamic, wildcard: String, default: String) -> String
+
+@external(erlang, "campy_wx_native", "show_message")
+pub fn show_message(frame: Dynamic, title: String, message: String) -> Nil
+
+@external(erlang, "campy_wx_native", "set_tooltip")
+pub fn set_tooltip(ref: Dynamic, text: String) -> Nil
+
+@external(erlang, "campy_wx_native", "set_shortcuts")
+pub fn set_shortcuts(frame: Dynamic, editing: Bool) -> Nil
+
+@external(erlang, "campy_wx_native", "apply_shortcuts")
+pub fn apply_shortcuts(ref: Dynamic) -> Nil
 
 @external(erlang, "campy_wx_native", "canvas")
 pub fn canvas(parent: Dynamic, id: Int) -> Dynamic
@@ -293,6 +329,9 @@ pub fn capture(ref: Dynamic) -> Nil
 
 @external(erlang, "campy_wx_native", "release")
 pub fn release(ref: Dynamic) -> Nil
+
+@external(erlang, "campy_wx_native", "release_capture")
+pub fn release_capture() -> Nil
 
 @external(erlang, "campy_wx_native", "now_ms")
 pub fn now_ms() -> Int

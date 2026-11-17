@@ -21,7 +21,7 @@ import gleam/result
 pub type Incoming {
   /// A declared view event: control id, event key, and the control's value.
   Event(id: String, key: String, value: Value)
-  /// Any non-wx message addressed to the renderer's process.
+  /// A non-wx message addressed to the renderer's process.
   Message(message: Dynamic)
   /// Nothing happened before the timeout.
   Idle
@@ -33,6 +33,14 @@ pub type Incoming {
   MouseHandle(role: Int, kind: String, x: Int, y: Int)
   /// A left click on a design widget; coordinates are relative to that widget.
   Mouse(id: String, kind: String, x: Int, y: Int, control: Bool)
+  /// A frame-level shortcut key from char_hook.
+  KeyPressed(Key)
+  /// A frame accelerator; works even while a grid cell editor has focus.
+  Accelerator(action: String)
+}
+
+pub type Key {
+  Key(code: String, control: Bool, shift: Bool, alt: Bool)
 }
 
 pub opaque type Shell {
@@ -246,6 +254,7 @@ fn create_node(
     "menuitem" -> Ok(native.menuitem(parent.ref, wx_id, text))
     "toolbar" -> Ok(native.toolbar(shell.frame))
     "tool" -> Ok(native.tool(parent.ref, wx_id, text))
+    "separator" -> Ok(native.tool_separator(parent.ref))
     "status" -> Ok(native.statusbar(shell.frame))
     "notebook" -> Ok(native.notebook(parent.ref, wx_id))
     "page" -> Ok(native.page(parent.ref, wx_id, text))
@@ -271,6 +280,9 @@ fn create_node(
     True ->
       case kind {
         "panel" | "group" -> native.set_background(ref, 232, 237, 247)
+        // Design text is data, not an editor. Read-only fields also stop GTK
+        // from eating Ctrl+C/V before the frame accelerators see them.
+        "text" | "memo" -> native.set_editable(ref, False)
         _ -> Nil
       }
     False -> Nil
@@ -300,6 +312,13 @@ fn create_node(
 
   let shell = register(shell, widget)
   let shell = apply_all_props(shell, node.id)
+  let shell = case kind {
+    "grid" -> {
+      configure_grid(ref, node)
+      shell
+    }
+    _ -> shell
+  }
   let shell = attach(shell, parent_id, node.id, index)
 
   let shell = case plan.layout(node), plan.is_container(kind) {
@@ -322,6 +341,17 @@ fn create_node(
   }
 
   Ok(#(shell, widget))
+}
+
+fn configure_grid(ref: Dynamic, node: Node) -> Nil {
+  let show_labels =
+    plan.bool_of(node.props, "grid_labels") |> plan.unwrap_or(False)
+  let show_lines =
+    plan.bool_of(node.props, "grid_lines") |> plan.unwrap_or(False)
+  let row_height = plan.int_of(node.props, "row_height") |> plan.unwrap_or(22)
+  let label_width =
+    plan.int_of(node.props, "label_width") |> plan.unwrap_or(110)
+  native.grid_configure(ref, show_labels, show_lines, row_height, label_width)
 }
 
 fn setup_sizer(shell: Shell, id: String, vertical: Bool) -> Shell {
@@ -400,8 +430,14 @@ fn is_layout_child(shell: Shell, id: String) -> Bool {
 
 fn is_chrome(kind: String) -> Bool {
   case kind {
-    "menubar" | "menu" | "menuitem" | "toolbar" | "tool" | "status" | "page" ->
-      True
+    "menubar"
+    | "menu"
+    | "menuitem"
+    | "toolbar"
+    | "tool"
+    | "separator"
+    | "status"
+    | "page" -> True
     _ -> False
   }
 }
@@ -464,6 +500,18 @@ fn apply_prop(shell: Shell, id: String, name: String) -> Shell {
             widget.ref,
             plan.bool_of(widget.props, "visible") |> plan.unwrap_or(True),
           )
+        "tooltip" ->
+          native.set_tooltip(
+            widget.ref,
+            plan.text_of(widget.props, "tooltip") |> plan.unwrap_or(""),
+          )
+        "highlight" ->
+          case
+            plan.bool_of(widget.props, "highlight") |> plan.unwrap_or(False)
+          {
+            True -> native.set_background(widget.ref, 199, 220, 250)
+            False -> native.set_background(widget.ref, 240, 240, 240)
+          }
         "x" | "y" | "w" | "h" -> apply_geometry(shell, widget)
         _ -> Nil
       }
@@ -760,6 +808,9 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
     native.MouseEvent(_wx_id, _kind, _x, _y, _control) -> Idle
     native.GridEvent(wx_id, row, col, text) ->
       grid_event(shell, wx_id, row, col, text)
+    native.KeyEvent(code, control, shift, alt) ->
+      KeyPressed(Key(code: code, control: control, shift: shift, alt: alt))
+    native.ShortcutEvent(action) -> Accelerator(action)
     native.WxEvent(wx_id, "close") if wx_id == shell.frame_id -> Closed
     native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
     native.WxEvent(wx_id, "command") -> command_event(shell, wx_id)
@@ -869,9 +920,10 @@ fn paint_event(shell: Shell, wx_id: Int) -> Incoming {
   }
 }
 
-/// Paint a canvas: background, grid, and border, in form coordinates.
-/// Place the selection handles around a control rectangle (canvas
-/// coordinates). `None` hides them. Multi-selections show only the move grip.
+/// Place the selection chrome around a control rectangle (canvas
+/// coordinates). `None` hides every chrome widget. The outline is four 2 px
+/// strips (always on top); a single selection adds eight small resize handles
+/// and a small move grip. Multi-selection shows only the outline and grip.
 pub fn show_selection(
   shell: Shell,
   rect: Option(#(Int, Int, Int, Int)),
@@ -882,44 +934,66 @@ pub fn show_selection(
       list.each(shell.handles, fn(handle) { native.handle_show(handle, False) })
     Some(#(x, y, width, height)) -> {
       let #(canvas, canvas_w, canvas_h) = canvas_widget(shell)
+
+      // The outline sits just outside the control: a strip on the control's
+      // own edge would swallow clicks meant for the control body. The 9 px
+      // resize handles still straddle the edge, as expected.
+      case list.drop(shell.handles, 13) {
+        [outline_top, outline_bottom, outline_left, outline_right, ..] -> {
+          place_strip(canvas, outline_top, x, y - 2, width, 2)
+          place_strip(canvas, outline_bottom, x, y + height, width, 2)
+          place_strip(canvas, outline_left, x - 2, y, 2, height)
+          place_strip(canvas, outline_right, x + width, y, 2, height)
+        }
+        _ -> Nil
+      }
+
       let clamp_x = fn(value: Int) { int.max(0, int.min(value, canvas_w - 12)) }
       let clamp_y = fn(value: Int) { int.max(0, int.min(value, canvas_h - 12)) }
-      let mid_x = clamp_x(x + width / 2 - 6)
-      let mid_y = clamp_y(y + height / 2 - 6)
+      let offset = 4
+      let mid_x = clamp_x(x + width / 2 - offset)
+      let mid_y = clamp_y(y + height / 2 - offset)
 
       case shell.handles {
         [nw, n, ne, e, se, s, sw, west, grip, ..] -> {
           case resizable {
             True -> {
-              place_handle(canvas, nw, clamp_x(x - 6), clamp_y(y - 6), 12, 12)
-              place_handle(canvas, n, mid_x, clamp_y(y - 6), 12, 12)
+              place_handle(
+                canvas,
+                nw,
+                clamp_x(x - offset),
+                clamp_y(y - offset),
+                9,
+                9,
+              )
+              place_handle(canvas, n, mid_x, clamp_y(y - offset), 9, 9)
               place_handle(
                 canvas,
                 ne,
-                clamp_x(x + width - 6),
-                clamp_y(y - 6),
-                12,
-                12,
+                clamp_x(x + width - offset),
+                clamp_y(y - offset),
+                9,
+                9,
               )
-              place_handle(canvas, e, clamp_x(x + width - 6), mid_y, 12, 12)
+              place_handle(canvas, e, clamp_x(x + width - offset), mid_y, 9, 9)
               place_handle(
                 canvas,
                 se,
-                clamp_x(x + width - 6),
-                clamp_y(y + height - 6),
-                12,
-                12,
+                clamp_x(x + width - offset),
+                clamp_y(y + height - offset),
+                9,
+                9,
               )
-              place_handle(canvas, s, mid_x, clamp_y(y + height - 6), 12, 12)
+              place_handle(canvas, s, mid_x, clamp_y(y + height - offset), 9, 9)
               place_handle(
                 canvas,
                 sw,
-                clamp_x(x - 6),
-                clamp_y(y + height - 6),
-                12,
-                12,
+                clamp_x(x - offset),
+                clamp_y(y + height - offset),
+                9,
+                9,
               )
-              place_handle(canvas, west, clamp_x(x - 6), mid_y, 12, 12)
+              place_handle(canvas, west, clamp_x(x - offset), mid_y, 9, 9)
             }
             False ->
               list.each([nw, n, ne, e, se, s, sw, west], fn(handle) {
@@ -929,9 +1003,9 @@ pub fn show_selection(
           place_handle(
             canvas,
             grip,
-            int.max(0, int.min(x + 4, canvas_w - 36)),
-            int.max(0, int.min(y + 4, canvas_h - 12)),
-            36,
+            int.max(0, int.min(x + 3, canvas_w - 12)),
+            int.max(0, int.min(y + 3, canvas_h - 12)),
+            12,
             12,
           )
         }
@@ -1084,6 +1158,30 @@ pub fn set_status(shell: Shell, text: String) -> Nil {
   }
 }
 
+/// A native message dialog, used by Help > Keyboard shortcuts.
+pub fn show_message(shell: Shell, title: String, message: String) -> Nil {
+  native.show_message(shell.frame, title, message)
+}
+
+/// Rebuild the frame accelerator table for the active page. Text shortcuts
+/// are omitted while Code/Source is visible so the editor keeps them.
+pub fn set_shortcuts(shell: Shell, editing: Bool) -> Nil {
+  native.set_shortcuts(shell.frame, editing)
+  list.each(dict.values(shell.widgets), fn(widget) {
+    case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
+      True -> native.apply_shortcuts(widget.ref)
+      False -> Nil
+    }
+  })
+}
+
+pub fn set_tooltip(shell: Shell, id: String, text: String) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.set_tooltip(widget.ref, text)
+    Error(_) -> Nil
+  }
+}
+
 /// Move/resize a control's live widget without touching the document. Used for
 /// drag previews; the commit goes through `campy_design.set_rect` and the model.
 pub fn preview_rect(
@@ -1111,6 +1209,7 @@ pub fn capture_canvas(shell: Shell) -> Nil {
 pub fn release_canvas(shell: Shell) -> Nil {
   let #(canvas, _, _) = canvas_widget(shell)
   native.release(canvas)
+  native.release_capture()
 }
 
 /// Draw a marquee rectangle with four thin mini-frame strips.
@@ -1176,7 +1275,11 @@ pub fn select_page(shell: Shell, id: String, index: Int) -> Nil {
 
 pub fn focus(shell: Shell, id: String) -> Nil {
   case get_widget(shell, id) {
-    Ok(widget) -> native.focus(widget.ref)
+    Ok(widget) ->
+      case widget.kind {
+        "canvas" -> native.focus_ignoring_children(widget.ref)
+        _ -> native.focus(widget.ref)
+      }
     Error(_) -> Nil
   }
 }

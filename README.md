@@ -45,15 +45,22 @@ project directory to open another project.
 - **IDE model** (`campy_ide_model`): tabs, active module, selection, console,
   undo/redo, palette placement, clipboard, duplicate/delete, z-order, inspector
   geometry/text edits, ABI v2 handler stubs, and Form/Code/Source page state.
-- **IDE shell** (`gleam/apps/campy_ide_wx`): module tree, widget palette, form
-  canvas with selection chrome, Scintilla code view, read-only generated-source
-  view, console, an editable inspector with typed geometry cells, an events list
-  that opens or creates handler source, save, undo/redo.
-- **Sample project**: `examples/demo`.
+- **IDE shell** (`gleam/apps/campy_ide_wx`): reference-style workspace with
+  File/Edit/View/Help menus, a text-only action toolbar over a 16-button
+  palette strip, a Projects/Modules navigator, a centre Form/Code/Source
+  notebook with a bottom console, and a 330 px Properties/Events inspector
+  dock. The property grid is one field per row; events open or create ABI v2
+  handler stubs. Selection uses thin blue outlines, small resize handles and a
+  grip, and a control can be moved by dragging its body. Save, undo/redo,
+  clipboard, duplicate/delete and page switching have menu/toolbar actions and
+  frame accelerators; Help lists the shortcuts. Text-editing shortcuts stay
+  with the focused editor on Code/Source.
+- **Sample project**: `examples/demo`. 250 tests green.
 
 Not built yet: live app preview in the IDE, Run/hot update, the ABI v2
-runtime, and peer-node deploy. Gate G2 (the human designer-feel check after M2)
-is next; see [`docs/PHASE2.md`](docs/PHASE2.md).
+runtime, and peer-node deploy. Gate G2 (design the demo from scratch, save,
+reopen, and diff the canonical JSON; Run belongs to M3) is next; see
+[`docs/PHASE2.md`](docs/PHASE2.md).
 
 ## Development
 

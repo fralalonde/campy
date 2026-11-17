@@ -15,7 +15,6 @@ import campy_source
 import campy_view.{type Node, VBool, VInt, VList, VMap, VText}
 import campy_view/diff
 import campy_wx
-import campy_wx/plan
 import gleam/int
 import gleam/io
 import gleam/list
@@ -39,8 +38,11 @@ pub fn main() {
 }
 
 fn interactive(project: campy_project.Project, dir: String) {
-  let shell = campy_wx.start("Campy", 980, 760)
-  let state = model.new(project) |> model.update(model.Log("Loaded " <> dir))
+  let shell = campy_wx.start("Campy", 1280, 860)
+  let state =
+    model.new(project)
+    |> model.update(model.Log("Loaded " <> dir))
+    |> model.update(model.SetStatus(dir))
   let current_view = view(state)
 
   let assert Ok(shell) = campy_wx.mount(shell, current_view)
@@ -49,9 +51,12 @@ fn interactive(project: campy_project.Project, dir: String) {
 }
 
 fn smoke(project: campy_project.Project, dir: String) {
-  let shell = campy_wx.start("Campy smoke", 980, 760)
+  let shell = campy_wx.start("Campy smoke", 1280, 860)
   let started = campy_wx.now_ms()
-  let state = model.new(project) |> model.update(model.Log("Loaded " <> dir))
+  let state =
+    model.new(project)
+    |> model.update(model.Log("Loaded " <> dir))
+    |> model.update(model.SetStatus(dir))
   let current_view = view(state)
 
   let assert Ok(shell) = campy_wx.mount(shell, current_view)
@@ -137,17 +142,263 @@ fn loop(
           campy_wx.close(shell)
           io.println("[ide] quit")
         }
+        "menu-help-keys" -> {
+          campy_wx.show_message(shell, "Keyboard shortcuts", help_text())
+          loop(shell, state, current, dir, drag)
+        }
         _ -> {
           let previous = state
           let state = handle(state, dir, id, key, value)
           let next = view(state)
           let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
+          // A committed grid edit leaves keyboard focus inside wxGrid's
+          // editor, which eats Ctrl+Z and friends. Hand focus back to the
+          // canvas so the frame shortcuts keep working.
+          case id {
+            "inspector" -> campy_wx.focus(shell, "canvas")
+            _ -> Nil
+          }
           loop(shell, state, next, dir, NoDrag)
         }
       }
+    campy_wx.KeyPressed(key) ->
+      handle_key(shell, state, current, dir, drag, key)
+    campy_wx.Accelerator(action) ->
+      handle_accelerator(shell, state, current, dir, drag, action)
     campy_wx.Message(_message) -> loop(shell, state, current, dir, drag)
     campy_wx.Idle -> loop(shell, state, current, dir, drag)
+  }
+}
+
+/// Keyboard dispatch. While the Code or Source page is active the editor keeps
+/// its text shortcuts (C/X/V/Z); only Save/Quit and page switching are stolen
+/// from it.
+fn handle_key(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+  key: campy_wx.Key,
+) {
+  dispatch_shortcut(shell, state, current, dir, drag, shortcut(state, key))
+}
+
+fn handle_accelerator(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+  action: String,
+) {
+  dispatch_shortcut(
+    shell,
+    state,
+    current,
+    dir,
+    drag,
+    accelerator_shortcut(action),
+  )
+}
+
+pub fn accelerator_shortcut(action: String) -> Shortcut {
+  case action {
+    "save" -> Save
+    "quit" -> Quit
+    "undo" -> Undo
+    "redo" -> Redo
+    "cut" -> Cut
+    "copy" -> Copy
+    "paste" -> Paste
+    "duplicate" -> Duplicate
+    "delete" -> DeleteControl
+    "escape" -> Cancel
+    "form" -> ShowFormPage
+    "code" -> ShowCodePage
+    "source" -> ShowSourcePage
+    _ -> NoShortcut
+  }
+}
+
+fn dispatch_shortcut(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+  action: Shortcut,
+) {
+  case action {
+    Quit -> {
+      campy_wx.close(shell)
+      io.println("[ide] quit")
+    }
+    NoShortcut -> loop(shell, state, current, dir, drag)
+    Cancel -> {
+      let previous = state
+      let state = cancel_drag(shell, state, drag) |> model.update(model.Disarm)
+      let next = view(state)
+      let shell = rebind(shell, current, next)
+      refresh(shell, Some(previous), state)
+      loop(shell, state, next, dir, NoDrag)
+    }
+    action -> {
+      let previous = state
+      let state = apply_shortcut(state, dir, action)
+      let next = view(state)
+      let shell = rebind(shell, current, next)
+      refresh(shell, Some(previous), state)
+      loop(shell, state, next, dir, NoDrag)
+    }
+  }
+}
+
+fn apply_shortcut(
+  state: model.State,
+  dir: String,
+  action: Shortcut,
+) -> model.State {
+  case action {
+    Save -> save(state, dir)
+    Undo -> model.update(state, model.Undo)
+    Redo -> model.update(state, model.Redo)
+    Copy -> model.update(state, model.CopySelection)
+    Cut -> model.update(state, model.CutSelection)
+    Paste -> model.update(state, model.Paste)
+    Duplicate -> model.update(state, model.DuplicateSelection)
+    DeleteControl -> model.update(state, model.DeleteSelection)
+    ShowFormPage -> model.update(state, model.ShowForm)
+    ShowCodePage -> model.update(state, model.ShowCode)
+    ShowSourcePage -> model.update(state, model.ShowSource)
+    Cancel | Quit | NoShortcut -> state
+  }
+}
+
+/// Restore live previews after Escape aborts a gesture. Committed geometry is
+/// untouched; only the widgets that were being dragged snap back.
+fn cancel_drag(
+  shell: campy_wx.Shell,
+  state: model.State,
+  drag: Drag,
+) -> model.State {
+  case drag {
+    NoDrag -> state
+    PlacementDrag(_, _, _) | MarqueeDrag(_, _) -> {
+      campy_wx.release_canvas(shell)
+      campy_wx.show_marquee(shell, None)
+      state
+    }
+    MoveDrag(items, _, _, _, _) -> {
+      list.each(items, fn(item) {
+        let #(id, #(rx, ry, rw, rh)) = item
+        let #(px, py, pw, ph) = preview_in_parent(state, id, #(rx, ry, rw, rh))
+        campy_wx.preview_rect(shell, id, px, py, pw, ph)
+      })
+      campy_wx.release_canvas(shell)
+      state
+    }
+    ResizeDrag(id, _, _, _, #(rx, ry, rw, rh), _) -> {
+      let #(px, py, pw, ph) = preview_in_parent(state, id, #(rx, ry, rw, rh))
+      campy_wx.preview_rect(shell, id, px, py, pw, ph)
+      campy_wx.release_canvas(shell)
+      state
+    }
+  }
+}
+
+pub type Shortcut {
+  Save
+  Quit
+  Undo
+  Redo
+  Copy
+  Cut
+  Paste
+  Duplicate
+  DeleteControl
+  ShowFormPage
+  ShowCodePage
+  ShowSourcePage
+  Cancel
+  NoShortcut
+}
+
+/// Pure shortcut mapping (tested without a display). Text-editing shortcuts are
+/// ignored while Code/Source is visible so Scintilla keeps them.
+pub fn shortcut(state: model.State, key: campy_wx.Key) -> Shortcut {
+  let editing = state.code_view || state.source_view
+
+  case key.control, key.alt, key.shift, key.code {
+    True, False, _, "q" -> Quit
+    True, False, _, "s" -> Save
+    True, False, _, "1" -> ShowFormPage
+    True, False, _, "2" -> ShowCodePage
+    True, False, _, "3" -> ShowSourcePage
+    True, False, True, "z" -> Redo
+    True, False, False, "z" ->
+      case editing {
+        True -> NoShortcut
+        False -> Undo
+      }
+    True, False, _, "y" -> Redo
+    True, False, False, "c" ->
+      case editing {
+        True -> NoShortcut
+        False -> Copy
+      }
+    True, False, False, "x" ->
+      case editing {
+        True -> NoShortcut
+        False -> Cut
+      }
+    True, False, False, "v" ->
+      case editing {
+        True -> NoShortcut
+        False -> Paste
+      }
+    True, False, False, "d" ->
+      case editing {
+        True -> NoShortcut
+        False -> Duplicate
+      }
+    False, False, _, "delete" ->
+      case state.selection {
+        [] -> NoShortcut
+        _ -> DeleteControl
+      }
+    False, False, _, "escape" -> Cancel
+    _, _, _, _ -> NoShortcut
+  }
+}
+
+fn help_text() -> String {
+  "Ctrl+S            Save\n"
+  <> "Ctrl+Q            Quit\n"
+  <> "Ctrl+Z            Undo\n"
+  <> "Ctrl+Shift+Z/Y    Redo\n"
+  <> "Ctrl+X/C/V        Cut, copy, paste (Form page)\n"
+  <> "Ctrl+D            Duplicate (Form page)\n"
+  <> "Delete            Delete selection (Form page)\n"
+  <> "Escape            Cancel placement or drag\n"
+  <> "Ctrl+1/2/3        Form, Code, Source\n\n"
+  <> "Design: click a palette button, then click or drag on the canvas.\n"
+  <> "Drag a control's body to move it; drag the small blue handles to resize."
+}
+
+fn begin_body_move(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  x: Int,
+  y: Int,
+) {
+  case selection_items(state) {
+    [] -> loop(shell, state, current, dir, NoDrag)
+    items ->
+      loop(shell, state, current, dir, MoveDrag(items, x, y, True, #(x, y)))
   }
 }
 
@@ -174,20 +425,36 @@ fn handle_mouse(
       }
     }
     "motion" -> {
-      case drag_previews(drag, x, y) {
-        [] -> Nil
-        previews ->
-          list.each(previews, fn(preview) {
-            let #(id, rect) = preview
-            let #(rx, ry, rw, rh) = preview_in_parent(state, id, rect)
-            campy_wx.preview_rect(shell, id, rx, ry, rw, rh)
-          })
+      let drag = drag_at(drag, x, y)
+      let #(px, py) = drag_point(drag, x, y)
+      let previews = drag_previews(drag, px, py)
+      list.each(previews, fn(preview) {
+        let #(id, rect) = preview
+        let #(rx, ry, rw, rh) = preview_in_parent(state, id, rect)
+        campy_wx.preview_rect(shell, id, rx, ry, rw, rh)
+      })
+      // A body drag needs no canvas capture (GTK's implicit grab keeps sending
+      // motion to the pressed control), so moving the outline cannot shift the
+      // coordinate base. A grip drag captures the grip itself and must keep
+      // its chrome still (invariant 6).
+      case drag {
+        MoveDrag(_, _, _, True, _) ->
+          campy_wx.show_selection(
+            shell,
+            previews_rect(previews),
+            list.length(state.selection) == 1,
+          )
+        _ -> Nil
       }
       loop(shell, state, current, dir, drag)
     }
     "left_up" -> {
       campy_wx.release_handle(shell, role)
-      case drag_previews(drag, x, y) {
+      campy_wx.release_canvas(shell)
+      let #(px, py) = drag_point(drag, x, y)
+      // GTK/Wx can report the press coordinates in the release event for a
+      // native child. The last motion event is the authoritative end point.
+      case drag_previews(drag, px, py) {
         [] -> loop(shell, state, current, dir, NoDrag)
         previews -> {
           let previous = state
@@ -206,6 +473,7 @@ fn handle_mouse(
           let next = view(state)
           let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
+          campy_wx.release_canvas(shell)
           loop(shell, state, next, dir, NoDrag)
         }
       }
@@ -240,34 +508,57 @@ fn handle_design_mouse(
                     True -> {
                       let previous = state
                       let state = toggle_selection(state, target)
+                      let next = view(state)
+                      let shell = rebind(shell, current, next)
                       refresh(shell, Some(previous), state)
-                      loop(shell, state, current, dir, NoDrag)
+                      loop(shell, state, next, dir, NoDrag)
                     }
                     False -> {
                       let previous = state
-                      let state = model.select_controls(state, [target])
+                      let state = case list.contains(state.selection, target) {
+                        True -> state
+                        False -> model.select_controls(state, [target])
+                      }
+                      let next = view(state)
+                      let shell = rebind(shell, current, next)
                       refresh(shell, Some(previous), state)
-                      loop(shell, state, current, dir, NoDrag)
+                      begin_body_move(shell, state, next, dir, x, y)
                     }
                   }
                 None -> {
+                  let previous = state
                   let state = model.select_controls(state, [])
+                  let next = view(state)
+                  let shell = rebind(shell, current, next)
                   campy_wx.show_selection(shell, None, False)
                   campy_wx.capture_canvas(shell)
-                  let previous = state
                   refresh(shell, Some(previous), state)
-                  loop(shell, state, current, dir, MarqueeDrag(x, y))
+                  loop(shell, state, next, dir, MarqueeDrag(x, y))
                 }
               }
-            _ -> {
-              let previous = state
-              let state = case control {
-                True -> toggle_widget_selection(state, id)
-                False -> select_control(state, id, "select")
+            _ ->
+              case control {
+                True -> {
+                  let previous = state
+                  let state = toggle_widget_selection(state, id)
+                  let next = view(state)
+                  let shell = rebind(shell, current, next)
+                  refresh(shell, Some(previous), state)
+                  loop(shell, state, next, dir, NoDrag)
+                }
+                False -> {
+                  let previous = state
+                  let state = case list.contains(state.selection, id) {
+                    True -> state
+                    False -> select_control(state, id, "select")
+                  }
+                  let next = view(state)
+                  let shell = rebind(shell, current, next)
+                  refresh(shell, Some(previous), state)
+                  let #(ax, ay) = event_absolute(state, id, x, y)
+                  begin_body_move(shell, state, next, dir, ax, ay)
+                }
               }
-              refresh(shell, Some(previous), state)
-              loop(shell, state, current, dir, NoDrag)
-            }
           }
       }
     "motion" ->
@@ -287,10 +578,18 @@ fn handle_design_mouse(
           )
           loop(shell, state, current, dir, drag)
         }
+        MoveDrag(_, _, _, _, _) -> {
+          let #(ax, ay) = event_absolute(state, id, x, y)
+          handle_mouse(shell, state, current, dir, drag, 8, kind, ax, ay)
+        }
         _ -> loop(shell, state, current, dir, drag)
       }
     "left_up" ->
       case drag {
+        MoveDrag(_, _, _, _, _) -> {
+          let #(ax, ay) = event_absolute(state, id, x, y)
+          handle_mouse(shell, state, current, dir, drag, 8, kind, ax, ay)
+        }
         PlacementDrag(kind, start_x, start_y) -> {
           let #(px, py) = event_absolute(state, id, x, y)
           let rect = normalize_rect(start_x, start_y, px, py)
@@ -329,8 +628,10 @@ fn handle_design_mouse(
             }
           }
           let previous = state
+          let next = view(state)
+          let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
-          loop(shell, state, current, dir, NoDrag)
+          loop(shell, state, next, dir, NoDrag)
         }
         _ -> loop(shell, state, current, dir, drag)
       }
@@ -436,7 +737,7 @@ fn move_reparent(
   previews: List(#(String, #(Int, Int, Int, Int))),
 ) -> Option(#(String, String)) {
   case drag {
-    MoveDrag([#(id, original)], _, _) ->
+    MoveDrag([#(id, original)], _, _, _, _) ->
       case list.find(previews, fn(preview) { preview.0 == id }) {
         Error(Nil) -> None
         Ok(#(_, preview)) ->
@@ -481,13 +782,13 @@ fn start_drag(state: model.State, role: Int, x: Int, y: Int) -> Drag {
     True ->
       case selection_items(state) {
         [] -> NoDrag
-        items -> MoveDrag(items, x, y)
+        items -> MoveDrag(items, x, y, False, #(x, y))
       }
     False ->
       case state.selection {
         [id] ->
           case selection_items(state) {
-            [#(_, rect), ..] -> ResizeDrag(id, role, x, y, rect)
+            [#(_, rect), ..] -> ResizeDrag(id, role, x, y, rect, #(x, y))
             [] -> NoDrag
           }
         _ -> NoDrag
@@ -524,6 +825,24 @@ fn selection_items(
   }
 }
 
+fn drag_at(drag: Drag, x: Int, y: Int) -> Drag {
+  case drag {
+    MoveDrag(items, start_x, start_y, follow, _) ->
+      MoveDrag(items, start_x, start_y, follow, #(x, y))
+    ResizeDrag(id, role, start_x, start_y, rect, _) ->
+      ResizeDrag(id, role, start_x, start_y, rect, #(x, y))
+    _ -> drag
+  }
+}
+
+fn drag_point(drag: Drag, fallback_x: Int, fallback_y: Int) -> #(Int, Int) {
+  case drag {
+    MoveDrag(_, _, _, _, #(x, y)) -> #(x, y)
+    ResizeDrag(_, _, _, _, _, #(x, y)) -> #(x, y)
+    _ -> #(fallback_x, fallback_y)
+  }
+}
+
 fn drag_previews(
   drag: Drag,
   x: Int,
@@ -533,12 +852,12 @@ fn drag_previews(
     NoDrag -> []
     PlacementDrag(_, _, _) -> []
     MarqueeDrag(_, _) -> []
-    MoveDrag(items, start_x, start_y) ->
+    MoveDrag(items, start_x, start_y, _follow, _current) ->
       list.map(items, fn(item) {
         let #(id, #(rx, ry, rw, rh)) = item
         #(id, #(rx + x - start_x, ry + y - start_y, rw, rh))
       })
-    ResizeDrag(id, role, start_x, start_y, #(rx, ry, rw, rh)) -> {
+    ResizeDrag(id, role, start_x, start_y, #(rx, ry, rw, rh), _current) -> {
       let dx = x - start_x
       let dy = y - start_y
       let left = case role {
@@ -586,6 +905,8 @@ type Drag {
     items: List(#(String, #(Int, Int, Int, Int))),
     start_x: Int,
     start_y: Int,
+    follow: Bool,
+    current: #(Int, Int),
   )
   ResizeDrag(
     id: String,
@@ -593,6 +914,7 @@ type Drag {
     start_x: Int,
     start_y: Int,
     rect: #(Int, Int, Int, Int),
+    current: #(Int, Int),
   )
 }
 
@@ -607,47 +929,59 @@ fn handle(
     "menu-save" | "tool-save" -> save(state, dir)
     "menu-undo" | "tool-undo" -> model.update(state, model.Undo)
     "menu-redo" | "tool-redo" -> model.update(state, model.Redo)
-    "menu-toggle" | "tool-toggle" -> model.update(state, model.ToggleCodeView)
-    "menu-source" -> model.update(state, model.ToggleSourceView)
+    "menu-form" -> model.update(state, model.ShowForm)
+    "menu-code" -> model.update(state, model.ShowCode)
+    "menu-source" -> model.update(state, model.ShowSource)
     "menu-copy" | "tool-copy" -> model.update(state, model.CopySelection)
     "menu-cut" | "tool-cut" -> model.update(state, model.CutSelection)
     "menu-paste" | "tool-paste" -> model.update(state, model.Paste)
     "menu-duplicate" | "tool-duplicate" ->
       model.update(state, model.DuplicateSelection)
-    "menu-delete" | "tool-delete" -> model.update(state, model.DeleteSelection)
+    "menu-delete" | "tool-delete" | "inspector-delete" ->
+      model.update(state, model.DeleteSelection)
     "menu-front" -> model.update(state, model.BringToFront)
     "menu-back" -> model.update(state, model.SendToBack)
     "menu-cancel-place" -> model.update(state, model.Disarm)
-    "palette" -> palette_selected(state, value)
+    "tool-run" -> model.update(state, model.Log("Run arrives with M3"))
+    "tool-stop" -> model.update(state, model.Log("Nothing is running yet"))
+    "console-clear" -> model.update(state, model.ClearConsole)
+    "tabs" -> page_selected(state, value)
+    "inspector-tabs" -> state
     "inspector" -> inspector_changed(state, value)
     "events" -> event_selected(state, value)
-    "modules" -> {
-      case key, value {
-        "select", VText(slug) -> tree_selected(state, slug)
-        _, _ -> state
+    "modules" -> module_selected(state, value)
+    _ -> {
+      let kind = string.drop_start(id, string.length("palette-"))
+      case string.starts_with(id, "palette-") {
+        True -> model.update(state, model.Arm(kind))
+        False -> select_or_log(state, id, key)
       }
     }
-    _ -> select_or_log(state, id, key)
   }
 }
 
-fn palette_selected(
-  state: model.State,
-  value: campy_view.Value,
-) -> model.State {
+fn page_selected(state: model.State, value: campy_view.Value) -> model.State {
+  case value {
+    VInt(1) -> model.update(state, model.ShowCode)
+    VInt(2) -> model.update(state, model.ShowSource)
+    VInt(_) -> model.update(state, model.ShowForm)
+    _ -> state
+  }
+}
+
+fn module_selected(state: model.State, value: campy_view.Value) -> model.State {
   case value {
     VInt(index) if index >= 0 ->
-      case list.drop(campy_catalog.all(), index) {
-        [widget, ..] -> model.update(state, model.Arm(widget.kind))
+      case list.drop(module_items(state), index) {
+        [slug, ..] -> tree_selected(state, slug)
         [] -> state
       }
     _ -> state
   }
 }
 
-/// A grid edit arrives as row/col/text. Row 0 is the header; the inspector packs
-/// two field/value pairs per row, so columns 1 and 3 are values. The field comes
-/// from the label immediately left of the edited cell, never from a hard-coded
+/// A grid edit arrives as row/col/text. Columns 0 is the field label and 1 is
+/// its value; the field comes from the label in the same row, never a hard-coded
 /// row index, so single and multi-selection layouts can differ.
 fn inspector_changed(
   state: model.State,
@@ -662,9 +996,13 @@ fn inspector_changed(
       {
         Some(row), Some(col), Some(text) ->
           case col {
-            1 | 3 ->
+            1 ->
               case list.drop(inspector_rows(state), row) {
-                [row_values, ..] -> inspector_edit(state, row_values, col, text)
+                [row_values, ..] ->
+                  case row_values {
+                    [label, _] -> inspector_edit(state, label, text)
+                    _ -> state
+                  }
                 [] -> state
               }
             _ -> state
@@ -697,19 +1035,18 @@ fn field_text(
 
 fn inspector_edit(
   state: model.State,
-  row: List(String),
-  col: Int,
+  label: String,
   text: String,
 ) -> model.State {
-  case list.drop(row, col - 1), state.selection {
-    [label, _], [id] ->
+  case state.selection {
+    [id] ->
       case label {
         "x" | "y" | "w" | "h" -> edit_geometry(state, id, label, text)
         "text" ->
           model.update(state, model.SetControlProp(id, "text", VText(text)))
         _ -> state
       }
-    _, _ -> state
+    _ -> state
   }
 }
 
@@ -742,13 +1079,20 @@ fn geometry_of(state: model.State, id: String) -> Option(campy_design.Rect) {
 
 fn event_selected(state: model.State, value: campy_view.Value) -> model.State {
   case value, state.selection {
+    // Index 0 is the list's placeholder row. wxListBox auto-selects it when
+    // the Events page becomes visible; that must not open a handler.
+    VInt(0), _ -> state
     VInt(index), [id] ->
-      case list.drop(event_items(state), index) {
+      case list.drop(event_items(state), index - 1) {
         [event, ..] -> model.update(state, model.OpenHandler(id, event))
         [] -> state
       }
     _, _ -> state
   }
+}
+
+pub fn events_display(state: model.State) -> List(String) {
+  ["—", ..event_items(state)]
 }
 
 fn select_or_log(state: model.State, id: String, key: String) -> model.State {
@@ -815,17 +1159,12 @@ fn refresh(
 ) {
   case previous {
     None -> {
-      campy_wx.set_tree(shell, "modules", tree_items(state))
       set_code(shell, state)
       set_source(shell, state)
       set_console(shell, state)
       campy_wx.select_page(shell, "tabs", page_index(state))
     }
     Some(previous) -> {
-      case previous.armed, state.armed {
-        Some(_), None -> campy_wx.set_selection(shell, "palette", -1)
-        _, _ -> Nil
-      }
       // Handler edits and module changes must both refresh the Scintilla page;
       // otherwise a stub is committed but the old source stays visible.
       let handlers_changed = handlers_of(previous) != handlers_of(state)
@@ -850,26 +1189,53 @@ fn refresh(
         False -> set_console(shell, state)
         True -> Nil
       }
-      case
-        previous.code_view == state.code_view
-        && previous.source_view == state.source_view
-      {
-        False -> campy_wx.select_page(shell, "tabs", page_index(state))
-        True -> Nil
-      }
     }
+  }
+
+  // Keep the notebook in sync with the model even when a tab click did not
+  // produce a command event: a shortcut must still be able to switch pages.
+  campy_wx.select_page(shell, "tabs", page_index(state))
+  sync_shortcuts(shell, previous, state)
+  // On the Form page, hand keyboard focus to the canvas after every refresh.
+  // Design controls are not text editors; letting one keep focus makes it
+  // consume Ctrl+C/V/Y before the frame accelerators see them.
+  case page_index(state) {
+    0 -> campy_wx.focus(shell, "tabs")
+    _ -> Nil
   }
 
   let rows = inspector_rows(state)
   campy_wx.set_grid(shell, "inspector", rows)
   typed_grid_editors(shell, rows, list.length(state.selection) != 1)
-  campy_wx.set_items(shell, "events", event_items(state))
-  campy_wx.set_status(shell, status_text(state))
-  campy_wx.show_selection(
-    shell,
-    selection_rect(state),
-    list.length(state.selection) == 1,
-  )
+  case page_index(state) == 0 {
+    True ->
+      campy_wx.show_selection(
+        shell,
+        selection_rect(state),
+        list.length(state.selection) == 1,
+      )
+    False -> campy_wx.show_selection(shell, None, False)
+  }
+}
+
+/// Rebuild the accelerator table only when Form/Code/Source changes; each
+/// table is a native object.
+fn sync_shortcuts(
+  shell: campy_wx.Shell,
+  previous: Option(model.State),
+  state: model.State,
+) {
+  let editing = state.code_view || state.source_view
+  case previous {
+    None -> campy_wx.set_shortcuts(shell, editing)
+    Some(previous) -> {
+      let was_editing = previous.code_view || previous.source_view
+      case was_editing == editing {
+        True -> Nil
+        False -> campy_wx.set_shortcuts(shell, editing)
+      }
+    }
+  }
 }
 
 pub fn page_index(state: model.State) -> Int {
@@ -918,58 +1284,37 @@ fn typed_grid_editors(
 ) -> Nil {
   let _ =
     list.index_map(rows, fn(row, index) {
-      list.each([0, 2], fn(label_col) {
-        case list.drop(row, label_col) {
-          [label, _] -> {
-            let value_col = label_col + 1
-            // Field names are display only; only the value cell is editable.
-            campy_wx.set_grid_read_only(
-              shell,
-              "inspector",
-              index,
-              label_col,
-              True,
-            )
-            case label {
-              "x" | "y" ->
-                campy_wx.set_grid_number_cell(
-                  shell,
-                  "inspector",
-                  index,
-                  value_col,
-                  0,
-                )
-              "w" | "h" ->
-                campy_wx.set_grid_number_cell(
-                  shell,
-                  "inspector",
-                  index,
-                  value_col,
-                  campy_design.min_size,
-                )
-              _ ->
-                campy_wx.set_grid_text_cell(
-                  shell,
-                  "inspector",
-                  index,
-                  value_col,
-                )
-            }
-            let editable = case label {
-              "x" | "y" | "w" | "h" | "text" -> True
-              _ -> False
-            }
-            campy_wx.set_grid_read_only(
-              shell,
-              "inspector",
-              index,
-              value_col,
-              read_only || index == 0 || !editable,
-            )
+      case row {
+        [label, _value] -> {
+          // Field names are display only; only the value cell is editable.
+          campy_wx.set_grid_read_only(shell, "inspector", index, 0, True)
+          case label {
+            "x" | "y" ->
+              campy_wx.set_grid_number_cell(shell, "inspector", index, 1, 0)
+            "w" | "h" ->
+              campy_wx.set_grid_number_cell(
+                shell,
+                "inspector",
+                index,
+                1,
+                campy_design.min_size,
+              )
+            _ -> campy_wx.set_grid_text_cell(shell, "inspector", index, 1)
           }
-          _ -> Nil
+          let editable = case label {
+            "x" | "y" | "w" | "h" | "text" -> True
+            _ -> False
+          }
+          campy_wx.set_grid_read_only(
+            shell,
+            "inspector",
+            index,
+            1,
+            read_only || !editable,
+          )
         }
-      })
+        _ -> Nil
+      }
     })
   Nil
 }
@@ -985,6 +1330,21 @@ fn selection_rect(state: model.State) -> Option(#(Int, Int, Int, Int)) {
       Some(
         list.fold(rest, first, fn(acc, item) {
           let #(_, rect) = item
+          union(acc, rect)
+        }),
+      )
+  }
+}
+
+fn previews_rect(
+  previews: List(#(String, #(Int, Int, Int, Int))),
+) -> Option(#(Int, Int, Int, Int)) {
+  case previews {
+    [] -> None
+    [#(_, first), ..rest] ->
+      Some(
+        list.fold(rest, first, fn(acc, preview) {
+          let #(_, rect) = preview
           union(acc, rect)
         }),
       )
@@ -1011,16 +1371,73 @@ fn status_text(state: model.State) -> String {
   }
 }
 
-pub fn tree_items(state: model.State) -> List(plan.TreeItem) {
-  [
-    plan.TreeItem(
-      "project",
-      state.project.title,
-      list.map(state.project.modules, fn(module) {
-        plan.TreeItem(module.slug, module.slug, [])
-      }),
-    ),
-  ]
+pub fn module_items(state: model.State) -> List(String) {
+  list.map(state.project.modules, fn(module) { module.slug })
+}
+
+pub fn project_items(state: model.State) -> List(String) {
+  [state.project.title]
+}
+
+pub fn module_index(state: model.State) -> Int {
+  case state.active {
+    Some(slug) -> index_of_item(module_items(state), slug)
+    None -> 0
+  }
+}
+
+fn index_of_item(items: List(String), item: String) -> Int {
+  index_of_item_loop(items, item, 0)
+}
+
+fn index_of_item_loop(items: List(String), item: String, index: Int) -> Int {
+  case items {
+    [] -> 0
+    [first, ..rest] ->
+      case first == item {
+        True -> index
+        False -> index_of_item_loop(rest, item, index + 1)
+      }
+  }
+}
+
+pub fn selection_title(state: model.State) -> String {
+  case state.selection {
+    [] -> "No selection"
+    [id] ->
+      case model.active_module(state) {
+        Ok(module) ->
+          case campy_design.find_node(module.form.view, id) {
+            Some(node) ->
+              case id == module.form.view.id {
+                True -> "Window — " <> id
+                False -> id <> " — " <> node.kind
+              }
+            None -> id
+          }
+        Error(_) -> id
+      }
+    ids -> int.to_string(list.length(ids)) <> " selected"
+  }
+}
+
+/// Centre header: the active module and the form's resolved canvas size.
+pub fn centre_header(state: model.State) -> String {
+  let #(w, h) = case model.active_module(state) {
+    Ok(module) -> {
+      let layout = campy_design.resolve(module.form.view)
+      case campy_design.placed(layout, layout.root) {
+        Some(placed) -> #(placed.rect.w, placed.rect.h)
+        None -> #(600, 400)
+      }
+    }
+    Error(_) -> #(600, 400)
+  }
+  active_slug(state)
+  <> "    Canvas "
+  <> int.to_string(w)
+  <> " × "
+  <> int.to_string(h)
 }
 
 pub fn inspector_rows(state: model.State) -> List(List(String)) {
@@ -1060,33 +1477,19 @@ fn multi_rows(state: model.State, ids: List(String)) -> List(List(String)) {
         })
 
       [
-        ["Field", "Value", "Field", "Value"],
-        [
-          "selected",
-          int.to_string(list.length(ids)),
-          "kind",
-          common(list.map(nodes, fn(node) { node.kind })),
-        ],
+        ["selected", int.to_string(list.length(ids))],
+        ["kind", common(list.map(nodes, fn(node) { node.kind }))],
         [
           "parent",
           common(
             list.map(nodes, fn(node) { parent_label(module.form.view, node.id) }),
           ),
-          "x",
-          common(list.map(rects, fn(rect) { int.to_string(rect.x) })),
         ],
-        [
-          "y",
-          common(list.map(rects, fn(rect) { int.to_string(rect.y) })),
-          "w",
-          common(list.map(rects, fn(rect) { int.to_string(rect.w) })),
-        ],
-        [
-          "h",
-          common(list.map(rects, fn(rect) { int.to_string(rect.h) })),
-          "text",
-          common(list.map(nodes, text_of)),
-        ],
+        ["x", common(list.map(rects, fn(rect) { int.to_string(rect.x) }))],
+        ["y", common(list.map(rects, fn(rect) { int.to_string(rect.y) }))],
+        ["w", common(list.map(rects, fn(rect) { int.to_string(rect.w) }))],
+        ["h", common(list.map(rects, fn(rect) { int.to_string(rect.h) }))],
+        ["text", common(list.map(nodes, text_of))],
       ]
     }
   }
@@ -1103,24 +1506,20 @@ fn common(values: List(String)) -> String {
   }
 }
 
+/// No selection: the dock shows project/module context instead of pretending a
+/// control is selected. Every value is read-only.
 fn summary_rows(state: model.State) -> List(List(String)) {
   [
-    ["Field", "Value", "Field", "Value"],
-    [
-      "Project",
-      state.project.title,
-      "Module",
-      active_slug(state),
-    ],
-    [
-      "Tabs",
-      int.to_string(list.length(state.open_tabs)),
-      "History",
-      int.to_string(list.length(state.undo)),
-    ],
+    ["project", state.project.title],
+    ["module", active_slug(state)],
+    ["tabs", int.to_string(list.length(state.open_tabs))],
+    ["undo", int.to_string(list.length(state.undo))],
+    ["redo", int.to_string(list.length(state.redo))],
   ]
 }
 
+/// One field per row, in a stable order. Identity fields come first and are
+/// read-only; x/y/w/h and text are typed editors.
 fn control_rows(state: model.State, id: String) -> List(List(String)) {
   case model.active_module(state) {
     Error(_) -> summary_rows(state)
@@ -1133,16 +1532,14 @@ fn control_rows(state: model.State, id: String) -> List(List(String)) {
             None -> campy_design.Rect(0, 0, 0, 0)
           }
           [
-            ["Field", "Value", "Field", "Value"],
-            ["id", id, "kind", node.kind],
-            [
-              "parent",
-              parent_label(module.form.view, id),
-              "x",
-              int.to_string(rect.x),
-            ],
-            ["y", int.to_string(rect.y), "w", int.to_string(rect.w)],
-            ["h", int.to_string(rect.h), "text", text_of(node)],
+            ["id", id],
+            ["kind", node.kind],
+            ["parent", parent_label(module.form.view, id)],
+            ["x", int.to_string(rect.x)],
+            ["y", int.to_string(rect.y)],
+            ["w", int.to_string(rect.w)],
+            ["h", int.to_string(rect.h)],
+            ["text", text_of(node)],
           ]
         }
       }
@@ -1184,16 +1581,16 @@ fn view(state: model.State) -> Node {
   campy_view.node("window", "main")
   |> campy_view.with_props([
     #("title", VText("Campy")),
-    #("w", VInt(980)),
-    #("h", VInt(760)),
+    #("w", VInt(1280)),
+    #("h", VInt(860)),
     #("layout", VText("column")),
   ])
   |> campy_view.with_children([
     menubar(),
     toolbar(),
-    status(),
+    palette_strip(state),
+    status(state),
     body(state),
-    inspector(),
   ])
 }
 
@@ -1201,24 +1598,28 @@ fn menubar() -> Node {
   campy_view.node("menubar", "menubar")
   |> campy_view.with_children([
     menu("file-menu", "File", [
-      menu_item("menu-save", "Save"),
-      menu_item("menu-quit", "Quit"),
+      menu_item("menu-save", "Save            Ctrl+S"),
+      menu_item("menu-quit", "Quit            Ctrl+Q"),
     ]),
     menu("edit-menu", "Edit", [
-      menu_item("menu-undo", "Undo"),
-      menu_item("menu-redo", "Redo"),
-      menu_item("menu-cut", "Cut"),
-      menu_item("menu-copy", "Copy"),
-      menu_item("menu-paste", "Paste"),
-      menu_item("menu-duplicate", "Duplicate"),
-      menu_item("menu-delete", "Delete"),
+      menu_item("menu-undo", "Undo            Ctrl+Z"),
+      menu_item("menu-redo", "Redo            Ctrl+Shift+Z"),
+      menu_item("menu-cut", "Cut             Ctrl+X"),
+      menu_item("menu-copy", "Copy            Ctrl+C"),
+      menu_item("menu-paste", "Paste           Ctrl+V"),
+      menu_item("menu-duplicate", "Duplicate       Ctrl+D"),
+      menu_item("menu-delete", "Delete          Del"),
       menu_item("menu-front", "Bring to front"),
       menu_item("menu-back", "Send to back"),
-      menu_item("menu-cancel-place", "Cancel placement"),
+      menu_item("menu-cancel-place", "Cancel placement    Esc"),
     ]),
     menu("view-menu", "View", [
-      menu_item("menu-toggle", "Toggle code"),
-      menu_item("menu-source", "Generated source"),
+      menu_item("menu-form", "Form            Ctrl+1"),
+      menu_item("menu-code", "Code            Ctrl+2"),
+      menu_item("menu-source", "Generated source    Ctrl+3"),
+    ]),
+    menu("help-menu", "Help", [
+      menu_item("menu-help-keys", "Keyboard shortcuts    F1"),
     ]),
   ])
 }
@@ -1241,11 +1642,15 @@ fn toolbar() -> Node {
     tool("tool-save", "Save"),
     tool("tool-undo", "Undo"),
     tool("tool-redo", "Redo"),
-    tool("tool-toggle", "Toggle"),
+    tool_separator(),
+    tool("tool-cut", "Cut"),
     tool("tool-copy", "Copy"),
     tool("tool-paste", "Paste"),
-    tool("tool-duplicate", "Dup"),
+    tool("tool-duplicate", "Duplicate"),
     tool("tool-delete", "Delete"),
+    tool_separator(),
+    tool("tool-run", "Run"),
+    tool("tool-stop", "Stop"),
   ])
 }
 
@@ -1255,68 +1660,111 @@ fn tool(id: String, label: String) -> Node {
   |> campy_view.with_events(["click"])
 }
 
-fn status() -> Node {
+fn tool_separator() -> Node {
+  campy_view.node("separator", "toolbar-separator")
+}
+
+fn status(state: model.State) -> Node {
   campy_view.node("status", "status")
-  |> campy_view.with_props([#("text", VText("Ready"))])
+  |> campy_view.with_props([#("text", VText(status_text(state)))])
 }
 
 fn body(state: model.State) -> Node {
   campy_view.node("panel", "body")
   |> campy_view.with_props([
     #("layout", VText("row")),
-    #("border", VInt(4)),
-    #("grow", VBool(True)),
-  ])
-  |> campy_view.with_children([left_pane(), right_pane(state)])
-}
-
-fn left_pane() -> Node {
-  campy_view.node("panel", "left")
-  |> campy_view.with_props([
-    #("layout", VText("column")),
-    #("border", VInt(4)),
-    #("w", VInt(220)),
-  ])
-  |> campy_view.with_children([
-    campy_view.node("tree", "modules")
-      |> campy_view.with_props([#("grow", VBool(True))])
-      |> campy_view.with_events(["select"]),
-    campy_view.node("label", "palette-title")
-      |> campy_view.with_props([#("text", VText("Widgets"))]),
-    palette(),
-  ])
-}
-
-fn palette() -> Node {
-  campy_view.node("list", "palette")
-  |> campy_view.with_props([
-    #("h", VInt(210)),
-    #("items", VList(list.map(palette_labels(), VText))),
-  ])
-  |> campy_view.with_events(["change"])
-}
-
-pub fn palette_labels() -> List(String) {
-  list.map(campy_catalog.all(), fn(widget) { widget.label })
-}
-
-fn right_pane(state: model.State) -> Node {
-  campy_view.node("panel", "right")
-  |> campy_view.with_props([
-    #("layout", VText("column")),
+    #("border", VInt(2)),
     #("grow", VBool(True)),
   ])
   |> campy_view.with_children([
+    navigator(state),
+    centre(state),
+    inspector(state),
+  ])
+}
+
+/// Left navigator: project and module lists only. The widget palette lives in
+/// the strip under the toolbar, not here.
+fn navigator(state: model.State) -> Node {
+  campy_view.node("panel", "nav")
+  |> campy_view.with_props([
+    #("layout", VText("column")),
+    #("border", VInt(6)),
+    #("w", VInt(200)),
+  ])
+  |> campy_view.with_children([
+    campy_view.node("label", "projects-title")
+      |> campy_view.with_props([#("text", VText("Projects"))]),
+    campy_view.node("list", "projects")
+      |> campy_view.with_props([
+        #("h", VInt(52)),
+        #("items", VList(list.map(project_items(state), VText))),
+        #("selection", VInt(0)),
+      ]),
+    campy_view.node("label", "modules-title")
+      |> campy_view.with_props([#("text", VText("Modules"))]),
+    campy_view.node("list", "modules")
+      |> campy_view.with_props([
+        #("grow", VBool(True)),
+        #("items", VList(list.map(module_items(state), VText))),
+        #("selection", VInt(module_index(state))),
+      ])
+      |> campy_view.with_events(["change"]),
+  ])
+}
+
+/// Centre: module/canvas header, Form/Code/Source notebook, then the console
+/// header and read-only console editor. The console is not a right-dock pane.
+fn centre(state: model.State) -> Node {
+  campy_view.node("panel", "centre")
+  |> campy_view.with_props([
+    #("layout", VText("column")),
+    #("border", VInt(2)),
+    #("grow", VBool(True)),
+  ])
+  |> campy_view.with_children([
+    campy_view.node("panel", "centre-header")
+      |> campy_view.with_props([
+        #("layout", VText("row")),
+        #("border", VInt(4)),
+        #("h", VInt(26)),
+      ])
+      |> campy_view.with_children([
+        campy_view.node("label", "centre-title")
+        |> campy_view.with_props([
+          #("text", VText(centre_header(state))),
+          #("grow", VBool(True)),
+        ]),
+      ]),
     campy_view.node("notebook", "tabs")
       |> campy_view.with_props([#("grow", VBool(True))])
       |> campy_view.with_events(["change"])
+      |> campy_view.with_children([form_page(state), code_page(), source_page()]),
+    campy_view.node("panel", "console-header")
+      |> campy_view.with_props([
+        #("layout", VText("row")),
+        #("border", VInt(4)),
+        #("h", VInt(28)),
+      ])
       |> campy_view.with_children([
-        form_page(state),
-        code_page(),
-        source_page(),
+        campy_view.node("label", "console-title")
+          |> campy_view.with_props([#("text", VText("Console"))]),
+        campy_view.node("label", "console-state")
+          |> campy_view.with_props([#("text", VText("  stopped"))]),
+        campy_view.node("label", "console-spacer")
+          |> campy_view.with_props([
+            #("text", VText("")),
+            #("grow", VBool(True)),
+          ]),
+        campy_view.node("button", "console-clear")
+          |> campy_view.with_props([
+            #("text", VText("Clear")),
+            #("tooltip", VText("Clear console")),
+          ])
+          |> campy_view.with_events(["click"]),
       ]),
     campy_view.node("editor", "console")
-      |> campy_view.with_props([#("h", VInt(120))])
+      |> campy_view.with_props([#("h", VInt(150))])
       |> campy_view.with_events([]),
   ])
 }
@@ -1358,29 +1806,148 @@ fn source_page() -> Node {
   ])
 }
 
-fn inspector() -> Node {
+/// Right dock: selection header with Delete, then a native Properties/Events
+/// notebook. Properties is a one-field-per-row grid; Events is its own page.
+fn inspector(state: model.State) -> Node {
   campy_view.node("panel", "inspector-pane")
   |> campy_view.with_props([
-    #("layout", VText("row")),
-    #("h", VInt(170)),
-    #("border", VInt(0)),
+    #("layout", VText("column")),
+    #("border", VInt(4)),
+    #("w", VInt(330)),
+  ])
+  |> campy_view.with_children([
+    campy_view.node("panel", "inspector-header")
+      |> campy_view.with_props([
+        #("layout", VText("row")),
+        #("border", VInt(4)),
+        #("h", VInt(32)),
+      ])
+      |> campy_view.with_children([
+        campy_view.node("label", "selection-title")
+          |> campy_view.with_props([
+            #("text", VText(selection_title(state))),
+            #("grow", VBool(True)),
+          ]),
+        campy_view.node("button", "inspector-delete")
+          |> campy_view.with_props([
+            #("text", VText("Delete")),
+            #("tooltip", VText("Delete selected controls (Del)")),
+            #("enabled", VBool(!list.is_empty(state.selection))),
+          ])
+          |> campy_view.with_events(["click"]),
+      ]),
+    campy_view.node("notebook", "inspector-tabs")
+      |> campy_view.with_props([#("grow", VBool(True))])
+      |> campy_view.with_events(["change"])
+      |> campy_view.with_children([properties_page(state), events_page(state)]),
+  ])
+}
+
+fn properties_page(_state: model.State) -> Node {
+  campy_view.node("page", "page-properties")
+  |> campy_view.with_props([
+    #("text", VText("Properties")),
+    #("layout", VText("column")),
   ])
   |> campy_view.with_children([
     campy_view.node("grid", "inspector")
-      |> campy_view.with_props([#("grow", VBool(True))])
-      |> campy_view.with_events(["change"]),
-    campy_view.node("panel", "events-pane")
-      |> campy_view.with_props([
-        #("layout", VText("column")),
-        #("w", VInt(220)),
-        #("border", VInt(4)),
-      ])
-      |> campy_view.with_children([
-        campy_view.node("label", "events-title")
-          |> campy_view.with_props([#("text", VText("Events"))]),
-        campy_view.node("list", "events")
-          |> campy_view.with_props([#("grow", VBool(True))])
-          |> campy_view.with_events(["change"]),
-      ]),
+    |> campy_view.with_props([
+      #("grow", VBool(True)),
+      #("grid_labels", VBool(False)),
+      #("grid_lines", VBool(False)),
+      #("row_height", VInt(22)),
+      #("label_width", VInt(110)),
+    ])
+    |> campy_view.with_events(["change"]),
   ])
+}
+
+fn events_page(state: model.State) -> Node {
+  campy_view.node("page", "page-events")
+  |> campy_view.with_props([
+    #("text", VText("Events")),
+    #("layout", VText("column")),
+  ])
+  |> campy_view.with_children([
+    campy_view.node("label", "events-hint")
+      |> campy_view.with_props([
+        #("text", VText("Select an event to open or create its handler")),
+      ]),
+    campy_view.node("list", "events")
+      |> campy_view.with_props([
+        #("grow", VBool(True)),
+        #("items", VList(list.map(events_display(state), VText))),
+      ])
+      |> campy_view.with_events(["change"]),
+  ])
+}
+
+/// Compact palette strip under the toolbar. Buttons are symbol/text tools with
+/// tooltips; clicking one arms placement and highlights that button.
+fn palette_strip(state: model.State) -> Node {
+  campy_view.node("panel", "palette-strip")
+  |> campy_view.with_props([
+    #("layout", VText("row")),
+    #("border", VInt(3)),
+  ])
+  |> campy_view.with_children(list.append(
+    [
+      campy_view.node("label", "palette-title")
+      |> campy_view.with_props([#("text", VText("Widgets"))]),
+    ],
+    list.map(campy_catalog.all(), fn(widget) {
+      let armed = state.armed == Some(widget.kind)
+      campy_view.node("button", "palette-" <> widget.kind)
+      |> campy_view.with_props([
+        #("text", VText(palette_symbol(widget.kind))),
+        #("tooltip", VText(palette_tooltip(widget))),
+        #("w", VInt(40)),
+        #("highlight", VBool(armed)),
+      ])
+      |> campy_view.with_events(["click"])
+    }),
+  ))
+}
+
+fn palette_label(kind: String) -> String {
+  case kind {
+    "text" -> "Text"
+    "checkbox" -> "Check"
+    "radio" -> "Radio"
+    "list" -> "List"
+    "progress" -> "Progress"
+    _ -> campy_catalog.label_of(kind)
+  }
+}
+
+/// Compact glyphs keep all 16 tools in one row under the toolbar; the full
+/// name is in the tooltip (`Name — click, then drag on the form`).
+fn palette_symbol(kind: String) -> String {
+  case kind {
+    "panel" -> "▭"
+    "group" -> "▢"
+    "label" -> "A"
+    "button" -> "◉"
+    "text" -> "T"
+    "memo" -> "≣"
+    "checkbox" -> "☑"
+    "radio" -> "⊚"
+    "choice" -> "▾"
+    "list" -> "☰"
+    "slider" -> "↔"
+    "progress" -> "▰"
+    "picture" -> "▧"
+    "tree" -> "⑂"
+    "grid" -> "▦"
+    "editor" -> "⌨"
+    _ -> "?"
+  }
+}
+
+fn palette_tooltip(widget: campy_catalog.Widget) -> String {
+  widget.label <> " — click, then drag on the form"
+}
+
+pub fn palette_labels() -> List(String) {
+  list.map(campy_catalog.all(), fn(widget) { palette_label(widget.kind) })
 }

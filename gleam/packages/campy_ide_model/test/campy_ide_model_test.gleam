@@ -183,6 +183,31 @@ pub fn update_dispatches_source_view_test() {
   state.code_view |> should.be_false()
 }
 
+pub fn explicit_page_commands_are_exclusive_test() {
+  let code = campy_ide_model.update(state(), campy_ide_model.ShowCode)
+  code.code_view |> should.be_true()
+  code.source_view |> should.be_false()
+
+  let source = campy_ide_model.update(code, campy_ide_model.ShowSource)
+  source.code_view |> should.be_false()
+  source.source_view |> should.be_true()
+
+  let form = campy_ide_model.update(source, campy_ide_model.ShowForm)
+  form.code_view |> should.be_false()
+  form.source_view |> should.be_false()
+}
+
+pub fn clear_console_drops_lines_without_undo_test() {
+  let state =
+    state()
+    |> campy_ide_model.log("a")
+    |> campy_ide_model.log("b")
+    |> campy_ide_model.update(campy_ide_model.ClearConsole)
+
+  state.console |> should.equal([])
+  state.undo |> should.equal([])
+}
+
 pub fn active_module_returns_the_module_test() {
   case campy_ide_model.active_module(state()) {
     Ok(module) -> module.slug |> should.equal("a")

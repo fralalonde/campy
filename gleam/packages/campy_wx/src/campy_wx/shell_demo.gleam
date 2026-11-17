@@ -170,6 +170,8 @@ fn loop(shell: campy_wx.Shell) {
     }
     campy_wx.MouseHandle(_, _, _, _) -> loop(shell)
     campy_wx.Mouse(_, _, _, _, _) -> loop(shell)
+    campy_wx.KeyPressed(_) -> loop(shell)
+    campy_wx.Accelerator(_) -> loop(shell)
     campy_wx.Message(_message) -> loop(shell)
     campy_wx.Idle -> loop(shell)
   }

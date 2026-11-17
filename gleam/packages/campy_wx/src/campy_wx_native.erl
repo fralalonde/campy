@@ -5,20 +5,22 @@
     textctrl/3, memo/3, slider/5, gauge/3, picture/3,
     box_sizer/1, add/5, insert/6, detach/2, set_sizer/2,
     menubar/0, menu/0, menuitem/3, append_menu/3, set_menubar/2,
-    toolbar/1, tool/3, realize_toolbar/1,
+    toolbar/1, tool/3, tool_separator/1, realize_toolbar/1,
     statusbar/1, set_status/2,
     notebook/2, page/3, notebook_selection/1, select_page/2,
     tree/2, tree_set/2, tree_selected_key/1,
-    grid/2, grid_set/2, grid_cell/1, grid_number_cell/4, grid_text_cell/3,
-    grid_read_only/4,
+    grid/2, grid_set/2, grid_configure/5, grid_cell/1,
+    grid_number_cell/4, grid_text_cell/3, grid_read_only/4,
     editor/2, editor_set/3, editor_show_end/1,
-    open_dialog/2, save_dialog/3,
+    open_dialog/2, save_dialog/3, show_message/3,
+    set_tooltip/2,
     canvas/2, paint_canvas/4, connect_design/2,
     handles_create/2, handle_place/6, handle_show/2, handle_raise/1,
-    capture/1, release/1,
+    capture/1, release/1, release_capture/0, set_shortcuts/2,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
-    set_items/3, set_enabled/2, set_visible/2, set_background/4, focus/1, raise/1, destroy/1,
+    set_items/3, set_enabled/2, set_visible/2, set_background/4, focus/1,
+    focus_ignoring_children/1, set_editable/2, raise/1, destroy/1, apply_shortcuts/1,
     get_text/1, get_int/2, get_bool/2, get_selection/2,
     now_ms/0, getenv/1
 ]).
@@ -194,6 +196,9 @@ set_items(Ref, <<"choice">>, Items) ->
 set_items(Ref, <<"list">>, Items) ->
     wxListBox:clear(Ref),
     lists:foreach(fun(Item) -> wxListBox:append(Ref, Item) end, Items),
+    %% A filled list box must not auto-select its first row: the Events list
+    %% would otherwise open a handler just because its page became visible.
+    catch wxListBox:setSelection(Ref, -1),
     ok;
 set_items(_Ref, _Kind, _Items) ->
     ok.
@@ -214,6 +219,19 @@ set_background(Ref, R, G, B) ->
 focus(Ref) ->
     wxWindow:setFocus(Ref),
     ok.
+
+focus_ignoring_children(Ref) ->
+    catch wxPanel:setFocusIgnoringChildren(Ref),
+    ok.
+
+set_editable(Ref, Editable) ->
+    catch wxTextCtrl:setEditable(Ref, Editable),
+    ok.
+
+set_tooltip(Ref, Text) ->
+    catch wxWindow:setToolTip(Ref, Text),
+    ok.
+
 
 raise(Ref) ->
     wxWindow:raise(Ref),
@@ -244,10 +262,18 @@ set_menubar(Frame, MenuBar) ->
     ok.
 
 toolbar(Frame) ->
-    wxFrame:createToolBar(Frame, [{style, ?wxTB_TEXT}]).
+    wxFrame:createToolBar(Frame, [
+        {style,
+            ?wxTB_TEXT bor ?wxTB_NOICONS bor ?wxTB_HORZ_LAYOUT bor
+                ?wxTB_FLAT bor ?wxTB_NODIVIDER}
+    ]).
 
 tool(ToolBar, Id, Label) ->
     wxToolBar:addTool(ToolBar, Id, Label, wxBitmap:new({16, 16})),
+    ToolBar.
+
+tool_separator(ToolBar) ->
+    wxToolBar:addSeparator(ToolBar),
     ToolBar.
 
 realize_toolbar(ToolBar) ->
@@ -308,6 +334,37 @@ tree_selected_key(Tree) ->
 grid(Parent, Id) ->
     wxGrid:new(Parent, Id, []).
 
+%% A property grid, not a data sheet: hide wx's row numbers and column letters,
+%% use compact rows, turn off grid lines, and give the label column a fixed
+%% width while the value column fills the remaining client area.
+grid_configure(Grid, ShowLabels, ShowLines, RowHeight, LabelWidth) ->
+    LabelSize =
+        case ShowLabels of
+            true -> 20;
+            false -> 0
+        end,
+    catch wxGrid:setColLabelSize(Grid, LabelSize),
+    catch wxGrid:setRowLabelSize(Grid, LabelSize),
+    catch wxGrid:setDefaultRowSize(Grid, RowHeight, [{resizeExistingRows, true}]),
+    catch wxGrid:enableGridLines(Grid, ShowLines),
+    catch wxGrid:setColMinimalWidth(Grid, 0, 40),
+    catch wxGrid:setColSize(Grid, 0, LabelWidth),
+    catch wxGrid:setColSize(Grid, 1, max(80, LabelWidth)),
+    ok.
+
+grid_fit_value_column(Grid, LabelWidth) ->
+    try
+        {Width, _Height} = wxWindow:getClientSize(Grid),
+        ValueWidth = Width - LabelWidth - 8,
+        case ValueWidth > 80 of
+            true -> wxGrid:setColSize(Grid, 1, ValueWidth);
+            false -> ok
+        end
+    catch
+        _:_ -> ok
+    end,
+    ok.
+
 grid_set(Grid, Rows) ->
     RowCount = length(Rows),
     ColCount = case Rows of
@@ -318,12 +375,11 @@ grid_set(Grid, Rows) ->
         0 -> ok;
         _ ->
             adjust_grid(Grid, RowCount, ColCount),
-            %% The inspector is a compact form, not a data sheet: 24 px rows
-            %% let the two field/value pairs per row fit without scrolling.
-            catch wxGrid:setDefaultRowSize(Grid, 24, [{resizeExistingRows, true}]),
+            catch wxGrid:setDefaultRowSize(Grid, 22, [{resizeExistingRows, true}]),
             wxGrid:beginBatch(Grid),
             set_grid_rows(Grid, Rows, 0),
-            wxGrid:endBatch(Grid)
+            wxGrid:endBatch(Grid),
+            grid_fit_value_column(Grid, 110)
     end,
     ok.
 
@@ -331,17 +387,13 @@ adjust_grid(Grid, RowCount, ColCount) ->
     case {wxGrid:getNumberRows(Grid), wxGrid:getNumberCols(Grid)} of
         {0, 0} ->
             wxGrid:createGrid(Grid, RowCount, ColCount),
-            %% The first row is the field/value header, so wx's own row numbers
-            %% and A/B column letters are noise. Freeing that space keeps the
-            %% inspector compact without scrolling.
+            catch wxGrid:enableEditing(Grid, true),
+            %% Field/value rows: no A/B column letters or 1/2 row numbers.
             catch wxGrid:setColLabelSize(Grid, 0),
             catch wxGrid:setRowLabelSize(Grid, 0),
-            %% Two field/value pairs per row: narrow label columns, wide value
-            %% columns, so the inspector fits without scrolling.
+            catch wxGrid:enableGridLines(Grid, false),
             catch wxGrid:setColSize(Grid, 0, 110),
-            catch wxGrid:setColSize(Grid, 1, 260),
-            catch wxGrid:setColSize(Grid, 2, 110),
-            catch wxGrid:setColSize(Grid, 3, 260);
+            catch wxGrid:setColSize(Grid, 1, 180);
         {OldRows, OldCols} ->
             if
                 RowCount > OldRows ->
@@ -446,6 +498,12 @@ save_dialog(Frame, Wildcard, Default) ->
     wxFileDialog:destroy(Dialog),
     Result.
 
+show_message(Frame, Title, Message) ->
+    Dialog = wxMessageDialog:new(Frame, Message, [{caption, Title}]),
+    _ = wxMessageDialog:showModal(Dialog),
+    wxMessageDialog:destroy(Dialog),
+    ok.
+
 %% Designer canvas
 
 canvas(Parent, Id) ->
@@ -486,46 +544,58 @@ draw_grid(DC, Width, Height, Step) ->
 %% the toggle and collapse the multi-selection back to one control.
 
 connect_design(Ref, Kind) ->
+    %% A design control owns press, motion, and release. GTK's implicit grab
+    %% delivers motion/release to the pressed widget even after the pointer
+    %% leaves it, so a body drag works without capturing the canvas. Capturing
+    %% the canvas from inside a child's press lost the matching release on GTK
+    %% and left every later click routed to the canvas.
     case Kind of
-        <<"canvas">> ->
-            catch wxPanel:connect(Ref, left_down, []),
-            catch wxPanel:connect(Ref, motion, []),
-            catch wxPanel:connect(Ref, left_up, []);
-        <<"panel">> -> catch wxPanel:connect(Ref, left_down, []);
-        <<"group">> -> catch wxPanel:connect(Ref, left_down, []);
-        <<"page">> -> catch wxPanel:connect(Ref, left_down, []);
-        <<"label">> -> catch wxStaticText:connect(Ref, left_down, []);
-        <<"text">> -> catch wxTextCtrl:connect(Ref, left_down, []);
-        <<"memo">> -> catch wxTextCtrl:connect(Ref, left_down, []);
-        <<"slider">> -> catch wxSlider:connect(Ref, left_down, []);
-        <<"progress">> -> catch wxGauge:connect(Ref, left_down, []);
-        <<"picture">> -> catch wxStaticBitmap:connect(Ref, left_down, []);
-        <<"button">> -> catch wxButton:connect(Ref, left_down, []);
-        <<"checkbox">> -> catch wxCheckBox:connect(Ref, left_down, []);
-        <<"radio">> -> catch wxRadioButton:connect(Ref, left_down, []);
-        <<"choice">> -> catch wxChoice:connect(Ref, left_down, []);
-        <<"list">> -> catch wxListBox:connect(Ref, left_down, []);
+        <<"canvas">> -> connect_mouse(wxPanel, Ref);
+        <<"panel">> -> connect_mouse(wxPanel, Ref);
+        <<"group">> -> connect_mouse(wxPanel, Ref);
+        <<"page">> -> connect_mouse(wxPanel, Ref);
+        <<"label">> -> connect_mouse(wxStaticText, Ref);
+        <<"text">> -> connect_mouse(wxTextCtrl, Ref);
+        <<"memo">> -> connect_mouse(wxTextCtrl, Ref);
+        <<"slider">> -> connect_mouse(wxSlider, Ref);
+        <<"progress">> -> connect_mouse(wxGauge, Ref);
+        <<"picture">> -> connect_mouse(wxStaticBitmap, Ref);
+        <<"button">> -> connect_mouse(wxButton, Ref);
+        <<"checkbox">> -> connect_mouse(wxCheckBox, Ref);
+        <<"radio">> -> connect_mouse(wxRadioButton, Ref);
+        <<"choice">> -> connect_mouse(wxChoice, Ref);
+        <<"list">> -> connect_mouse(wxListBox, Ref);
+        <<"tree">> -> connect_mouse(wxTreeCtrl, Ref);
+        <<"grid">> -> connect_mouse(wxGrid, Ref);
+        <<"editor">> -> connect_mouse(wxStyledTextCtrl, Ref);
         _ -> catch wxWindow:connect(Ref, left_down, [])
     end,
     ok.
 
+connect_mouse(Module, Ref) ->
+    catch Module:connect(Ref, left_down, []),
+    catch Module:connect(Ref, motion, []),
+    catch Module:connect(Ref, left_up, []),
+    catch Module:connect(Ref, command_menu_selected, []),
+    ok.
+
 handles_create(Parent, Base) ->
     [create_handle(Parent, Base + Index, Index) || Index <- lists:seq(0, 8)] ++
-        [create_strip(Parent, Base + Index) || Index <- lists:seq(9, 12)].
+        [create_strip(Parent, Base + Index) || Index <- lists:seq(9, 16)].
 
 create_strip(Parent, Id) ->
     Ref = wxMiniFrame:new(Parent, Id, <<"">>, [
         {style, ?wxFRAME_NO_TASKBAR bor ?wxBORDER_NONE bor ?wxSTAY_ON_TOP},
         {size, {2, 2}}
     ]),
-    wxMiniFrame:setBackgroundColour(Ref, {70, 110, 190}),
+    wxMiniFrame:setBackgroundColour(Ref, {45, 110, 220}),
     wxWindow:hide(Ref),
     Ref.
 
 create_handle(Parent, Id, 8) ->
-    mini_handle(Parent, Id, {36, 12}, {196, 72, 60}, ?wxCURSOR_SIZING);
+    mini_handle(Parent, Id, {12, 12}, {45, 110, 220}, ?wxCURSOR_SIZING);
 create_handle(Parent, Id, Role) ->
-    mini_handle(Parent, Id, {12, 12}, {48, 52, 62}, handle_cursor(Role)).
+    mini_handle(Parent, Id, {9, 9}, {45, 110, 220}, handle_cursor(Role)).
 
 mini_handle(Parent, Id, Size, Colour, Cursor) ->
     Ref = wxMiniFrame:new(Parent, Id, <<"">>, [
@@ -549,6 +619,75 @@ connect_handle(Ref) ->
     catch wxMiniFrame:connect(Ref, left_up, []),
     ok.
 
+%% Frame accelerator table. Accelerators are matched before character
+%% generation, so Ctrl+S and Ctrl+1 work even while wxGrid's cell editor has
+%% keyboard focus (char_hook is not delivered in that state). Text-editing
+%% shortcuts are omitted while Code/Source is active so Scintilla keeps them.
+set_shortcuts(Frame, Editing) ->
+    Entries = accelerator_entries(Editing),
+    Table = wxAcceleratorTable:new(length(Entries), Entries),
+    catch wxWindow:setAcceleratorTable(Frame, Table),
+    %% Keep both the table and its entries alive for the window's lifetime.
+    put(campy_accel_table, {Table, Entries}),
+    ok.
+
+%% Apply the current accelerator table to a child as well. wx only consults
+%% the focused window's table, so a native design control must carry the same
+%% table for Ctrl+C/V/Y to reach the frame while it has focus.
+apply_shortcuts(Ref) ->
+    case get(campy_accel_table) of
+        {Table, _Entries} ->
+            catch wxWindow:setAcceleratorTable(Ref, Table),
+            ok;
+        _ -> ok
+    end.
+
+accelerator_entries(Editing) ->
+    Base = [
+        accel(?wxACCEL_CTRL, $S, 9101),
+        accel(?wxACCEL_CTRL, $Q, 9102),
+        accel(?wxACCEL_CTRL, $1, 9111),
+        accel(?wxACCEL_CTRL, $2, 9112),
+        accel(?wxACCEL_CTRL, $3, 9113),
+        accel(0, ?WXK_ESCAPE, 9114)
+    ],
+    case Editing of
+        true -> Base;
+        false -> Base ++ [
+            accel(?wxACCEL_CTRL, $Z, 9103),
+            accel(?wxACCEL_CTRL bor ?wxACCEL_SHIFT, $Z, 9104),
+            accel(?wxACCEL_CTRL, $Y, 9105),
+            accel(?wxACCEL_CTRL, $X, 9106),
+            accel(?wxACCEL_CTRL, $C, 9107),
+            accel(?wxACCEL_CTRL, $V, 9108),
+            accel(?wxACCEL_CTRL, $D, 9109),
+            accel(0, ?WXK_DELETE, 9110)
+        ]
+    end.
+
+accel(Flags, KeyCode, Command) ->
+    wxAcceleratorEntry:new([
+        {flags, Flags},
+        {keyCode, KeyCode},
+        {cmd, Command}
+    ]).
+
+shortcut_action(9101) -> <<"save">>;
+shortcut_action(9102) -> <<"quit">>;
+shortcut_action(9103) -> <<"undo">>;
+shortcut_action(9104) -> <<"redo">>;
+shortcut_action(9105) -> <<"redo">>;
+shortcut_action(9106) -> <<"cut">>;
+shortcut_action(9107) -> <<"copy">>;
+shortcut_action(9108) -> <<"paste">>;
+shortcut_action(9109) -> <<"duplicate">>;
+shortcut_action(9110) -> <<"delete">>;
+shortcut_action(9111) -> <<"form">>;
+shortcut_action(9112) -> <<"code">>;
+shortcut_action(9113) -> <<"source">>;
+shortcut_action(9114) -> <<"escape">>;
+shortcut_action(_) -> false.
+
 capture(Ref) ->
     wxWindow:captureMouse(Ref),
     ok.
@@ -556,6 +695,17 @@ capture(Ref) ->
 release(Ref) ->
     catch wxWindow:releaseMouse(Ref),
     ok.
+
+%% Release whichever window currently owns the GTK mouse grab. A native child
+%% (or a raised mini-frame) can end up as the capture window even after the
+%% canvas looked captured; using wxWindow:getCapture/0 is the reliable path.
+release_capture() ->
+    try wxWindow:getCapture() of
+        undefined -> ok;
+        Ref -> catch wxWindow:releaseMouse(Ref), ok
+    catch
+        _:_ -> ok
+    end.
 
 handle_place(Canvas, Ref, X, Y, Width, Height) ->
     {CX, CY} = wxWindow:getScreenPosition(Canvas),
@@ -577,7 +727,12 @@ handle_raise(Ref) ->
 %% Events
 
 connect(Ref, <<"window">>) ->
-    wxFrame:connect(Ref, close_window, []);
+    wxFrame:connect(Ref, close_window, []),
+    catch wxFrame:connect(Ref, command_menu_selected, []);
+    %% char_hook is intentionally not connected: on this GTK build it consumes
+    %% character events for wxGrid's editor (and fires alongside accelerators,
+    %% double-applying Undo). The accelerator table below is the single
+    %% shortcut path and is rebuilt when Form/Code/Source changes.
 connect(Ref, <<"button">>) ->
     wxButton:connect(Ref, command_button_clicked, []);
 connect(Ref, <<"checkbox">>) ->
@@ -615,6 +770,13 @@ next_message(Timeout) ->
     receive
         {wx, Id, Obj, _UserData, Event} when is_tuple(Event) ->
             case element(1, Event) of
+                wxKey ->
+                    {key_event, KeyCode, Control, Shift, Alt} = key_event(Event),
+                    %% The connection is made with `{skip, true}` so the
+                    %% focused control (Scintilla, a grid editor, ...) still
+                    %% receives normal text input. The app only claims its
+                    %% own shortcuts.
+                    {key_event, KeyCode, Control, Shift, Alt};
                 wxMouse ->
                     Type = atom_to_binary(element(2, Event), utf8),
                     {mouse_event, Id, Type, element(3, Event), element(4, Event),
@@ -628,6 +790,11 @@ next_message(Timeout) ->
                     Text = unicode:characters_to_binary(
                         wxGrid:getCellValue(Obj, Row, Col)),
                     {grid_event, Id, Row, Col, Text};
+                wxCommand ->
+                    case shortcut_action(Id) of
+                        false -> {wx_event, Id, event_type(Event)};
+                        Action -> {shortcut_event, Action}
+                    end;
                 _ ->
                     {wx_event, Id, event_type(Event)}
             end;
@@ -642,6 +809,25 @@ next_message(Timeout) ->
 timeout(Milliseconds) when is_integer(Milliseconds), Milliseconds < 0 -> infinity;
 timeout(Milliseconds) when is_integer(Milliseconds) -> Milliseconds;
 timeout(_) -> infinity.
+
+%% Frame-level `char_hook`: the app sees one normalised key message per press.
+%% Letters are lower-cased; Ctrl/Shift still distinguish the binding.
+key_event(Event) ->
+    Code = element(5, Event),
+    Control = element(6, Event) =:= true,
+    Shift = element(7, Event) =:= true,
+    Alt = element(8, Event) =:= true,
+    {key_event, key_name(Code), Control, Shift, Alt}.
+
+key_name(Code) when Code >= $A, Code =< $Z -> <<(Code + 32)>>;
+key_name(Code) when Code >= $a, Code =< $z -> <<Code>>;
+key_name(Code) when Code >= $0, Code =< $9 -> <<Code>>;
+key_name(8) -> <<"back">>;
+key_name(9) -> <<"tab">>;
+key_name(13) -> <<"enter">>;
+key_name(27) -> <<"escape">>;
+key_name(127) -> <<"delete">>;
+key_name(Code) -> integer_to_binary(Code).
 
 event_type(Event) when is_tuple(Event) ->
     case element(1, Event) of

@@ -2,7 +2,7 @@ import campy_ide_model as model
 import campy_ide_wx
 import campy_project
 import campy_view.{VInt, VText}
-import campy_wx/plan.{TreeItem}
+import campy_wx
 import gleam/list
 import gleam/string
 import gleeunit
@@ -32,13 +32,14 @@ fn project() -> campy_project.Project {
   )
 }
 
-pub fn tree_has_a_project_root_with_modules_test() {
-  let items = campy_ide_wx.tree_items(model.new(project()))
+pub fn navigator_lists_the_project_and_modules_test() {
+  let state = model.new(project())
+  campy_ide_wx.project_items(state) |> should.equal(["Demo"])
+  campy_ide_wx.module_items(state) |> should.equal(["greeter", "notes"])
+  campy_ide_wx.module_index(state) |> should.equal(0)
 
-  let assert [TreeItem(key, label, children)] = items
-  key |> should.equal("project")
-  label |> should.equal("Demo")
-  children |> list.length |> should.equal(2)
+  let notes = model.update(state, model.OpenModule("notes"))
+  campy_ide_wx.module_index(notes) |> should.equal(1)
 }
 
 pub fn inspector_reports_the_active_module_test() {
@@ -46,9 +47,11 @@ pub fn inspector_reports_the_active_module_test() {
 
   rows
   |> should.equal([
-    ["Field", "Value", "Field", "Value"],
-    ["Project", "Demo", "Module", "greeter"],
-    ["Tabs", "1", "History", "0"],
+    ["project", "Demo"],
+    ["module", "greeter"],
+    ["tabs", "1"],
+    ["undo", "0"],
+    ["redo", "0"],
   ])
 }
 
@@ -127,11 +130,14 @@ pub fn inspector_shows_the_parent_of_a_control_test() {
 
   campy_ide_wx.inspector_rows(state)
   |> should.equal([
-    ["Field", "Value", "Field", "Value"],
-    ["id", "ok", "kind", "button"],
-    ["parent", "root", "x", "10"],
-    ["y", "12", "w", "80"],
-    ["h", "30", "text", ""],
+    ["id", "ok"],
+    ["kind", "button"],
+    ["parent", "root"],
+    ["x", "10"],
+    ["y", "12"],
+    ["w", "80"],
+    ["h", "30"],
+    ["text", ""],
   ])
 }
 
@@ -174,11 +180,14 @@ pub fn inspector_reports_resolved_geometry_for_column_children_test() {
 
   campy_ide_wx.inspector_rows(state)
   |> should.equal([
-    ["Field", "Value", "Field", "Value"],
-    ["id", "b", "kind", "label"],
-    ["parent", "root", "x", "0"],
-    ["y", "24", "w", "600"],
-    ["h", "20", "text", "B"],
+    ["id", "b"],
+    ["kind", "label"],
+    ["parent", "root"],
+    ["x", "0"],
+    ["y", "24"],
+    ["w", "600"],
+    ["h", "20"],
+    ["text", "B"],
   ])
 }
 
@@ -237,11 +246,14 @@ pub fn inspector_reports_absolute_geometry_for_nested_controls_test() {
 
   campy_ide_wx.inspector_rows(state_from(view, ["ok"]))
   |> should.equal([
-    ["Field", "Value", "Field", "Value"],
-    ["id", "ok", "kind", "button"],
-    ["parent", "panel", "x", "120"],
-    ["y", "100", "w", "80"],
-    ["h", "30", "text", "Go"],
+    ["id", "ok"],
+    ["kind", "button"],
+    ["parent", "panel"],
+    ["x", "120"],
+    ["y", "100"],
+    ["w", "80"],
+    ["h", "30"],
+    ["text", "Go"],
   ])
 }
 
@@ -254,11 +266,14 @@ pub fn multi_selection_shows_common_values_and_blanks_the_rest_test() {
 
   campy_ide_wx.inspector_rows(state_from(view, ["first", "second"]))
   |> should.equal([
-    ["Field", "Value", "Field", "Value"],
-    ["selected", "2", "kind", "button"],
-    ["parent", "root", "x", ""],
-    ["y", "20", "w", "80"],
-    ["h", "30", "text", ""],
+    ["selected", "2"],
+    ["kind", "button"],
+    ["parent", "root"],
+    ["x", ""],
+    ["y", "20"],
+    ["w", "80"],
+    ["h", "30"],
+    ["text", ""],
   ])
 }
 
@@ -323,4 +338,107 @@ pub fn source_text_changes_when_the_form_changes_test() {
   unchanged |> should.be_false()
   string.contains(after, "Edited in T2.4") |> should.be_true()
   string.contains(after, "Changed") |> should.be_true()
+}
+
+// --- T2.5: shell layout, inspector dock, shortcuts -------------------------
+
+pub fn palette_uses_short_labels_test() {
+  let labels = campy_ide_wx.palette_labels()
+  labels |> list.length |> should.equal(16)
+  labels
+  |> should.equal([
+    "Panel", "Group", "Label", "Button", "Text", "Memo", "Check", "Radio",
+    "Choice", "List", "Slider", "Progress", "Picture", "Tree", "Grid", "Editor",
+  ])
+}
+
+pub fn selection_title_names_the_control_test() {
+  let view = design_form([sized_button("button_1", "Go", 10, 20)])
+  let state = state_from(view, [])
+
+  campy_ide_wx.selection_title(state) |> should.equal("No selection")
+  campy_ide_wx.selection_title(model.select_controls(state, ["root"]))
+  |> should.equal("Window — root")
+  campy_ide_wx.selection_title(model.select_controls(state, ["button_1"]))
+  |> should.equal("button_1 — button")
+  campy_ide_wx.selection_title(
+    model.select_controls(state, ["button_1", "root"]),
+  )
+  |> should.equal("2 selected")
+}
+
+pub fn centre_header_reports_module_and_canvas_test() {
+  let state = state_from(design_form([]), [])
+  campy_ide_wx.centre_header(state)
+  |> should.equal("main    Canvas 600 × 400")
+}
+
+fn key(code: String, control: Bool, shift: Bool) -> campy_wx.Key {
+  campy_wx.Key(code: code, control: control, shift: shift, alt: False)
+}
+
+pub fn shortcuts_map_editing_keys_test() {
+  let state = model.new(project())
+
+  campy_ide_wx.shortcut(state, key("s", True, False))
+  |> should.equal(campy_ide_wx.Save)
+  campy_ide_wx.shortcut(state, key("q", True, False))
+  |> should.equal(campy_ide_wx.Quit)
+  campy_ide_wx.shortcut(state, key("z", True, False))
+  |> should.equal(campy_ide_wx.Undo)
+  campy_ide_wx.shortcut(state, key("z", True, True))
+  |> should.equal(campy_ide_wx.Redo)
+  campy_ide_wx.shortcut(state, key("y", True, False))
+  |> should.equal(campy_ide_wx.Redo)
+  campy_ide_wx.shortcut(state, key("d", True, False))
+  |> should.equal(campy_ide_wx.Duplicate)
+  campy_ide_wx.shortcut(state, key("escape", False, False))
+  |> should.equal(campy_ide_wx.Cancel)
+  campy_ide_wx.shortcut(state, key("2", True, False))
+  |> should.equal(campy_ide_wx.ShowCodePage)
+}
+
+pub fn shortcuts_leave_editor_text_keys_alone_test() {
+  let state = model.new(project()) |> model.update(model.ShowCode)
+
+  campy_ide_wx.shortcut(state, key("z", True, False))
+  |> should.equal(campy_ide_wx.NoShortcut)
+  campy_ide_wx.shortcut(state, key("c", True, False))
+  |> should.equal(campy_ide_wx.NoShortcut)
+  campy_ide_wx.shortcut(state, key("v", True, False))
+  |> should.equal(campy_ide_wx.NoShortcut)
+  campy_ide_wx.shortcut(state, key("s", True, False))
+  |> should.equal(campy_ide_wx.Save)
+  campy_ide_wx.shortcut(state, key("3", True, False))
+  |> should.equal(campy_ide_wx.ShowSourcePage)
+}
+
+pub fn delete_shortcut_requires_a_selection_test() {
+  let state = model.new(project())
+  campy_ide_wx.shortcut(state, key("delete", False, False))
+  |> should.equal(campy_ide_wx.NoShortcut)
+
+  let selected = model.select_controls(state, ["hello"])
+  campy_ide_wx.shortcut(selected, key("delete", False, False))
+  |> should.equal(campy_ide_wx.DeleteControl)
+}
+
+pub fn accelerator_actions_map_to_shortcuts_test() {
+  campy_ide_wx.accelerator_shortcut("save") |> should.equal(campy_ide_wx.Save)
+  campy_ide_wx.accelerator_shortcut("undo") |> should.equal(campy_ide_wx.Undo)
+  campy_ide_wx.accelerator_shortcut("redo") |> should.equal(campy_ide_wx.Redo)
+  campy_ide_wx.accelerator_shortcut("delete")
+  |> should.equal(campy_ide_wx.DeleteControl)
+  campy_ide_wx.accelerator_shortcut("code")
+  |> should.equal(campy_ide_wx.ShowCodePage)
+  campy_ide_wx.accelerator_shortcut("nope")
+  |> should.equal(campy_ide_wx.NoShortcut)
+}
+
+pub fn events_display_has_a_placeholder_first_row_test() {
+  let view = design_form([sized_button("ok", "Go", 10, 10)])
+  campy_ide_wx.events_display(state_from(view, ["ok"]))
+  |> should.equal(["—", "click"])
+  campy_ide_wx.events_display(state_from(view, []))
+  |> should.equal(["—"])
 }

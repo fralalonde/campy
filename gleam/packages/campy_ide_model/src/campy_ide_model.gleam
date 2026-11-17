@@ -63,6 +63,10 @@ pub type Command {
   SetStatus(String)
   ToggleCodeView
   ToggleSourceView
+  ShowForm
+  ShowCode
+  ShowSource
+  ClearConsole
   Arm(String)
   Disarm
   PlaceWidget(kind: String, x: Int, y: Int, w: Int, h: Int)
@@ -217,6 +221,24 @@ pub fn toggle_source_view(state: State) -> State {
     True -> show_form(state)
     False -> show_source(state)
   }
+}
+
+pub fn show_form_page(state: State) -> State {
+  show_form(state)
+}
+
+pub fn show_code_page(state: State) -> State {
+  show_code(state)
+}
+
+pub fn show_source_page(state: State) -> State {
+  show_source(state)
+}
+
+/// Clear the console buffer. This is UI state, not a document edit, so it does
+/// not create an undo entry.
+pub fn clear_console(state: State) -> State {
+  State(..state, console: [])
 }
 
 fn show_form(state: State) -> State {
@@ -1037,6 +1059,10 @@ pub fn update(state: State, command: Command) -> State {
     SetStatus(text) -> set_status(state, text)
     ToggleCodeView -> toggle_code_view(state)
     ToggleSourceView -> toggle_source_view(state)
+    ShowForm -> show_form_page(state)
+    ShowCode -> show_code_page(state)
+    ShowSource -> show_source_page(state)
+    ClearConsole -> clear_console(state)
     Arm(kind) -> arm(state, kind)
     Disarm -> disarm(state)
     PlaceWidget(kind, x, y, w, h) -> place_widget(state, kind, x, y, w, h)
