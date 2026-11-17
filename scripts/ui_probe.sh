@@ -236,3 +236,12 @@ click 109 12
 shot t24-view-menu
 click 135 59
 shot t24-menu-source
+
+# Optional end-to-end persistence check: save the edited project. Run with a
+# throwaway CAMPY_PROJECT so the demo fixture stays clean:
+#   CAMPY_PROJECT=/tmp/opencode/g2-demo CAMPY_PROBE_SAVE=1 scripts/ui_probe.sh xvfb
+if [ "${CAMPY_PROBE_SAVE:-0}" = "1" ]; then
+  click 42 72
+  sleep 1
+  shot saved-project
+fi

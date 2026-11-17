@@ -584,6 +584,12 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   standalone module skeleton. Verified with `scripts/ui_probe.sh xvfb`
   (`t24-source`, `t24-source-end`, `t24-form-edited`, `t24-source-updated`,
   `t24-source-notes`, `t24-view-menu`, `t24-menu-source`).
+- End-to-end persistence check: the probe was run against a throwaway copy of
+  `examples/demo` with `CAMPY_PROBE_SAVE=1`, which clicks Save. The resulting
+  canonical `form.json` contains the placed `panel_1`, its adopted `button_1`
+  with text `Hello T2.3` and parent-relative `x: 121`, and `handlers.gleam`
+  ends with the ABI v2 `button_1_click` stub. Reopening that project with
+  `CAMPY_WX_SMOKE=1` mounts and selects successfully.
 - Bugs found by the probe: read-only Scintilla silently ignores `SCI_SETTEXT`
   (clear read-only around the write), and tree selection arrives as a
   `wxTreeEvent` rather than a `wxCommandEvent`, so module switching never
