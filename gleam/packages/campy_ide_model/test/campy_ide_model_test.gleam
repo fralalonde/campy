@@ -877,3 +877,93 @@ pub fn selected_events_follow_the_single_selection_test() {
   let state = campy_ide_model.select_controls(state, ["btn", "other"])
   campy_ide_model.selected_events(state) |> should.equal([])
 }
+
+pub fn z_order_on_a_free_child_keeps_unrelated_sizers_test() {
+  let root =
+    design_root([
+      control("button", "a", [
+        #("x", VInt(0)),
+        #("y", VInt(0)),
+        #("w", VInt(10)),
+        #("h", VInt(10)),
+      ]),
+      control("button", "b", [
+        #("x", VInt(0)),
+        #("y", VInt(0)),
+        #("w", VInt(10)),
+        #("h", VInt(10)),
+      ]),
+      control("panel", "column", [
+        #("layout", VText("column")),
+        #("border", VInt(4)),
+        #("x", VInt(20)),
+        #("y", VInt(20)),
+        #("w", VInt(100)),
+        #("h", VInt(100)),
+      ]),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["a"]))
+    |> campy_ide_model.update(campy_ide_model.BringToFront)
+
+  campy_view.ids(form_view(state)) |> should.equal(["root", "b", "column", "a"])
+  prop(state, "column", "layout") |> should.equal(Ok(VText("column")))
+  prop(state, "column", "border") |> should.equal(Ok(VInt(4)))
+}
+
+pub fn z_order_of_an_already_front_control_is_a_noop_test() {
+  let root =
+    design_root([
+      control("button", "a", [
+        #("x", VInt(0)),
+        #("y", VInt(0)),
+        #("w", VInt(10)),
+        #("h", VInt(10)),
+      ]),
+      control("panel", "column", [
+        #("layout", VText("column")),
+        #("border", VInt(4)),
+        #("x", VInt(20)),
+        #("y", VInt(20)),
+        #("w", VInt(100)),
+        #("h", VInt(100)),
+      ]),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["column"]))
+    |> campy_ide_model.update(campy_ide_model.BringToFront)
+
+  list.length(state.undo) |> should.equal(0)
+  prop(state, "column", "layout") |> should.equal(Ok(VText("column")))
+  prop(state, "column", "border") |> should.equal(Ok(VInt(4)))
+}
+
+pub fn paste_converts_the_source_origin_into_the_target_parent_test() {
+  let root =
+    design_root([
+      control("button", "source", [
+        #("x", VInt(110)),
+        #("y", VInt(60)),
+        #("w", VInt(40)),
+        #("h", VInt(20)),
+      ]),
+      panel_node("panel", 100, 50, 240, 160),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["source"]))
+    |> campy_ide_model.update(campy_ide_model.CopySelection)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["panel"]))
+    |> campy_ide_model.update(campy_ide_model.Paste)
+
+  parent(state, "button_1") |> should.equal(Some("panel"))
+  prop(state, "button_1", "x") |> should.equal(Ok(VInt(26)))
+  prop(state, "button_1", "y") |> should.equal(Ok(VInt(26)))
+  campy_design.absolute(form_view(state), "button_1")
+  |> should.equal(Some(campy_design.Rect(126, 76, 40, 20)))
+}

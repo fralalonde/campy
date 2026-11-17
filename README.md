@@ -26,7 +26,7 @@ project directory to open another project.
 ## Current state (Phase 2)
 
 - **View layer** (`campy_view`): a declarative node tree, values, patches,
-  structural diff, and canonical JSON documents. 71 tests.
+  structural diff, and canonical JSON documents. 73 tests.
 - **wx renderer** (`campy_wx`): widget table, sizer/free layout, patch
   application that leaves unchanged values alone, event normalization, and
   shell chrome (menus, toolbar, status, notebook, tree, grid, Scintilla,

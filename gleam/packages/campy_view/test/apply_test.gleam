@@ -201,3 +201,12 @@ pub fn combined_edit_reconstructs_test() {
 
   assert_reconstructs(previous, next)
 }
+
+pub fn reparent_across_parents_reconstructs_the_target_test() {
+  let previous =
+    panel("root", [panel("left", []), panel("right", [label("b", "B")])])
+  let next =
+    panel("root", [panel("left", [label("b", "B")]), panel("right", [])])
+
+  assert_reconstructs(previous, next)
+}

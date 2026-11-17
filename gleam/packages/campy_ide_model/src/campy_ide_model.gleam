@@ -12,7 +12,7 @@
 import campy_catalog
 import campy_design
 import campy_project.{type Module, type Project}
-import campy_view.{type Node, type Value}
+import campy_view.{type Node, type Value, VText}
 import gleam/dict
 import gleam/int
 import gleam/list
@@ -558,27 +558,66 @@ fn reorder_selection(
   case active_module(state) {
     Error(error) -> set_status(state, error)
     Ok(module) -> {
-      // Reordering a sizer child changes layout order; freeze first so the
-      // operation restacks the designer's free layout instead of reflowing.
-      let root = campy_design.freeze(module.form.view)
-      let nodes = selected_top(root, state.selection)
+      let nodes = selected_top(module.form.view, state.selection)
+
       case nodes {
         [] -> set_status(state, "Nothing selected")
         _ -> {
-          let view =
-            list.fold(nodes, root, fn(view, node) {
+          // Dry-run the reorder so an already-front/back control is a true
+          // no-op: no freeze, no undo entry, no rewritten props.
+          let dry =
+            list.fold(nodes, module.form.view, fn(view, node) {
               case operation(view, node.id) {
                 Ok(updated) -> updated
                 Error(_) -> view
               }
             })
 
-          state
-          |> commit_view(module, view)
-          |> set_status("Reordered " <> int.to_string(list.length(nodes)))
+          case dry == module.form.view {
+            True -> state
+            False -> {
+              // Only sizer children need materialized geometry; reordering in
+              // a free parent restacks without touching unrelated containers.
+              let root = case
+                list.any(nodes, fn(node) {
+                  parent_uses_sizer(module.form.view, node.id)
+                })
+              {
+                True -> campy_design.freeze(module.form.view)
+                False -> module.form.view
+              }
+
+              let view =
+                list.fold(nodes, root, fn(view, node) {
+                  case operation(view, node.id) {
+                    Ok(updated) -> updated
+                    Error(_) -> view
+                  }
+                })
+
+              state
+              |> commit_view(module, view)
+              |> set_status("Reordered " <> int.to_string(list.length(nodes)))
+            }
+          }
         }
       }
     }
+  }
+}
+
+fn parent_uses_sizer(root: Node, id: String) -> Bool {
+  case campy_design.parent_of(root, id) {
+    Some(parent_id) ->
+      case campy_design.find_node(root, parent_id) {
+        Some(parent) ->
+          case campy_view.prop(parent, "layout") {
+            Ok(VText(layout)) -> layout == "column" || layout == "row"
+            _ -> False
+          }
+        None -> False
+      }
+    None -> False
   }
 }
 

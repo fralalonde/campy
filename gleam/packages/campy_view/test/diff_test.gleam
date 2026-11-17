@@ -2,6 +2,7 @@ import campy_view.{
   Insert, Order, Remove, Replace, SetEvents, SetProps, VInt, VText,
 }
 import campy_view/diff
+import gleam/list
 import gleeunit/should
 
 fn label(id: String, text: String) -> campy_view.Node {
@@ -160,4 +161,17 @@ pub fn props_compare_after_normalization_test() {
     |> campy_view.with_props([#("text", VText("A")), #("w", VInt(1))])
 
   diff.diff(previous, next) |> should.equal([])
+}
+
+pub fn reparent_hoists_remove_before_insert_test() {
+  let previous =
+    panel("root", [panel("left", []), panel("right", [label("b", "B")])])
+  let next =
+    panel("root", [panel("left", [label("b", "B")]), panel("right", [])])
+
+  let patches = diff.diff(previous, next)
+
+  patches
+  |> list.first
+  |> should.equal(Ok(Remove("b")))
 }

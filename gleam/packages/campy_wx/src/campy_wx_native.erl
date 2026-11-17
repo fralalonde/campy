@@ -477,8 +477,9 @@ draw_grid(DC, Width, Height, Step) ->
     ),
     ok.
 
-%% Design-mode input: any click selects; button-like controls report through
-%% their command event, everything else through left_down.
+%% Design-mode input: every widget reports selection through left_down. Command
+%% events are deliberately not connected: on a Ctrl-click they would fire after
+%% the toggle and collapse the multi-selection back to one control.
 
 connect_design(Ref, Kind) ->
     case Kind of
@@ -495,21 +496,11 @@ connect_design(Ref, Kind) ->
         <<"slider">> -> catch wxSlider:connect(Ref, left_down, []);
         <<"progress">> -> catch wxGauge:connect(Ref, left_down, []);
         <<"picture">> -> catch wxStaticBitmap:connect(Ref, left_down, []);
-        <<"button">> ->
-            catch wxButton:connect(Ref, left_down, []),
-            catch wxButton:connect(Ref, command_button_clicked, []);
-        <<"checkbox">> ->
-            catch wxCheckBox:connect(Ref, left_down, []),
-            catch wxCheckBox:connect(Ref, command_checkbox_clicked, []);
-        <<"radio">> ->
-            catch wxRadioButton:connect(Ref, left_down, []),
-            catch wxRadioButton:connect(Ref, command_radiobutton_selected, []);
-        <<"choice">> ->
-            catch wxChoice:connect(Ref, left_down, []),
-            catch wxChoice:connect(Ref, command_choice_selected, []);
-        <<"list">> ->
-            catch wxListBox:connect(Ref, left_down, []),
-            catch wxListBox:connect(Ref, command_listbox_selected, []);
+        <<"button">> -> catch wxButton:connect(Ref, left_down, []);
+        <<"checkbox">> -> catch wxCheckBox:connect(Ref, left_down, []);
+        <<"radio">> -> catch wxRadioButton:connect(Ref, left_down, []);
+        <<"choice">> -> catch wxChoice:connect(Ref, left_down, []);
+        <<"list">> -> catch wxListBox:connect(Ref, left_down, []);
         _ -> catch wxWindow:connect(Ref, left_down, [])
     end,
     ok.

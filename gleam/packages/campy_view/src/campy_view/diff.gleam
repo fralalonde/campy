@@ -24,9 +24,28 @@ pub fn diff(previous: Node, next: Node) -> List(Patch) {
     previous.id == next.id,
     previous.kind == next.kind
   {
-    True, True, True -> diff_node(previous, next)
+    True, True, True -> removals_first(diff_node(previous, next))
     _, _, _ -> [Replace(previous.id, next)]
   }
+}
+
+fn removals_first(patches: List(Patch)) -> List(Patch) {
+  let removals =
+    list.filter(patches, fn(patch) {
+      case patch {
+        Remove(_) -> True
+        _ -> False
+      }
+    })
+  let rest =
+    list.filter(patches, fn(patch) {
+      case patch {
+        Remove(_) -> False
+        _ -> True
+      }
+    })
+
+  list.append(removals, rest)
 }
 
 fn diff_node(previous: Node, next: Node) -> List(Patch) {

@@ -355,7 +355,7 @@ fn attach(
             Some(sizer) ->
               native.insert(
                 sizer,
-                sizer_index(shell, parent),
+                sizer_index_at(shell, parent, index),
                 child.ref,
                 parent.border,
                 True,
@@ -373,10 +373,13 @@ fn attach(
   }
 }
 
-/// Number of already-attached layout children; chrome (menus, toolbar, status,
-/// pages) never occupies a sizer slot, so raw child indexes are wrong.
-fn sizer_index(shell: Shell, parent: Widget) -> Int {
-  list.fold(parent.children, 0, fn(count, id) {
+/// Sizer position for a document child index. Chrome (menus, toolbar, status,
+/// pages) never occupies a sizer slot, so count only layout children before
+/// `index`; a pure insert in the middle must not be appended.
+fn sizer_index_at(shell: Shell, parent: Widget, index: Int) -> Int {
+  parent.children
+  |> list.take(int.max(0, index))
+  |> list.fold(0, fn(count, id) {
     case get_widget(shell, id) {
       Ok(child) ->
         case is_chrome(child.kind) {
@@ -386,6 +389,13 @@ fn sizer_index(shell: Shell, parent: Widget) -> Int {
       Error(_) -> count
     }
   })
+}
+
+fn is_layout_child(shell: Shell, id: String) -> Bool {
+  case get_widget(shell, id) {
+    Ok(child) -> !is_chrome(child.kind)
+    Error(_) -> False
+  }
 }
 
 fn is_chrome(kind: String) -> Bool {
@@ -620,7 +630,11 @@ fn restack(shell: Shell, parent_id: String) -> Shell {
         None -> {
           list.each(parent.children, fn(id) {
             case get_widget(shell, id) {
-              Ok(child) -> native.raise(child.ref)
+              Ok(child) ->
+                case is_chrome(child.kind) {
+                  True -> Nil
+                  False -> native.raise(child.ref)
+                }
               Error(_) -> Nil
             }
           })
@@ -643,13 +657,15 @@ fn apply_order(
 
   case parent.sizer {
     Some(sizer) -> {
-      list.each(parent.children, fn(id) {
+      let layout_ids = list.filter(ids, fn(id) { is_layout_child(shell, id) })
+
+      list.each(layout_ids, fn(id) {
         case get_widget(shell, id) {
           Ok(child) -> native.detach(sizer, child.ref)
           Error(_) -> Nil
         }
       })
-      list.index_map(ids, fn(id, index) {
+      list.index_map(layout_ids, fn(id, index) {
         case get_widget(shell, id) {
           Ok(child) ->
             native.insert(
@@ -668,7 +684,11 @@ fn apply_order(
     None ->
       list.each(ids, fn(id) {
         case get_widget(shell, id) {
-          Ok(child) -> native.raise(child.ref)
+          Ok(child) ->
+            case is_chrome(child.kind) {
+              True -> Nil
+              False -> native.raise(child.ref)
+            }
           Error(_) -> Nil
         }
       })

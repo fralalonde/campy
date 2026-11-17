@@ -435,30 +435,38 @@ fn move_reparent(
   previews: List(#(String, #(Int, Int, Int, Int))),
 ) -> Option(#(String, String)) {
   case drag {
-    MoveDrag([#(id, _)], _, _) ->
+    MoveDrag([#(id, original)], _, _) ->
       case list.find(previews, fn(preview) { preview.0 == id }) {
         Error(Nil) -> None
-        Ok(#(_, #(x, y, w, h))) ->
-          case model.active_module(state) {
-            Error(_) -> None
-            Ok(module) -> {
-              let layout = campy_design.resolve(module.form.view)
-              let current = campy_design.parent_of(module.form.view, id)
-              let target =
-                campy_design.container_for_drop(
-                  module.form.view,
-                  layout,
-                  x + w / 2,
-                  y + h / 2,
-                  Some(id),
-                )
-              case target {
-                None -> None
-                Some(placed) ->
-                  case current {
-                    Some(parent) if parent == placed.id -> None
-                    _ -> Some(#(id, placed.id))
+        Ok(#(_, preview)) ->
+          // A click on the grip without movement must not reparent or freeze,
+          // even if the control's center happens to sit over a container.
+          case preview == original {
+            True -> None
+            False -> {
+              let #(x, y, w, h) = preview
+              case model.active_module(state) {
+                Error(_) -> None
+                Ok(module) -> {
+                  let layout = campy_design.resolve(module.form.view)
+                  let current = campy_design.parent_of(module.form.view, id)
+                  let target =
+                    campy_design.container_for_drop(
+                      module.form.view,
+                      layout,
+                      x + w / 2,
+                      y + h / 2,
+                      Some(id),
+                    )
+                  case target {
+                    None -> None
+                    Some(placed) ->
+                      case current {
+                        Some(parent) if parent == placed.id -> None
+                        _ -> Some(#(id, placed.id))
+                      }
                   }
+                }
               }
             }
           }
@@ -919,12 +927,16 @@ fn typed_grid_editors(
                   value_col,
                 )
             }
+            let editable = case label {
+              "x" | "y" | "w" | "h" | "text" -> True
+              _ -> False
+            }
             campy_wx.set_grid_read_only(
               shell,
               "inspector",
               index,
               value_col,
-              read_only || index == 0,
+              read_only || index == 0 || !editable,
             )
           }
           _ -> Nil

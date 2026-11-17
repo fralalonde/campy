@@ -25,8 +25,8 @@ it. Option 2 (native children + selection chrome) is implemented on wx.
 **Current position (2026-11-17).**
 - M1 complete (gate G1 passed). **T2.1, T2.2 and T2.3 complete and verified
   under Xvfb.**
-- 221 tests green: `campy_view` 71, `campy_wx` 14, `campy_project` 13,
-  `campy_ide_model` 45, `campy_design` 31, `campy_catalog` 9,
+- 226 tests green: `campy_view` 73, `campy_wx` 14, `campy_project` 13,
+  `campy_ide_model` 48, `campy_design` 31, `campy_catalog` 9,
   `campy_manifest` 27, `campy_ide_wx` 11.
 - `just check` is green headlessly. On this Fedora 46 host, OTP 28's crypto NIF
   no longer loads against the system OpenSSL (missing `EVP_sm4_cbc`); run
@@ -478,14 +478,17 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   5. Z-order via child order: Bring to front / Send to back.
   6. Every command ends in `campy_ide_model.commit`, so each gesture is one
      undo entry. Placement, paste, and duplicate select the new controls.
-  7. Audit fixes: removals are applied before inserts globally (a reparent
-     re-inserts the same id, and the old widget must be gone first); clipboard
+  7. Audit fixes: `campy_view.diff` hoists every `Remove` to the front of the
+     batch, so a cross-parent move (remove old id, insert same id) is safe for
+     any applier, and the wx applier also partitions removals first; clipboard
      entries carry canvas-absolute rects and paste converts/clamps them into the
-     target container; unchanged drags do not freeze or record undo; Ctrl-click
-     works on native widgets, not only canvas fall-through; inserted siblings
-     are re-raised in document order; z-order freezes sizer forms first; the
-     inspector reports resolved absolute geometry; switching modules disarms
-     placement.
+     target container; unchanged drags and a zero-delta grip click do not
+     reparent, freeze, or record undo; Ctrl-click works on native widgets and
+     design mode no longer connects command events that would collapse the
+     toggle; inserted siblings are re-raised in document order (sizer inserts
+     use the document index); z-order freezes only when the reordered parent is
+     a sizer and is a no-op when already front/back; the inspector reports
+     resolved absolute geometry; switching modules disarms placement.
 - Acceptance met: add controls, adopt into a container, move a control to
   another container/root, bring/send, duplicate, delete, and undo each step.
 - Verified with `scripts/ui_probe.sh xvfb`: arm Panel, drag-place it, place a
@@ -498,7 +501,7 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 
 ### T2.3 — Inspector and events — done
 
-- Depends: T2.2 · Size: M · Done (2026-11-17; 221 tests).
+- Depends: T2.2 · Size: M · Done (2026-11-17; 226 tests).
 - Delivered:
   1. The inspector is a compact two-field/value-pairs-per-row grid (rather than
      one field per row) so all fields stay visible in the fixed 170 px pane
@@ -519,7 +522,9 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
      `campy_project.handler_name` and scrolls it into view. `handler_exists` is
      a `pub fn <name>(` substring check.
   5. `campy_wx` gained `set_items` for list/choice fills, grid editor helpers,
-     and `editor_show_end`; `campy_design.set_prop`/`set_node_prop` are public.
+     and `scroll_editor_to_end`; `campy_design.set_prop`/`set_node_prop` are
+     public. Only x/y/w/h/text value cells are editable; identity, kind,
+     parent, and summary cells are read-only.
 - Acceptance met: edited a geometry cell (x 477→500) and a text cell
   (`Hello T2.3`) through the inspector; the canvas updated and undo advanced;
   clicking the button's `click` event appended `button_1_click` and opened the
