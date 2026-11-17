@@ -530,7 +530,28 @@ fn geometry_applies(shell: Shell, widget: Widget) -> Bool {
 
 pub fn apply(shell: Shell, patches: List(Patch)) -> Result(Shell, String) {
   native.freeze(shell.frame)
-  let result = list.try_fold(patches, shell, apply_patch)
+  // A reparent moves a node by removing and re-inserting the same id. If the
+  // insertion parent comes first in the patch stream, the old widget would be
+  // re-registered under that id and the later Remove would destroy the new
+  // one. Apply every removal first; ids are unique, so this is safe.
+  let removals =
+    list.filter(patches, fn(patch) {
+      case patch {
+        Remove(_) -> True
+        _ -> False
+      }
+    })
+  let updates =
+    list.filter(patches, fn(patch) {
+      case patch {
+        Remove(_) -> False
+        _ -> True
+      }
+    })
+  let result =
+    result.try(list.try_fold(removals, shell, apply_patch), fn(shell) {
+      list.try_fold(updates, shell, apply_patch)
+    })
   native.thaw(shell.frame)
   native.layout(shell.frame)
   result
@@ -560,7 +581,7 @@ fn apply_patch(shell: Shell, patch: Patch) -> Result(Shell, String) {
       )
     Insert(parent_id, index, node) ->
       case create_node(shell, node, parent_id, index) {
-        Ok(#(shell, _widget)) -> Ok(shell)
+        Ok(#(shell, _widget)) -> Ok(restack(shell, parent_id))
         Error(error) -> Error(error)
       }
     Remove(id) -> Ok(destroy_subtree(shell, id))
@@ -579,9 +600,31 @@ fn apply_patch(shell: Shell, patch: Patch) -> Result(Shell, String) {
           }
           let shell = destroy_subtree(shell, id)
           case create_node(shell, node, parent_id, index) {
-            Ok(#(shell, _widget)) -> Ok(shell)
+            Ok(#(shell, _widget)) -> Ok(restack(shell, parent_id))
             Error(error) -> Error(error)
           }
+        }
+      }
+  }
+}
+
+/// Re-raise a free parent's children in document order. `attach` raises the
+/// newest child, which is wrong for an insert in the middle of a free layout:
+/// hit-testing follows document order, so painting must too.
+fn restack(shell: Shell, parent_id: String) -> Shell {
+  case get_widget(shell, parent_id) {
+    Error(_) -> shell
+    Ok(parent) ->
+      case parent.sizer {
+        Some(_) -> shell
+        None -> {
+          list.each(parent.children, fn(id) {
+            case get_widget(shell, id) {
+              Ok(child) -> native.raise(child.ref)
+              Error(_) -> Nil
+            }
+          })
+          shell
         }
       }
   }

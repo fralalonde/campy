@@ -259,7 +259,10 @@ fn handle_design_mouse(
               }
             _ -> {
               let previous = state
-              let state = select_control(state, id, "select")
+              let state = case control {
+                True -> toggle_widget_selection(state, id)
+                False -> select_control(state, id, "select")
+              }
               refresh(shell, Some(previous), state)
               loop(shell, state, current, dir, NoDrag)
             }
@@ -636,6 +639,17 @@ fn select_or_log(state: model.State, id: String, key: String) -> model.State {
   }
 }
 
+fn toggle_widget_selection(state: model.State, id: String) -> model.State {
+  case model.active_module(state) {
+    Error(_) -> state
+    Ok(module) ->
+      case campy_design.find_node(module.form.view, id) {
+        Some(_) -> toggle_selection(state, id)
+        None -> state
+      }
+  }
+}
+
 fn select_control(state: model.State, id: String, key: String) -> model.State {
   case model.active_module(state) {
     Ok(module) ->
@@ -818,17 +832,23 @@ fn control_rows(state: model.State, id: String) -> List(List(String)) {
     Ok(module) ->
       case campy_design.find_node(module.form.view, id) {
         None -> summary_rows(state)
-        Some(node) -> [
-          ["Field", "Value"],
-          ["id", id],
-          ["kind", node.kind],
-          ["parent", parent_label(module.form.view, id)],
-          ["x", int.to_string(campy_design.int_prop(node, "x", 0))],
-          ["y", int.to_string(campy_design.int_prop(node, "y", 0))],
-          ["w", int.to_string(campy_design.int_prop(node, "w", 0))],
-          ["h", int.to_string(campy_design.int_prop(node, "h", 0))],
-          ["text", text_of(node)],
-        ]
+        Some(node) -> {
+          let rect = case campy_design.absolute(module.form.view, id) {
+            Some(rect) -> rect
+            None -> campy_design.Rect(0, 0, 0, 0)
+          }
+          [
+            ["Field", "Value"],
+            ["id", id],
+            ["kind", node.kind],
+            ["parent", parent_label(module.form.view, id)],
+            ["x", int.to_string(rect.x)],
+            ["y", int.to_string(rect.y)],
+            ["w", int.to_string(rect.w)],
+            ["h", int.to_string(rect.h)],
+            ["text", text_of(node)],
+          ]
+        }
       }
   }
 }

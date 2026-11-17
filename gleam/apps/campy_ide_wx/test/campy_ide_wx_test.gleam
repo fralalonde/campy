@@ -139,3 +139,54 @@ pub fn inspector_shows_the_parent_of_a_control_test() {
     ["text", ""],
   ])
 }
+
+pub fn inspector_reports_resolved_geometry_for_column_children_test() {
+  let view =
+    campy_view.node("form", "root")
+    |> campy_view.with_props([
+      #("w", campy_view.VInt(600)),
+      #("h", campy_view.VInt(400)),
+      #("layout", VText("column")),
+    ])
+    |> campy_view.with_children([
+      campy_view.node("label", "a")
+        |> campy_view.with_props([
+          #("h", campy_view.VInt(20)),
+          #("text", VText("A")),
+        ]),
+      campy_view.node("label", "b")
+        |> campy_view.with_props([
+          #("h", campy_view.VInt(20)),
+          #("text", VText("B")),
+        ]),
+    ])
+
+  let state =
+    model.new(
+      campy_project.Project(
+        title: "Demo",
+        modules: [
+          campy_project.Module(
+            slug: "main",
+            form: campy_view.Document(schema: 1, view: view, extra: []),
+            handlers: "",
+          ),
+        ],
+        extra: [],
+      ),
+    )
+    |> model.select_controls(["b"])
+
+  campy_ide_wx.inspector_rows(state)
+  |> should.equal([
+    ["Field", "Value"],
+    ["id", "b"],
+    ["kind", "label"],
+    ["parent", "root"],
+    ["x", "0"],
+    ["y", "24"],
+    ["w", "600"],
+    ["h", "20"],
+    ["text", "B"],
+  ])
+}

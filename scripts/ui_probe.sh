@@ -138,3 +138,28 @@ shot moving-out-of-panel
 xdotool mouseup 1
 sleep 1
 shot moved-out-of-panel
+# Ctrl-click a native widget (button) while the panel is selected. This is the
+# path that used to ignore the modifier because the click did not fall through
+# to the canvas.
+click 670 400
+shot selected-panel-again
+xdotool keydown ctrl
+xdotool mousemove --window "$win" 520 350 click 1
+xdotool keyup ctrl
+sleep 1
+shot ctrl-widget-select
+# Move the button back into the panel. The diff inserts into panel_1 before
+# removing the root-level button; removals must be applied first or the old
+# widget is destroyed under the new id.
+click 520 350
+xdotool mousemove 942 512 mousedown 1
+xdotool mousemove 1140 525
+sleep 1
+shot reparent-into-earlier-sibling
+xdotool mouseup 1
+sleep 1
+shot reparented-into-earlier-sibling
+# It must still be selectable (not a ghost).
+xdotool mousemove 1130 527 click 1
+sleep 1
+shot reparented-widget-alive

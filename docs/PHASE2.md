@@ -25,9 +25,9 @@ it. Option 2 (native children + selection chrome) is implemented on wx.
 **Current position (2026-11-17).**
 - M1 complete (gate G1 passed). **T2.1 and T2.2 complete and verified under
   Xvfb.**
-- 202 tests green: `campy_view` 71, `campy_wx` 14, `campy_project` 13,
-  `campy_ide_model` 30, `campy_design` 31, `campy_catalog` 9,
-  `campy_manifest` 27, `campy_ide_wx` 7.
+- 208 tests green: `campy_view` 71, `campy_wx` 14, `campy_project` 13,
+  `campy_ide_model` 35, `campy_design` 31, `campy_catalog` 9,
+  `campy_manifest` 27, `campy_ide_wx` 8.
 - `just check` is green headlessly. On this Fedora 46 host, OTP 28's crypto NIF
   no longer loads against the system OpenSSL (missing `EVP_sm4_cbc`); run
   `LD_LIBRARY_PATH=<compatible OpenSSL 3 dir> just check` until OTP is rebuilt.
@@ -463,6 +463,14 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   5. Z-order via child order: Bring to front / Send to back.
   6. Every command ends in `campy_ide_model.commit`, so each gesture is one
      undo entry. Placement, paste, and duplicate select the new controls.
+  7. Audit fixes: removals are applied before inserts globally (a reparent
+     re-inserts the same id, and the old widget must be gone first); clipboard
+     entries carry canvas-absolute rects and paste converts/clamps them into the
+     target container; unchanged drags do not freeze or record undo; Ctrl-click
+     works on native widgets, not only canvas fall-through; inserted siblings
+     are re-raised in document order; z-order freezes sizer forms first; the
+     inspector reports resolved absolute geometry; switching modules disarms
+     placement.
 - Acceptance met: add controls, adopt into a container, move a control to
   another container/root, bring/send, duplicate, delete, and undo each step.
 - Verified with `scripts/ui_probe.sh xvfb`: arm Panel, drag-place it, place a

@@ -12,7 +12,7 @@
 import campy_catalog
 import campy_design
 import campy_project.{type Module, type Project}
-import campy_view.{type Node, VInt}
+import campy_view.{type Node}
 import gleam/dict
 import gleam/int
 import gleam/list
@@ -35,13 +35,18 @@ pub type State {
     redo: List(Project),
     status: String,
     code_view: Bool,
-    /// Copied subtrees, in selection order. Copies are cloned again on paste so
-    /// pasting twice does not create duplicate ids.
-    clipboard: List(Node),
+    /// Copied subtrees with their canvas-absolute rectangles, in selection
+    /// order. Copies are cloned again on paste so pasting twice does not
+    /// create duplicate ids; the rect keeps sizer/aligned children placeable.
+    clipboard: List(ClipboardItem),
     /// Palette kind armed for placement, if any. UI intent, not a document
     /// field; placing a control disarms it.
     armed: Option(String),
   )
+}
+
+pub type ClipboardItem {
+  ClipboardItem(node: Node, rect: campy_design.Rect)
 }
 
 pub type Command {
@@ -104,7 +109,15 @@ pub fn open_module(state: State, slug: String) -> Result(State, String) {
     False -> list.append(state.open_tabs, [slug])
   }
 
-  Ok(State(..state, open_tabs: open_tabs, active: Some(slug), selection: []))
+  Ok(
+    State(
+      ..state,
+      open_tabs: open_tabs,
+      active: Some(slug),
+      selection: [],
+      armed: None,
+    ),
+  )
 }
 
 pub fn close_module(state: State, slug: String) -> State {
@@ -119,7 +132,13 @@ pub fn close_module(state: State, slug: String) -> State {
     _ -> state.active
   }
 
-  State(..state, open_tabs: open_tabs, active: active, selection: [])
+  State(
+    ..state,
+    open_tabs: open_tabs,
+    active: active,
+    selection: [],
+    armed: None,
+  )
 }
 
 pub fn select_controls(state: State, ids: List(String)) -> State {
@@ -316,12 +335,12 @@ pub fn copy_selection(state: State) -> State {
   case active_module(state) {
     Error(error) -> set_status(state, error)
     Ok(module) -> {
-      let nodes = selected_top(module.form.view, state.selection)
-      case nodes {
+      let items = clipboard_items(module.form.view, state.selection)
+      case items {
         [] -> set_status(state, "Nothing selected")
         _ ->
-          State(..state, clipboard: nodes)
-          |> set_status("Copied " <> int.to_string(list.length(nodes)))
+          State(..state, clipboard: items)
+          |> set_status("Copied " <> int.to_string(list.length(items)))
       }
     }
   }
@@ -333,12 +352,12 @@ pub fn cut_selection(state: State) -> State {
   case active_module(state) {
     Error(error) -> set_status(state, error)
     Ok(module) -> {
-      let nodes = selected_top(module.form.view, state.selection)
-      case nodes {
+      let items = clipboard_items(module.form.view, state.selection)
+      case items {
         [] -> set_status(state, "Nothing selected")
         _ -> {
-          let count = int.to_string(list.length(nodes))
-          State(..state, clipboard: nodes)
+          let count = int.to_string(list.length(items))
+          State(..state, clipboard: items)
           |> delete_selection()
           |> set_status("Cut " <> count)
         }
@@ -386,6 +405,8 @@ pub fn paste(state: State) -> State {
         Ok(module) -> {
           let root = campy_design.freeze(module.form.view)
           let #(parent_id, start) = paste_target(root, state.selection)
+          let layout = campy_design.resolve(root)
+          let #(ox, oy, ow, oh) = parent_frame(layout, parent_id)
 
           let #(view, ids, _existing, _next) =
             list.fold(
@@ -393,8 +414,13 @@ pub fn paste(state: State) -> State {
               #(root, [], campy_view.ids(root), start),
               fn(acc, original) {
                 let #(view, ids, existing, next) = acc
-                let #(clone, existing) = clone_tree(original, existing)
-                let clone = offset_origin(clone, 16)
+                let #(clone, existing) = clone_tree(original.node, existing)
+                let clone =
+                  campy_design.set_rect(
+                    clone,
+                    clone.id,
+                    paste_rect(original.rect, ox, oy, ow, oh),
+                  )
                 let index =
                   int.min(next, campy_design.child_count(view, parent_id))
 
@@ -453,6 +479,7 @@ pub fn duplicate_selection(state: State) -> State {
     Error(error) -> set_status(state, error)
     Ok(module) -> {
       let root = campy_design.freeze(module.form.view)
+      let layout = campy_design.resolve(root)
       let nodes = selected_top(root, state.selection)
 
       case nodes {
@@ -465,7 +492,6 @@ pub fn duplicate_selection(state: State) -> State {
               fn(acc, original) {
                 let #(view, ids, existing) = acc
                 let #(clone, existing) = clone_tree(original, existing)
-                let clone = offset_origin(clone, 16)
 
                 let #(parent, index) = case
                   campy_design.parent_of(view, original.id)
@@ -477,6 +503,24 @@ pub fn duplicate_selection(state: State) -> State {
                     }
                   None -> root_target(view)
                 }
+
+                let source = case campy_design.placed(layout, original.id) {
+                  Some(placed) -> placed.rect
+                  None ->
+                    campy_design.Rect(
+                      0,
+                      0,
+                      campy_design.default_w(original.kind),
+                      campy_design.default_h(original.kind),
+                    )
+                }
+                let #(ox, oy, ow, oh) = parent_frame(layout, parent)
+                let clone =
+                  campy_design.set_rect(
+                    clone,
+                    clone.id,
+                    paste_rect(source, ox, oy, ow, oh),
+                  )
 
                 case campy_design.insert_child(view, parent, index, clone) {
                   Ok(view) -> #(view, list.append(ids, [clone.id]), existing)
@@ -510,12 +554,15 @@ fn reorder_selection(
   case active_module(state) {
     Error(error) -> set_status(state, error)
     Ok(module) -> {
-      let nodes = selected_top(module.form.view, state.selection)
+      // Reordering a sizer child changes layout order; freeze first so the
+      // operation restacks the designer's free layout instead of reflowing.
+      let root = campy_design.freeze(module.form.view)
+      let nodes = selected_top(root, state.selection)
       case nodes {
         [] -> set_status(state, "Nothing selected")
         _ -> {
           let view =
-            list.fold(nodes, module.form.view, fn(view, node) {
+            list.fold(nodes, root, fn(view, node) {
               case operation(view, node.id) {
                 Ok(updated) -> updated
                 Error(_) -> view
@@ -531,6 +578,28 @@ fn reorder_selection(
   }
 }
 
+/// True when every committed rectangle already matches the resolved document.
+/// A click on a handle without moving must not freeze a sizer form or create an
+/// undo entry.
+fn geometry_unchanged(
+  state: State,
+  items: List(#(String, campy_design.Rect)),
+) -> Bool {
+  case active_module(state) {
+    Error(_) -> True
+    Ok(module) -> {
+      let layout = campy_design.resolve(module.form.view)
+      list.all(items, fn(item) {
+        let #(id, rect) = item
+        case campy_design.placed(layout, id) {
+          Some(placed) -> placed.rect == rect
+          None -> False
+        }
+      })
+    }
+  }
+}
+
 /// Commit absolute rectangles for a finished drag. `reparent` carries
 /// `#(control, new_container)` when a single move crossed a container edge;
 /// the absolute rect is applied after the move, so the control stays exactly
@@ -540,57 +609,66 @@ pub fn commit_geometry(
   items: List(#(String, campy_design.Rect)),
   reparent: Option(#(String, String)),
 ) -> State {
-  case active_module(state) {
-    Error(error) -> set_status(state, error)
-    Ok(module) -> {
-      let frozen = campy_design.freeze(module.form.view)
-      let message = case reparent {
-        None -> "Moved " <> int.to_string(list.length(items))
-        Some(#(id, parent)) -> "Moved " <> id <> " to " <> parent
-      }
+  let unchanged = case reparent {
+    None -> geometry_unchanged(state, items)
+    Some(_) -> False
+  }
 
-      case reparent {
-        None -> {
-          // Resolve once, then store parent-relative rectangles. If a parent
-          // is also moving, use its previewed absolute origin; otherwise use
-          // the pre-edit frame. A group move keeps relative positions stable
-          // even when a container and a child are both in the selection.
-          let layout = campy_design.resolve(frozen)
-          let desired = dict.from_list(items)
-          let view =
-            list.fold(items, frozen, fn(view, item) {
-              let #(id, rect) = item
-              let #(ox, oy) = parent_origin_for(layout, desired, id)
-              campy_design.set_rect(
-                view,
-                id,
-                campy_design.Rect(
-                  x: rect.x - ox,
-                  y: rect.y - oy,
-                  w: rect.w,
-                  h: rect.h,
-                ),
-              )
-            })
-
-          commit_view(state, module, view) |> set_status(message)
-        }
-        Some(#(id, parent)) -> {
-          let view = case campy_design.reparent(frozen, id, parent) {
-            Ok(updated) -> updated
-            Error(_) -> frozen
+  case unchanged {
+    True -> state
+    False ->
+      case active_module(state) {
+        Error(error) -> set_status(state, error)
+        Ok(module) -> {
+          let frozen = campy_design.freeze(module.form.view)
+          let message = case reparent {
+            None -> "Moved " <> int.to_string(list.length(items))
+            Some(#(id, parent)) -> "Moved " <> id <> " to " <> parent
           }
 
-          let view =
-            list.fold(items, view, fn(view, item) {
-              let #(id, rect) = item
-              campy_design.set_absolute_rect(view, id, rect)
-            })
+          case reparent {
+            None -> {
+              // Resolve once, then store parent-relative rectangles. If a parent
+              // is also moving, use its previewed absolute origin; otherwise use
+              // the pre-edit frame. A group move keeps relative positions stable
+              // even when a container and a child are both in the selection.
+              let layout = campy_design.resolve(frozen)
+              let desired = dict.from_list(items)
+              let view =
+                list.fold(items, frozen, fn(view, item) {
+                  let #(id, rect) = item
+                  let #(ox, oy) = parent_origin_for(layout, desired, id)
+                  campy_design.set_rect(
+                    view,
+                    id,
+                    campy_design.Rect(
+                      x: rect.x - ox,
+                      y: rect.y - oy,
+                      w: rect.w,
+                      h: rect.h,
+                    ),
+                  )
+                })
 
-          commit_view(state, module, view) |> set_status(message)
+              commit_view(state, module, view) |> set_status(message)
+            }
+            Some(#(id, parent)) -> {
+              let view = case campy_design.reparent(frozen, id, parent) {
+                Ok(updated) -> updated
+                Error(_) -> frozen
+              }
+
+              let view =
+                list.fold(items, view, fn(view, item) {
+                  let #(id, rect) = item
+                  campy_design.set_absolute_rect(view, id, rect)
+                })
+
+              commit_view(state, module, view) |> set_status(message)
+            }
+          }
         }
       }
-    }
   }
 }
 
@@ -676,18 +754,59 @@ fn parent_origin_for(
   }
 }
 
-fn offset_origin(node: Node, amount: Int) -> Node {
-  let x = int.max(0, campy_design.int_prop(node, "x", 0) + amount)
-  let y = int.max(0, campy_design.int_prop(node, "y", 0) + amount)
+fn clipboard_items(root: Node, selection: List(String)) -> List(ClipboardItem) {
+  let layout = campy_design.resolve(root)
 
-  node
-  |> upsert("x", VInt(x))
-  |> upsert("y", VInt(y))
+  list.map(selected_top(root, selection), fn(node) {
+    let rect = case campy_design.placed(layout, node.id) {
+      Some(placed) -> placed.rect
+      None ->
+        campy_design.Rect(
+          0,
+          0,
+          campy_design.default_w(node.kind),
+          campy_design.default_h(node.kind),
+        )
+    }
+    ClipboardItem(node: node, rect: rect)
+  })
 }
 
-fn upsert(node: Node, name: String, value: campy_view.Value) -> Node {
-  let props = list.filter(node.props, fn(prop) { prop.0 != name })
-  campy_view.with_props(node, list.append(props, [#(name, value)]))
+fn parent_frame(
+  layout: campy_design.Layout,
+  parent_id: String,
+) -> #(Int, Int, Int, Int) {
+  case campy_design.placed(layout, parent_id) {
+    Some(placed) -> #(
+      placed.rect.x,
+      placed.rect.y,
+      placed.rect.w,
+      placed.rect.h,
+    )
+    None -> #(0, 0, 640, 480)
+  }
+}
+
+/// Offset a copied control by 16 px, convert to the target parent's space, and
+/// keep it inside that parent so a paste into a small container is visible.
+fn paste_rect(
+  source: campy_design.Rect,
+  ox: Int,
+  oy: Int,
+  ow: Int,
+  oh: Int,
+) -> campy_design.Rect {
+  let x = source.x + 16 - ox
+  let y = source.y + 16 - oy
+  let max_x = int.max(0, ow - source.w)
+  let max_y = int.max(0, oh - source.h)
+
+  campy_design.Rect(
+    x: int.max(0, int.min(x, max_x)),
+    y: int.max(0, int.min(y, max_y)),
+    w: source.w,
+    h: source.h,
+  )
 }
 
 pub fn update(state: State, command: Command) -> State {

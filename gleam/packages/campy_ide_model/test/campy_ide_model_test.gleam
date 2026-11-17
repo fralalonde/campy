@@ -586,3 +586,111 @@ pub fn group_move_of_a_container_and_child_keeps_relative_geometry_test() {
   campy_design.absolute(form_view(state), "inside")
   |> should.equal(Some(campy_design.Rect(220, 170, 40, 20)))
 }
+
+pub fn paste_into_a_smaller_container_is_clamped_inside_test() {
+  let root =
+    design_root([
+      control("button", "far", [
+        #("x", VInt(300)),
+        #("y", VInt(250)),
+        #("w", VInt(100)),
+        #("h", VInt(30)),
+      ]),
+      panel_node("panel", 100, 50, 240, 160),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["far"]))
+    |> campy_ide_model.update(campy_ide_model.CopySelection)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["panel"]))
+    |> campy_ide_model.update(campy_ide_model.Paste)
+
+  parent(state, "button_1") |> should.equal(Some("panel"))
+  prop(state, "button_1", "x") |> should.equal(Ok(VInt(140)))
+  prop(state, "button_1", "y") |> should.equal(Ok(VInt(130)))
+  campy_design.absolute(form_view(state), "button_1")
+  |> should.equal(Some(campy_design.Rect(240, 180, 100, 30)))
+}
+
+pub fn copying_a_column_child_keeps_its_resolved_position_test() {
+  let root =
+    campy_view.node("form", "root")
+    |> campy_view.with_props([
+      #("w", VInt(600)),
+      #("h", VInt(400)),
+      #("layout", VText("column")),
+    ])
+    |> campy_view.with_children([
+      control("label", "a", [#("h", VInt(20)), #("text", VText("A"))]),
+      control("label", "b", [#("h", VInt(20)), #("text", VText("B"))]),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["b"]))
+    |> campy_ide_model.update(campy_ide_model.CopySelection)
+    |> campy_ide_model.update(campy_ide_model.Paste)
+
+  prop(state, "label_1", "x") |> should.equal(Ok(VInt(0)))
+  prop(state, "label_1", "y") |> should.equal(Ok(VInt(40)))
+  prop(state, "root", "layout") |> should.equal(Ok(VText("free")))
+}
+
+pub fn unchanged_geometry_does_not_freeze_or_commit_test() {
+  let root =
+    campy_view.node("form", "root")
+    |> campy_view.with_props([
+      #("w", VInt(600)),
+      #("h", VInt(400)),
+      #("layout", VText("column")),
+    ])
+    |> campy_view.with_children([
+      control("label", "a", [#("h", VInt(20)), #("text", VText("A"))]),
+    ])
+
+  let state = design_state(root)
+  let layout = campy_design.resolve(form_view(state))
+  let assert Some(placed) = campy_design.placed(layout, "a")
+
+  let state =
+    campy_ide_model.update(
+      state,
+      campy_ide_model.CommitGeometry([#("a", placed.rect)], None),
+    )
+
+  prop(state, "root", "layout") |> should.equal(Ok(VText("column")))
+  list.length(state.undo) |> should.equal(0)
+}
+
+pub fn z_order_on_a_column_form_freezes_before_reordering_test() {
+  let root =
+    campy_view.node("form", "root")
+    |> campy_view.with_props([
+      #("w", VInt(600)),
+      #("h", VInt(400)),
+      #("layout", VText("column")),
+    ])
+    |> campy_view.with_children([
+      control("label", "a", [#("h", VInt(20)), #("text", VText("A"))]),
+      control("label", "b", [#("h", VInt(20)), #("text", VText("B"))]),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["a"]))
+    |> campy_ide_model.update(campy_ide_model.BringToFront)
+
+  prop(state, "root", "layout") |> should.equal(Ok(VText("free")))
+  campy_view.ids(form_view(state)) |> should.equal(["root", "b", "a"])
+}
+
+pub fn opening_a_module_clears_an_armed_kind_test() {
+  let state =
+    state()
+    |> campy_ide_model.update(campy_ide_model.Arm("button"))
+  state.armed |> should.equal(Some("button"))
+
+  let assert Ok(state) = campy_ide_model.open_module(state, "b")
+  state.armed |> should.equal(None)
+}
