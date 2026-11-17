@@ -81,7 +81,7 @@ fn loop(
     }
     campy_wx.MouseHandle(_, _, _, _) ->
       loop(shell, view, phase, status, tick + 1)
-    campy_wx.Mouse(_, _, _, _) -> loop(shell, view, phase, status, tick + 1)
+    campy_wx.Mouse(_, _, _, _, _) -> loop(shell, view, phase, status, tick + 1)
     campy_wx.Message(_message) -> loop(shell, view, phase, status, tick + 1)
     campy_wx.Idle -> {
       case tick % 40 {

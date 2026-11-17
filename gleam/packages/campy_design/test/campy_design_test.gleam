@@ -356,3 +356,22 @@ pub fn freeze_writes_explicit_child_geometry_test() {
   campy_design.int_prop(a, "w", 0) |> should.equal(584)
   campy_design.int_prop(b, "y", 0) |> should.equal(32)
 }
+
+pub fn intersecting_selects_overlapping_controls_test() {
+  let layout =
+    campy_design.resolve(
+      form([], [box("a", 0, 0, 100, 100), box("b", 200, 200, 50, 50)]),
+    )
+
+  campy_design.intersecting(layout, campy_design.Rect(50, 50, 100, 100))
+  |> should.equal(["a"])
+
+  campy_design.intersecting(layout, campy_design.Rect(0, 0, 300, 300))
+  |> should.equal(["a", "b"])
+}
+
+pub fn intersecting_excludes_the_root_test() {
+  let layout = campy_design.resolve(form([], [box("a", 0, 0, 10, 10)]))
+  campy_design.intersecting(layout, campy_design.Rect(0, 0, 600, 400))
+  |> should.equal(["a"])
+}

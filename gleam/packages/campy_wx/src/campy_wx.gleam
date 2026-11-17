@@ -32,7 +32,7 @@ pub type Incoming {
   /// Mouse input on a selection handle: role 0..7 resize, 8 move.
   MouseHandle(role: Int, kind: String, x: Int, y: Int)
   /// A left click on a design widget; coordinates are relative to that widget.
-  Mouse(id: String, x: Int, y: Int, control: Bool)
+  Mouse(id: String, kind: String, x: Int, y: Int, control: Bool)
 }
 
 pub opaque type Shell {
@@ -679,8 +679,9 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
     native.MouseEvent(wx_id, kind, x, y, _control)
       if wx_id >= handle_base && wx_id < handle_base + 9
     -> MouseHandle(wx_id - shell.handle_base, kind, x, y)
-    native.MouseEvent(wx_id, "left_down", x, y, control) ->
-      design_mouse(shell, wx_id, x, y, control)
+    native.MouseEvent(wx_id, kind, x, y, control)
+      if kind == "left_down" || kind == "motion" || kind == "left_up"
+    -> design_mouse(shell, wx_id, kind, x, y, control)
     native.MouseEvent(_wx_id, _kind, _x, _y, _control) -> Idle
     native.WxEvent(wx_id, "close") if wx_id == shell.frame_id -> Closed
     native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
@@ -713,49 +714,6 @@ fn command_event(shell: Shell, wx_id: Int) -> Incoming {
   }
 }
 
-fn paint_event(shell: Shell, wx_id: Int) -> Incoming {
-  case dict.get(shell.by_wx, wx_id) {
-    Ok(view_id) -> Paint(view_id)
-    Error(Nil) -> Idle
-  }
-}
-
-fn design_mouse(
-  shell: Shell,
-  wx_id: Int,
-  x: Int,
-  y: Int,
-  control: Bool,
-) -> Incoming {
-  case dict.get(shell.by_wx, wx_id) {
-    Error(Nil) -> Idle
-    Ok(view_id) ->
-      case dict.get(shell.widgets, view_id) {
-        Error(Nil) -> Idle
-        Ok(widget) ->
-          case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
-            True -> Mouse(widget.view_id, x, y, control)
-            False -> Idle
-          }
-      }
-  }
-}
-
-fn design_event(shell: Shell, wx_id: Int) -> Incoming {
-  case dict.get(shell.by_wx, wx_id) {
-    Error(Nil) -> Idle
-    Ok(view_id) ->
-      case dict.get(shell.widgets, view_id) {
-        Error(Nil) -> Idle
-        Ok(widget) ->
-          case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
-            True -> Event(widget.view_id, "select", VText(widget.view_id))
-            False -> Idle
-          }
-      }
-  }
-}
-
 /// Paint a canvas: background, grid, and border, in form coordinates.
 pub fn paint(shell: Shell, id: String) -> Nil {
   case get_widget(shell, id) {
@@ -773,8 +731,38 @@ pub fn paint(shell: Shell, id: String) -> Nil {
   }
 }
 
-/// Place the four selection handles around a control's rectangle (in canvas
-/// coordinates). `None` hides them.
+fn design_mouse(
+  shell: Shell,
+  wx_id: Int,
+  kind: String,
+  x: Int,
+  y: Int,
+  control: Bool,
+) -> Incoming {
+  case dict.get(shell.by_wx, wx_id) {
+    Error(Nil) -> Idle
+    Ok(view_id) ->
+      case dict.get(shell.widgets, view_id) {
+        Error(Nil) -> Idle
+        Ok(widget) ->
+          case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
+            True -> Mouse(widget.view_id, kind, x, y, control)
+            False -> Idle
+          }
+      }
+  }
+}
+
+fn paint_event(shell: Shell, wx_id: Int) -> Incoming {
+  case dict.get(shell.by_wx, wx_id) {
+    Ok(view_id) -> Paint(view_id)
+    Error(Nil) -> Idle
+  }
+}
+
+/// Paint a canvas: background, grid, and border, in form coordinates.
+/// Place the selection handles around a control rectangle (canvas
+/// coordinates). `None` hides them. Multi-selections show only the move grip.
 pub fn show_selection(
   shell: Shell,
   rect: Option(#(Int, Int, Int, Int)),
@@ -785,8 +773,8 @@ pub fn show_selection(
       list.each(shell.handles, fn(handle) { native.handle_show(handle, False) })
     Some(#(x, y, width, height)) -> {
       let #(canvas, canvas_w, canvas_h) = canvas_widget(shell)
-      let clamp_x = fn(x: Int) { int.max(0, int.min(x, canvas_w - 12)) }
-      let clamp_y = fn(y: Int) { int.max(0, int.min(y, canvas_h - 12)) }
+      let clamp_x = fn(value: Int) { int.max(0, int.min(value, canvas_w - 12)) }
+      let clamp_y = fn(value: Int) { int.max(0, int.min(value, canvas_h - 12)) }
       let mid_x = clamp_x(x + width / 2 - 6)
       let mid_y = clamp_y(y + height / 2 - 6)
 
@@ -944,6 +932,49 @@ pub fn preview_rect(
     }
     Error(_) -> Nil
   }
+}
+
+pub fn capture_canvas(shell: Shell) -> Nil {
+  let #(canvas, _, _) = canvas_widget(shell)
+  native.capture(canvas)
+}
+
+pub fn release_canvas(shell: Shell) -> Nil {
+  let #(canvas, _, _) = canvas_widget(shell)
+  native.release(canvas)
+}
+
+/// Draw a marquee rectangle with four thin mini-frame strips.
+pub fn show_marquee(shell: Shell, rect: Option(#(Int, Int, Int, Int))) -> Nil {
+  let strips = list.drop(shell.handles, 9)
+
+  case rect {
+    None -> list.each(strips, fn(strip) { native.handle_show(strip, False) })
+    Some(#(x, y, w, h)) ->
+      case strips {
+        [top, bottom, left, right, ..] -> {
+          let #(canvas, _, _) = canvas_widget(shell)
+          place_strip(canvas, top, x, y, w, 2)
+          place_strip(canvas, bottom, x, y + h - 2, w, 2)
+          place_strip(canvas, left, x, y, 2, h)
+          place_strip(canvas, right, x + w - 2, y, 2, h)
+        }
+        _ -> Nil
+      }
+  }
+}
+
+fn place_strip(
+  canvas: Dynamic,
+  strip: Dynamic,
+  x: Int,
+  y: Int,
+  w: Int,
+  h: Int,
+) -> Nil {
+  native.handle_place(canvas, strip, int.max(0, x), int.max(0, y), w, h)
+  native.handle_show(strip, True)
+  native.handle_raise(strip)
 }
 
 pub fn capture_handle(shell: Shell, role: Int) -> Nil {

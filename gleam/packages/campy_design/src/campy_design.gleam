@@ -475,3 +475,16 @@ fn freeze_node(
     extra: node.extra,
   )
 }
+
+/// Every non-root control whose rectangle intersects the given rectangle.
+pub fn intersecting(layout: Layout, rect: Rect) -> List(String) {
+  layout.places
+  |> list.filter(fn(placed) {
+    placed.id != layout.root && intersects(placed.rect, rect)
+  })
+  |> list.map(fn(placed) { placed.id })
+}
+
+pub fn intersects(a: Rect, b: Rect) -> Bool {
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}

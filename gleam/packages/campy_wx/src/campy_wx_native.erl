@@ -436,7 +436,10 @@ draw_grid(DC, Width, Height, Step) ->
 
 connect_design(Ref, Kind) ->
     case Kind of
-        <<"canvas">> -> catch wxPanel:connect(Ref, left_down, []);
+        <<"canvas">> ->
+            catch wxPanel:connect(Ref, left_down, []),
+            catch wxPanel:connect(Ref, motion, []),
+            catch wxPanel:connect(Ref, left_up, []);
         <<"panel">> -> catch wxPanel:connect(Ref, left_down, []);
         <<"group">> -> catch wxPanel:connect(Ref, left_down, []);
         <<"page">> -> catch wxPanel:connect(Ref, left_down, []);
@@ -466,7 +469,17 @@ connect_design(Ref, Kind) ->
     ok.
 
 handles_create(Parent, Base) ->
-    [create_handle(Parent, Base + Index, Index) || Index <- lists:seq(0, 8)].
+    [create_handle(Parent, Base + Index, Index) || Index <- lists:seq(0, 8)] ++
+        [create_strip(Parent, Base + Index) || Index <- lists:seq(9, 12)].
+
+create_strip(Parent, Id) ->
+    Ref = wxMiniFrame:new(Parent, Id, <<"">>, [
+        {style, ?wxFRAME_NO_TASKBAR bor ?wxBORDER_NONE bor ?wxSTAY_ON_TOP},
+        {size, {2, 2}}
+    ]),
+    wxMiniFrame:setBackgroundColour(Ref, {70, 110, 190}),
+    wxWindow:hide(Ref),
+    Ref.
 
 create_handle(Parent, Id, 8) ->
     mini_handle(Parent, Id, {36, 12}, {196, 72, 60}, ?wxCURSOR_SIZING);

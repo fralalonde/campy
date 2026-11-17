@@ -47,6 +47,14 @@ handlers, and Run deploys to a local peer node and attaches a view.**
   underneath, so panels could not be clicked. Popups were also input-dead in
   this environment; mini-frames work. The inspector shows the union rectangle
   for a multi-selection.
+- **Marquee selection** — done: drag from empty canvas captures the pointer,
+  draws a four-strip rectangle (blue mini-frames), and selects every control it
+  intersects on release. Empty-canvas hit-testing now compares against the
+  layout root, not the design-view id (that mismatch was selecting the form
+  root).
+- **T2.1 is complete and verified**: click/Ctrl-click/marquee selection, single
+  resize, single and group move, undo per gesture, inspector geometry, module
+  switch persistence.
 - Bugs found by the probe: mouse event types were atoms while Gleam patterns
   were binaries; `wxWindow:connect` silently failed for concrete widgets
   (class-specific `connect` is required); sizer inserts used raw child indexes

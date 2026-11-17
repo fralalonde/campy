@@ -92,3 +92,11 @@ xdotool mousemove_relative --sync 20 20
 xdotool mouseup 1
 sleep 1
 shot moved-group
+# marquee: drag on empty canvas across both controls
+xdotool mousemove --window "$win" 500 250 mousedown 1
+xdotool mousemove --window "$win" 240 130
+sleep 1
+shot marquee
+xdotool mouseup 1
+sleep 1
+shot marquee-result

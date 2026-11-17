@@ -115,12 +115,19 @@ fn loop(
     }
     campy_wx.MouseHandle(role, kind, x, y) ->
       handle_mouse(shell, state, current, dir, drag, role, kind, x, y)
-    campy_wx.Mouse(id, x, y, control) -> {
-      let previous = state
-      let state = select_at(state, id, x, y, control)
-      refresh(shell, Some(previous), state)
-      loop(shell, state, current, dir, NoDrag)
-    }
+    campy_wx.Mouse(id, kind, x, y, control) ->
+      handle_design_mouse(
+        shell,
+        state,
+        current,
+        dir,
+        drag,
+        id,
+        kind,
+        x,
+        y,
+        control,
+      )
     campy_wx.Event(id, key, value) ->
       case id {
         "menu-quit" -> {
@@ -192,6 +199,120 @@ fn handle_mouse(
   }
 }
 
+fn handle_design_mouse(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+  id: String,
+  kind: String,
+  x: Int,
+  y: Int,
+  control: Bool,
+) {
+  case kind {
+    "left_down" ->
+      case id {
+        "canvas" ->
+          case hit_target(state, x, y) {
+            Some(target) ->
+              case control {
+                True -> {
+                  let previous = state
+                  let state = toggle_selection(state, target)
+                  refresh(shell, Some(previous), state)
+                  loop(shell, state, current, dir, NoDrag)
+                }
+                False -> {
+                  let previous = state
+                  let state = model.select_controls(state, [target])
+                  refresh(shell, Some(previous), state)
+                  loop(shell, state, current, dir, NoDrag)
+                }
+              }
+            None -> {
+              let state = model.select_controls(state, [])
+              campy_wx.show_selection(shell, None, False)
+              campy_wx.capture_canvas(shell)
+              let previous = state
+              refresh(shell, Some(previous), state)
+              loop(shell, state, current, dir, MarqueeDrag(x, y))
+            }
+          }
+        _ -> {
+          let previous = state
+          let state = select_control(state, id, "select")
+          refresh(shell, Some(previous), state)
+          loop(shell, state, current, dir, NoDrag)
+        }
+      }
+    "motion" ->
+      case drag {
+        MarqueeDrag(start_x, start_y) -> {
+          campy_wx.show_marquee(
+            shell,
+            Some(normalize_rect(start_x, start_y, x, y)),
+          )
+          loop(shell, state, current, dir, drag)
+        }
+        _ -> loop(shell, state, current, dir, drag)
+      }
+    "left_up" ->
+      case drag {
+        MarqueeDrag(start_x, start_y) -> {
+          let rect = normalize_rect(start_x, start_y, x, y)
+          campy_wx.release_canvas(shell)
+          campy_wx.show_marquee(shell, None)
+          let state = case model.active_module(state) {
+            Error(_) -> state
+            Ok(module) -> {
+              let layout = campy_design.resolve(module.form.view)
+              model.select_controls(
+                state,
+                campy_design.intersecting(
+                  layout,
+                  campy_design.Rect(x: rect.0, y: rect.1, w: rect.2, h: rect.3),
+                ),
+              )
+            }
+          }
+          let previous = state
+          refresh(shell, Some(previous), state)
+          loop(shell, state, current, dir, NoDrag)
+        }
+        _ -> loop(shell, state, current, dir, drag)
+      }
+    _ -> loop(shell, state, current, dir, drag)
+  }
+}
+
+fn normalize_rect(sx: Int, sy: Int, x: Int, y: Int) -> #(Int, Int, Int, Int) {
+  #(
+    int.min(sx, x),
+    int.min(sy, y),
+    int.max(sx, x) - int.min(sx, x) + 1,
+    int.max(sy, y) - int.min(sy, y) + 1,
+  )
+}
+
+fn hit_target(state: model.State, x: Int, y: Int) -> Option(String) {
+  case model.active_module(state) {
+    Error(_) -> None
+    Ok(module) -> {
+      let layout = campy_design.resolve(module.form.view)
+      case campy_design.at(layout, x, y) {
+        Some(placed) ->
+          case placed.id == layout.root {
+            True -> None
+            False -> Some(placed.id)
+          }
+        None -> None
+      }
+    }
+  }
+}
+
 fn start_drag(state: model.State, role: Int, x: Int, y: Int) -> Drag {
   case role == 8 {
     True ->
@@ -239,6 +360,7 @@ fn drag_previews(
 ) -> List(#(String, #(Int, Int, Int, Int))) {
   case drag {
     NoDrag -> []
+    MarqueeDrag(_, _) -> []
     MoveDrag(items, start_x, start_y) ->
       list.map(items, fn(item) {
         let #(id, #(rx, ry, rw, rh)) = item
@@ -334,6 +456,7 @@ fn commit_rects(
 
 type Drag {
   NoDrag
+  MarqueeDrag(start_x: Int, start_y: Int)
   MoveDrag(
     items: List(#(String, #(Int, Int, Int, Int))),
     start_x: Int,
@@ -391,46 +514,6 @@ fn select_control(state: model.State, id: String, key: String) -> model.State {
 /// Canvas clicks are hit-tested, not trusted to per-control events: GTK labels
 /// do not emit mouse events, and bubbled clicks can otherwise clear a fresh
 /// selection.
-fn select_at(
-  state: model.State,
-  id: String,
-  x: Int,
-  y: Int,
-  control: Bool,
-) -> model.State {
-  let target = case id {
-    "canvas" ->
-      case model.active_module(state) {
-        Error(_) -> None
-        Ok(module) -> {
-          let layout = campy_design.resolve(module.form.view)
-          case campy_design.at(layout, x, y) {
-            Some(placed) ->
-              case placed.id == "canvas" {
-                True -> None
-                False -> Some(placed.id)
-              }
-            None -> None
-          }
-        }
-      }
-    _ -> Some(id)
-  }
-
-  case target {
-    None ->
-      case control {
-        True -> state
-        False -> model.select_controls(state, [])
-      }
-    Some(target) ->
-      case control {
-        True -> toggle_selection(state, target)
-        False -> model.select_controls(state, [target])
-      }
-  }
-}
-
 fn toggle_selection(state: model.State, id: String) -> model.State {
   case list.contains(state.selection, id) {
     True ->
