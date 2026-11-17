@@ -85,3 +85,57 @@ pub fn document_title_is_available_test() {
   campy_view.prop(labelled.form.view, "title")
   |> should.equal(Ok(VText("X")))
 }
+
+pub fn palette_lists_every_catalog_widget_test() {
+  let labels = campy_ide_wx.palette_labels()
+  labels |> list.length |> should.equal(16)
+  labels |> list.first |> should.equal(Ok("Panel"))
+  labels |> list.contains("Panel") |> should.equal(True)
+}
+
+pub fn inspector_shows_the_parent_of_a_control_test() {
+  let view =
+    campy_view.node("form", "root")
+    |> campy_view.with_props([
+      #("w", campy_view.VInt(400)),
+      #("h", campy_view.VInt(300)),
+    ])
+    |> campy_view.with_child(
+      campy_view.node("button", "ok")
+      |> campy_view.with_props([
+        #("x", campy_view.VInt(10)),
+        #("y", campy_view.VInt(12)),
+        #("w", campy_view.VInt(80)),
+        #("h", campy_view.VInt(30)),
+      ]),
+    )
+
+  let state =
+    model.new(
+      campy_project.Project(
+        title: "Demo",
+        modules: [
+          campy_project.Module(
+            slug: "main",
+            form: campy_view.Document(schema: 1, view: view, extra: []),
+            handlers: "",
+          ),
+        ],
+        extra: [],
+      ),
+    )
+    |> model.select_controls(["ok"])
+
+  campy_ide_wx.inspector_rows(state)
+  |> should.equal([
+    ["Field", "Value"],
+    ["id", "ok"],
+    ["kind", "button"],
+    ["parent", "root"],
+    ["x", "10"],
+    ["y", "12"],
+    ["w", "80"],
+    ["h", "30"],
+    ["text", ""],
+  ])
+}

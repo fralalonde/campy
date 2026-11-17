@@ -22,21 +22,25 @@ port runner, ABI v2 now, local peers.
 wxQt is experimental/incomplete, and OTP's wx driver cannot be rebuilt against
 it. Option 2 (native children + selection chrome) is implemented on wx.
 
-**Current position (2026-11-16, latest commit `3a1f4cb`).**
-- M1 complete (gate G1 passed). **T2.1 complete and verified under Xvfb.**
-- 169 tests green: `campy_view` 71, `campy_wx` 14, `campy_project` 13,
-  `campy_ide_model` 16, `campy_design` 23, `campy_manifest` 27, `campy_ide_wx` 5.
-- `just check` is green headlessly.
+**Current position (2026-11-17).**
+- M1 complete (gate G1 passed). **T2.1 and T2.2 complete and verified under
+  Xvfb.**
+- 202 tests green: `campy_view` 71, `campy_wx` 14, `campy_project` 13,
+  `campy_ide_model` 30, `campy_design` 31, `campy_catalog` 9,
+  `campy_manifest` 27, `campy_ide_wx` 7.
+- `just check` is green headlessly. On this Fedora 46 host, OTP 28's crypto NIF
+  no longer loads against the system OpenSSL (missing `EVP_sm4_cbc`); run
+  `LD_LIBRARY_PATH=<compatible OpenSSL 3 dir> just check` until OTP is rebuilt.
+  The IDE and wx tests do not need crypto.
 
-**Next task.** T2.2 (palette, placement, adoption, z-order, clipboard, undo),
-then T2.3 (editable inspector + events/stubs), T2.4 (generated Gleam-wx source
-tab), then M3 (ABI v2 runtime, appgen, Run) and M4 (local peer nodes, deploy,
-debug).
+**Next task.** T2.3 (editable inspector + events/stubs), then T2.4 (generated
+Gleam-wx source tab), then M3 (ABI v2 runtime, appgen, Run) and M4 (local peer
+nodes, deploy, debug).
 
 **Layout.**
 ```
 gleam/packages: campy_view campy_wx campy_project campy_ide_model
-                campy_design campy_manifest
+                campy_design campy_catalog campy_manifest
 gleam/apps:     campy_ide_wx
 examples/demo   canonical project (greeter, notes)
 scripts:        workspace.py (build/test runner), ui_probe.sh (X11 probe)
@@ -125,6 +129,13 @@ The probe requires Xvfb, xdotool, ImageMagick, and openbox (installed in
 - **T2.1 is complete and verified**: click/Ctrl-click/marquee selection, single
   resize, single and group move, undo per gesture, inspector geometry, module
   switch persistence.
+- **T2.2** palette, placement, adoption, clipboard, z-order, and undo — done
+  (2026-11-17). `campy_catalog` is the target-neutral widget table; the left
+  pane has a palette; click-to-arm and drag-on-canvas placement adopt the
+  deepest container; copy/cut/paste/duplicate/delete use fresh ids; a single
+  move can cross containers; front/back reorder child order. Every command is
+  a model undo entry. Verified under Xvfb: panel drag-place, button adoption,
+  copy/paste, duplicate, delete, undo, and reparent to root.
 - Bugs found by the probe: mouse event types were atoms while Gleam patterns
   were binaries; `wxWindow:connect` silently failed for concrete widgets
   (class-specific `connect` is required); sizer inserts used raw child indexes
@@ -401,7 +412,7 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 
 ## 4. M2 — the form designer
 
-### T2.1 — Designer canvas and geometry (in progress)
+### T2.1 — Designer canvas and geometry — done
 
 - Depends: T1.4 · Size: L.
 - **Part 1, done:** `campy_design` — pure resolution of a form tree into
@@ -421,21 +432,46 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   commit goes through `campy_design.set_rect` and `campy_ide_model.commit` so
   undo works. Handles stay at the original rect during the gesture and
   reposition on commit (moving them would shift the captured coordinate base).
-- **Remaining in T2.1:** marquee selection (`wxOverlay`), Ctrl-toggle
-  multi-select, and directional cursors on the handles. These are polish; the
-  palette (T2.2) is the next substantive step.
-- Acceptance: design the demo form's layout by dragging/resizing controls;
-  selection and inspector agree; column/row forms stay read-only in the canvas
-  (their geometry belongs to the sizer).
+- **Completed in T2.1:** marquee selection (mini-frame strips), Ctrl-toggle
+  multi-select, directional cursors on the handles, group move, and undo per
+  gesture.
+- Acceptance met: design the demo form's layout by dragging/resizing controls;
+  selection and inspector agree; column/row forms are frozen to free layout on
+  the first geometry edit.
 
-### T2.2 — Palette, placement, adoption, clipboard, undo
+### T2.2 — Palette, placement, adoption, clipboard, undo — done
 
-- Palette from a target-neutral catalog (kinds, labels, default sizes, events).
-  Click-to-arm, drag to place on the canvas; drop reparents to the deepest
-  accepting container; z-order via child order; copy/cut/paste subtrees;
-  every committed edit goes through model undo.
-- Acceptance: add, move between containers, reorder, duplicate, and delete
-  controls; undo restores each step.
+- Depends: T2.1 · Size: L · Done (2026-11-17).
+- Delivered:
+  1. `campy_catalog` (new pure package): target-neutral widget table (kind,
+     label, category, declared events), default sizes and properties, and
+     `make`/`make_at`. The palette, designer defaults, and later handler
+     generation share one description.
+  2. A palette list in the left pane. Selecting an item arms placement; a
+     canvas click places the default size, a canvas drag places the drawn
+     rectangle. Placement freezes column/row documents first and adopts the
+     deepest accepting container under the drop point. Design-mode panels and
+     groups get a subtle tint so empty containers are visible.
+  3. Move between containers: a single moved control released over another
+     container is reparented and keeps its absolute position. Commits convert
+     preview rectangles back to parent-relative document coordinates, including
+     group moves where a container and a child are both selected.
+  4. Clipboard: copy/cut/paste top-level selected subtrees with fresh globally
+     unique ids (keys dropped on copies); paste into a selected container, or
+     after the selection. Duplicate offsets by 16 px and selects the copies.
+     Delete removes selected subtrees.
+  5. Z-order via child order: Bring to front / Send to back.
+  6. Every command ends in `campy_ide_model.commit`, so each gesture is one
+     undo entry. Placement, paste, and duplicate select the new controls.
+- Acceptance met: add controls, adopt into a container, move a control to
+  another container/root, bring/send, duplicate, delete, and undo each step.
+- Verified with `scripts/ui_probe.sh xvfb`: arm Panel, drag-place it, place a
+  Button inside (inspector `parent=panel_1`), copy/paste (`button_2`),
+  duplicate (`button_3`), delete, undo, then drag the button out to the root
+  (inspector `parent=root`).
+- Deviation: drag-to-place starts on the canvas after arming, rather than
+  dragging a payload out of the palette list; `wxListBox` does not expose a
+  reliable drag source. Categories/search are deferred.
 
 ### T2.3 — Inspector and events
 

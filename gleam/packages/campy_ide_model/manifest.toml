@@ -7,6 +7,8 @@
 # You should check this file into your source control repository.
 
 packages = [
+  { name = "campy_catalog", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../campy_catalog" },
+  { name = "campy_design", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_catalog", "campy_view", "gleam_stdlib"], source = "local", path = "../campy_design" },
   { name = "campy_project", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../campy_project" },
   { name = "campy_view", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../campy_view" },
   { name = "gleam_stdlib", version = "0.71.0", build_tools = ["gleam"], requirements = [], otp_app = "gleam_stdlib", source = "hex", outer_checksum = "702F3BC2A14793906880B1078B19A6165F87323AEE8D0C4A34085846336FCAAE" },
@@ -14,6 +16,8 @@ packages = [
 ]
 
 [requirements]
+campy_catalog = { path = "../campy_catalog" }
+campy_design = { path = "../campy_design" }
 campy_project = { path = "../campy_project" }
 campy_view = { path = "../campy_view" }
 gleam_stdlib = { version = ">= 0.70.0 and < 1.0.0" }

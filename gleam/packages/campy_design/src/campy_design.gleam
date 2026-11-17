@@ -9,11 +9,13 @@
 //// root's origin is 0,0). Column/row children ignore x/y; free children honour
 //// x/y/w/h and an optional alignment.
 
+import campy_catalog
 import campy_view.{type Node, type Value, VBool, VInt, VText}
 import gleam/dict
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 
 pub type Rect {
   Rect(x: Int, y: Int, w: Int, h: Int)
@@ -300,45 +302,11 @@ fn text_prop(node: Node, name: String) -> String {
 }
 
 pub fn default_w(kind: String) -> Int {
-  case kind {
-    "label" -> 100
-    "button" -> 100
-    "text" -> 160
-    "memo" -> 200
-    "checkbox" | "radio" -> 110
-    "choice" -> 140
-    "list" -> 180
-    "slider" -> 180
-    "progress" -> 180
-    "panel" | "group" -> 240
-    "picture" -> 120
-    "tree" -> 200
-    "grid" -> 200
-    "editor" | "notebook" | "page" -> 320
-    "form" | "window" -> 640
-    _ -> 100
-  }
+  campy_catalog.default_w(kind)
 }
 
 pub fn default_h(kind: String) -> Int {
-  case kind {
-    "label" -> 20
-    "button" -> 30
-    "text" -> 28
-    "memo" -> 100
-    "checkbox" | "radio" -> 24
-    "choice" -> 28
-    "list" -> 120
-    "slider" -> 28
-    "progress" -> 20
-    "panel" | "group" -> 160
-    "picture" -> 120
-    "tree" -> 160
-    "grid" -> 120
-    "editor" | "notebook" | "page" -> 200
-    "form" | "window" -> 480
-    _ -> 28
-  }
+  campy_catalog.default_h(kind)
 }
 
 /// Resolve a form into a design-mode view: geometry becomes explicit absolute
@@ -487,4 +455,314 @@ pub fn intersecting(layout: Layout, rect: Rect) -> List(String) {
 
 pub fn intersects(a: Rect, b: Rect) -> Bool {
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}
+
+/// The absolute rectangle of a control in the resolved form.
+pub fn absolute(root: Node, id: String) -> Option(Rect) {
+  case placed(resolve(root), id) {
+    Some(found) -> Some(found.rect)
+    None -> None
+  }
+}
+
+/// Set a rectangle expressed in canvas (absolute) coordinates. Documents store
+/// parent-relative coordinates, so the parent's resolved origin is subtracted.
+/// Call `freeze` first when the parent still uses a sizer.
+pub fn set_absolute_rect(root: Node, id: String, rect: Rect) -> Node {
+  let layout = resolve(root)
+
+  case placed(layout, id) {
+    None -> root
+    Some(target) -> {
+      let origin = case target.parent {
+        Some(parent_id) ->
+          case placed(layout, parent_id) {
+            Some(parent) -> parent.rect
+            None -> Rect(0, 0, 0, 0)
+          }
+        None -> Rect(0, 0, 0, 0)
+      }
+
+      set_rect(
+        root,
+        id,
+        Rect(x: rect.x - origin.x, y: rect.y - origin.y, w: rect.w, h: rect.h),
+      )
+    }
+  }
+}
+
+/// The origin of a control's parent in canvas coordinates. Native renderers
+/// need this to convert absolute artwork rectangles into child coordinates.
+pub fn parent_origin(root: Node, id: String) -> #(Int, Int) {
+  parent_origin_in(resolve(root), id)
+}
+
+pub fn parent_origin_in(layout: Layout, id: String) -> #(Int, Int) {
+  case placed(layout, id) {
+    Some(target) ->
+      case target.parent {
+        Some(parent_id) ->
+          case placed(layout, parent_id) {
+            Some(parent) -> #(parent.rect.x, parent.rect.y)
+            None -> #(0, 0)
+          }
+        None -> #(0, 0)
+      }
+    None -> #(0, 0)
+  }
+}
+
+pub fn insert_child(
+  root: Node,
+  parent_id: String,
+  index: Int,
+  child: Node,
+) -> Result(Node, String) {
+  case insert_into(root, parent_id, index, child) {
+    Ok(node) -> Ok(node)
+    Error(Nil) -> Error("no such container: " <> parent_id)
+  }
+}
+
+fn insert_into(
+  node: Node,
+  parent_id: String,
+  index: Int,
+  child: Node,
+) -> Result(Node, Nil) {
+  case node.id == parent_id {
+    True ->
+      Ok(campy_view.with_children(node, insert_at(node.children, index, child)))
+    False -> {
+      let #(children, found) =
+        list.fold(node.children, #([], False), fn(acc, candidate) {
+          let #(kept, found) = acc
+
+          case found {
+            True -> #(list.append(kept, [candidate]), True)
+            False ->
+              case insert_into(candidate, parent_id, index, child) {
+                Ok(updated) -> #(list.append(kept, [updated]), True)
+                Error(Nil) -> #(list.append(kept, [candidate]), False)
+              }
+          }
+        })
+
+      case found {
+        True -> Ok(campy_view.with_children(node, children))
+        False -> Error(Nil)
+      }
+    }
+  }
+}
+
+/// Remove a subtree, returning the new root and the removed node.
+pub fn remove_node(root: Node, id: String) -> Result(#(Node, Node), String) {
+  case remove_from(root, id) {
+    Ok(found) -> Ok(found)
+    Error(Nil) -> Error("no such control: " <> id)
+  }
+}
+
+fn remove_from(node: Node, id: String) -> Result(#(Node, Node), Nil) {
+  case remove_direct(node.children, id) {
+    Ok(#(children, removed)) ->
+      Ok(#(campy_view.with_children(node, children), removed))
+    Error(Nil) -> {
+      let #(children, removed) =
+        list.fold(node.children, #([], None), fn(acc, candidate) {
+          let #(kept, removed) = acc
+
+          case removed {
+            Some(_) -> #(list.append(kept, [candidate]), removed)
+            None ->
+              case remove_from(candidate, id) {
+                Ok(#(updated, found)) -> #(
+                  list.append(kept, [updated]),
+                  Some(found),
+                )
+                Error(Nil) -> #(list.append(kept, [candidate]), None)
+              }
+          }
+        })
+
+      case removed {
+        Some(found) -> Ok(#(campy_view.with_children(node, children), found))
+        None -> Error(Nil)
+      }
+    }
+  }
+}
+
+fn remove_direct(
+  children: List(Node),
+  id: String,
+) -> Result(#(List(Node), Node), Nil) {
+  case children {
+    [] -> Error(Nil)
+    [first, ..rest] ->
+      case first.id == id {
+        True -> Ok(#(rest, first))
+        False ->
+          case remove_direct(rest, id) {
+            Ok(#(kept, removed)) -> Ok(#([first, ..kept], removed))
+            Error(Nil) -> Error(Nil)
+          }
+      }
+  }
+}
+
+pub fn parent_of(root: Node, id: String) -> Option(String) {
+  parent_loop(root, id)
+}
+
+fn parent_loop(node: Node, id: String) -> Option(String) {
+  case list.any(node.children, fn(child) { child.id == id }) {
+    True -> Some(node.id)
+    False ->
+      first_some(list.map(node.children, fn(child) { parent_loop(child, id) }))
+  }
+}
+
+fn first_some(items: List(Option(a))) -> Option(a) {
+  case items {
+    [] -> None
+    [Some(value), ..] -> Some(value)
+    [None, ..rest] -> first_some(rest)
+  }
+}
+
+pub fn child_count(root: Node, parent_id: String) -> Int {
+  case find_node(root, parent_id) {
+    Some(parent) -> list.length(parent.children)
+    None -> 0
+  }
+}
+
+pub fn index_of(
+  root: Node,
+  parent_id: String,
+  id: String,
+) -> Result(Int, String) {
+  case find_node(root, parent_id) {
+    None -> Error("no such container: " <> parent_id)
+    Some(parent) -> index_in(parent.children, id, 0)
+  }
+}
+
+fn index_in(
+  children: List(Node),
+  id: String,
+  index: Int,
+) -> Result(Int, String) {
+  case children {
+    [] -> Error("no such control: " <> id)
+    [first, ..rest] ->
+      case first.id == id {
+        True -> Ok(index)
+        False -> index_in(rest, id, index + 1)
+      }
+  }
+}
+
+/// Whether `id` is the ancestor itself or lives inside its subtree.
+pub fn is_within(root: Node, ancestor_id: String, id: String) -> Bool {
+  case find_node(root, ancestor_id) {
+    Some(ancestor) -> find_node(ancestor, id) != None
+    None -> False
+  }
+}
+
+/// Move a control to another container, keeping its document properties. The
+/// caller re-applies absolute geometry afterwards when a visual position
+/// matters.
+pub fn reparent(
+  root: Node,
+  id: String,
+  new_parent: String,
+) -> Result(Node, String) {
+  case parent_of(root, id) {
+    None -> Error("no such control: " <> id)
+    Some(current) if current == new_parent -> Ok(root)
+    _ ->
+      case is_within(root, id, new_parent) {
+        True -> Error("cannot move a control into itself")
+        False -> {
+          use #(updated, removed) <- result.try(remove_node(root, id))
+          insert_child(
+            updated,
+            new_parent,
+            child_count(updated, new_parent),
+            removed,
+          )
+        }
+      }
+  }
+}
+
+pub fn reorder(root: Node, id: String, index: Int) -> Result(Node, String) {
+  case parent_of(root, id) {
+    None -> Error("no such control: " <> id)
+    Some(parent) -> {
+      use #(updated, removed) <- result.try(remove_node(root, id))
+      insert_child(updated, parent, index, removed)
+    }
+  }
+}
+
+pub fn bring_to_front(root: Node, id: String) -> Result(Node, String) {
+  case parent_of(root, id) {
+    None -> Error("no such control: " <> id)
+    Some(parent) -> {
+      use #(updated, removed) <- result.try(remove_node(root, id))
+      insert_child(updated, parent, child_count(updated, parent), removed)
+    }
+  }
+}
+
+pub fn send_to_back(root: Node, id: String) -> Result(Node, String) {
+  case parent_of(root, id) {
+    None -> Error("no such control: " <> id)
+    Some(parent) -> {
+      use #(updated, removed) <- result.try(remove_node(root, id))
+      insert_child(updated, parent, 0, removed)
+    }
+  }
+}
+
+/// The deepest container under the point that may adopt a drop. When `moving`
+/// is set, that control and its descendants are excluded, so a container can
+/// never adopt itself.
+pub fn container_for_drop(
+  root: Node,
+  layout: Layout,
+  x: Int,
+  y: Int,
+  moving: Option(String),
+) -> Option(Placed) {
+  let candidates =
+    list.filter(layout.places, fn(candidate) {
+      candidate.container
+      && contains(candidate.rect, x, y)
+      && !inside_moving(root, candidate.id, moving)
+    })
+
+  find_last(candidates, fn(_) { True })
+}
+
+fn inside_moving(
+  root: Node,
+  candidate: String,
+  moving: Option(String),
+) -> Bool {
+  case moving {
+    None -> False
+    Some(id) -> is_within(root, id, candidate)
+  }
+}
+
+fn insert_at(items: List(a), index: Int, item: a) -> List(a) {
+  let #(before, after) = list.split(items, int.max(0, index))
+  list.append(before, [item, ..after])
 }

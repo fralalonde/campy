@@ -100,3 +100,41 @@ shot marquee
 xdotool mouseup 1
 sleep 1
 shot marquee-result
+
+# --- T2.2: palette, placement, adoption, clipboard, reparent --------------
+# Palette rows (window coordinates): Panel 342, Group 372, Label 402,
+# Button 432, Text 462, Memo 492. Toolbar row: y 72.
+click 100 342
+shot palette-armed-panel
+# Drag a panel onto empty canvas: (650,320) -> (800,410).
+xdotool mousemove --window "$win" 650 320 mousedown 1
+xdotool mousemove --window "$win" 800 410
+sleep 1
+shot placing-panel
+xdotool mouseup 1
+sleep 1
+shot placed-panel
+# Arm Button and click inside the new panel: it must adopt the control.
+click 100 432
+click 700 365
+shot placed-button-in-panel
+# Copy the selected button, then paste it as a sibling.
+click 370 72
+click 444 72
+shot pasted-button
+# Duplicate and delete, then undo the delete.
+click 524 72
+shot duplicated-button
+click 605 72
+shot deleted-button
+click 123 72
+shot undo-delete
+# Move the original button out of the panel back to the root by its grip.
+click 700 365
+xdotool mousemove --window "$win" 720 375 mousedown 1
+xdotool mousemove --window "$win" 520 350
+sleep 1
+shot moving-out-of-panel
+xdotool mouseup 1
+sleep 1
+shot moved-out-of-panel

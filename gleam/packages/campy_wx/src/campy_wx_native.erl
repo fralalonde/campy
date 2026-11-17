@@ -17,7 +17,7 @@
     capture/1, release/1,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
-    set_items/3, set_enabled/2, set_visible/2, focus/1, raise/1, destroy/1,
+    set_items/3, set_enabled/2, set_visible/2, set_background/4, focus/1, raise/1, destroy/1,
     get_text/1, get_int/2, get_bool/2, get_selection/2,
     now_ms/0, getenv/1
 ]).
@@ -203,6 +203,11 @@ set_enabled(Ref, Enabled) ->
 
 set_visible(Ref, Visible) ->
     wxWindow:show(Ref, [{show, Visible}]),
+    ok.
+
+set_background(Ref, R, G, B) ->
+    wxWindow:setBackgroundColour(Ref, {R, G, B}),
+    wxWindow:refresh(Ref),
     ok.
 
 focus(Ref) ->

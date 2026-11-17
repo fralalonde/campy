@@ -375,3 +375,169 @@ pub fn intersecting_excludes_the_root_test() {
   campy_design.intersecting(layout, campy_design.Rect(0, 0, 600, 400))
   |> should.equal(["a"])
 }
+
+pub fn set_absolute_rect_converts_to_parent_space_test() {
+  let tree =
+    form([], [
+      node("panel", "panel", [
+        #("x", VInt(50)),
+        #("y", VInt(40)),
+        #("w", VInt(300)),
+        #("h", VInt(200)),
+      ])
+      |> campy_view.with_children([box("child", 10, 10, 60, 20)]),
+    ])
+
+  let moved =
+    campy_design.set_absolute_rect(
+      tree,
+      "child",
+      campy_design.Rect(130, 100, 80, 30),
+    )
+
+  prop_of(moved, "child", "x") |> should.equal(Ok(VInt(80)))
+  prop_of(moved, "child", "y") |> should.equal(Ok(VInt(60)))
+  prop_of(moved, "child", "w") |> should.equal(Ok(VInt(80)))
+  prop_of(moved, "child", "h") |> should.equal(Ok(VInt(30)))
+}
+
+pub fn insert_child_nests_and_resolves_test() {
+  let tree =
+    form([], [
+      node("panel", "panel", [
+        #("x", VInt(20)),
+        #("y", VInt(10)),
+        #("w", VInt(300)),
+        #("h", VInt(200)),
+      ]),
+    ])
+
+  let assert Ok(tree) =
+    campy_design.insert_child(tree, "panel", 0, box("child", 5, 6, 40, 20))
+
+  campy_design.parent_of(tree, "child") |> should.equal(Some("panel"))
+  campy_design.index_of(tree, "panel", "child") |> should.equal(Ok(0))
+  campy_design.absolute(tree, "child")
+  |> should.equal(Some(campy_design.Rect(25, 16, 40, 20)))
+}
+
+pub fn remove_node_returns_the_subtree_test() {
+  let tree = form([], [box("a", 0, 0, 10, 10), box("b", 20, 0, 10, 10)])
+
+  let assert Ok(#(tree, removed)) = campy_design.remove_node(tree, "a")
+  removed.id |> should.equal("a")
+  campy_design.find_node(tree, "a") |> should.equal(None)
+  campy_view.ids(tree) |> should.equal(["root", "b"])
+}
+
+pub fn reparent_moves_the_subtree_test() {
+  let tree =
+    form([], [
+      box("a", 0, 0, 10, 10),
+      node("panel", "panel", [
+        #("x", VInt(100)),
+        #("y", VInt(50)),
+        #("w", VInt(200)),
+        #("h", VInt(120)),
+      ]),
+    ])
+
+  let assert Ok(tree) = campy_design.reparent(tree, "a", "panel")
+  campy_design.parent_of(tree, "a") |> should.equal(Some("panel"))
+  campy_design.find_node(tree, "panel")
+  |> should.equal(case campy_design.find_node(tree, "panel") {
+    Some(panel) -> Some(panel)
+    None -> None
+  })
+  campy_design.index_of(tree, "root", "panel") |> should.equal(Ok(0))
+}
+
+pub fn reparent_refuses_into_itself_test() {
+  let tree =
+    form([], [
+      node("panel", "outer", [#("w", VInt(200)), #("h", VInt(100))])
+      |> campy_view.with_children([
+        node("panel", "inner", [#("w", VInt(100)), #("h", VInt(50))]),
+      ]),
+    ])
+
+  campy_design.reparent(tree, "outer", "inner")
+  |> should.equal(Error("cannot move a control into itself"))
+}
+
+pub fn bring_to_front_and_send_to_back_test() {
+  let tree =
+    form([], [
+      box("a", 0, 0, 10, 10),
+      box("b", 20, 0, 10, 10),
+      box("c", 40, 0, 10, 10),
+    ])
+
+  let assert Ok(tree) = campy_design.bring_to_front(tree, "a")
+  campy_view.ids(tree) |> should.equal(["root", "b", "c", "a"])
+
+  let assert Ok(tree) = campy_design.send_to_back(tree, "a")
+  campy_view.ids(tree) |> should.equal(["root", "a", "b", "c"])
+}
+
+pub fn container_for_drop_picks_the_deepest_test() {
+  let tree =
+    form([], [
+      node("panel", "panel", [
+        #("x", VInt(10)),
+        #("y", VInt(10)),
+        #("w", VInt(300)),
+        #("h", VInt(200)),
+      ])
+      |> campy_view.with_children([
+        node("group", "group", [
+          #("x", VInt(20)),
+          #("y", VInt(20)),
+          #("w", VInt(100)),
+          #("h", VInt(80)),
+        ]),
+      ]),
+    ])
+  let layout = campy_design.resolve(tree)
+
+  container_id(tree, layout, 50, 50, None) |> should.equal(Some("group"))
+  container_id(tree, layout, 200, 150, None) |> should.equal(Some("panel"))
+  container_id(tree, layout, 500, 350, None) |> should.equal(Some("root"))
+}
+
+pub fn container_for_drop_excludes_the_moving_subtree_test() {
+  let tree =
+    form([], [
+      node("panel", "panel", [
+        #("x", VInt(10)),
+        #("y", VInt(10)),
+        #("w", VInt(300)),
+        #("h", VInt(200)),
+      ])
+      |> campy_view.with_children([
+        node("group", "group", [
+          #("x", VInt(20)),
+          #("y", VInt(20)),
+          #("w", VInt(100)),
+          #("h", VInt(80)),
+        ]),
+      ]),
+    ])
+  let layout = campy_design.resolve(tree)
+
+  container_id(tree, layout, 50, 50, Some("group"))
+  |> should.equal(Some("panel"))
+}
+
+fn container_id(
+  root: campy_view.Node,
+  layout: campy_design.Layout,
+  x: Int,
+  y: Int,
+  moving: Option(String),
+) -> Option(String) {
+  case campy_design.container_for_drop(root, layout, x, y, moving) {
+    Some(placed) -> Some(placed.id)
+    None -> None
+  }
+}

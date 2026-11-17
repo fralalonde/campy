@@ -1,9 +1,10 @@
+import campy_design
 import campy_ide_model
 import campy_project
-import campy_view.{VText}
+import campy_view.{VInt, VText}
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleeunit
 import gleeunit/should
 
@@ -173,4 +174,415 @@ fn from(start: Int, stop: Int) -> List(Int) {
     True -> []
     False -> [start, ..from(start + 1, stop)]
   }
+}
+
+// --- T2.2: designer edits -------------------------------------------------
+
+fn control(
+  kind: String,
+  id: String,
+  props: List(#(String, campy_view.Value)),
+) -> campy_view.Node {
+  campy_view.node(kind, id) |> campy_view.with_props(props)
+}
+
+fn panel_node(id: String, x: Int, y: Int, w: Int, h: Int) -> campy_view.Node {
+  control("panel", id, [
+    #("x", VInt(x)),
+    #("y", VInt(y)),
+    #("w", VInt(w)),
+    #("h", VInt(h)),
+  ])
+}
+
+fn design_root(children: List(campy_view.Node)) -> campy_view.Node {
+  control("form", "root", [
+    #("w", VInt(600)),
+    #("h", VInt(400)),
+    #("layout", VText("free")),
+  ])
+  |> campy_view.with_children(children)
+}
+
+fn design_state(root: campy_view.Node) -> campy_ide_model.State {
+  campy_ide_model.new(
+    campy_project.Project(
+      title: "Design",
+      modules: [
+        campy_project.Module(
+          slug: "main",
+          form: campy_view.Document(schema: 1, view: root, extra: []),
+          handlers: "",
+        ),
+      ],
+      extra: [],
+    ),
+  )
+}
+
+fn form_view(state: campy_ide_model.State) -> campy_view.Node {
+  let assert Ok(module) = campy_ide_model.active_module(state)
+  module.form.view
+}
+
+fn control_in(state: campy_ide_model.State, id: String) -> campy_view.Node {
+  let assert Some(node) = campy_design.find_node(form_view(state), id)
+  node
+}
+
+fn prop(
+  state: campy_ide_model.State,
+  id: String,
+  name: String,
+) -> Result(campy_view.Value, Nil) {
+  campy_view.prop(control_in(state, id), name)
+}
+
+fn parent(state: campy_ide_model.State, id: String) -> Option(String) {
+  campy_design.parent_of(form_view(state), id)
+}
+
+pub fn arm_and_disarm_test() {
+  let state =
+    design_state(design_root([]))
+    |> campy_ide_model.update(campy_ide_model.Arm("button"))
+  state.armed |> should.equal(Some("button"))
+  state.status |> should.equal("Place Button: click or drag on the canvas")
+
+  let state = campy_ide_model.update(state, campy_ide_model.Disarm)
+  state.armed |> should.equal(None)
+}
+
+pub fn place_widget_adopts_the_deepest_container_test() {
+  let root =
+    design_root([
+      campy_view.with_child(
+        panel_node("panel", 100, 80, 300, 200),
+        control("group", "group", [
+          #("x", VInt(20)),
+          #("y", VInt(20)),
+          #("w", VInt(120)),
+          #("h", VInt(100)),
+        ]),
+      ),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.Arm("button"))
+    |> campy_ide_model.update(campy_ide_model.PlaceWidget(
+      "button",
+      140,
+      110,
+      0,
+      0,
+    ))
+
+  state.armed |> should.equal(None)
+  state.selection |> should.equal(["button_1"])
+  parent(state, "button_1") |> should.equal(Some("group"))
+  prop(state, "button_1", "x") |> should.equal(Ok(VInt(20)))
+  prop(state, "button_1", "y") |> should.equal(Ok(VInt(10)))
+  list.length(state.undo) |> should.equal(1)
+}
+
+pub fn place_widget_honors_drag_size_test() {
+  let state =
+    design_state(design_root([]))
+    |> campy_ide_model.update(campy_ide_model.PlaceWidget(
+      "text",
+      30,
+      40,
+      120,
+      44,
+    ))
+
+  prop(state, "text_1", "x") |> should.equal(Ok(VInt(30)))
+  prop(state, "text_1", "y") |> should.equal(Ok(VInt(40)))
+  prop(state, "text_1", "w") |> should.equal(Ok(VInt(120)))
+  prop(state, "text_1", "h") |> should.equal(Ok(VInt(44)))
+}
+
+pub fn place_widget_freezes_a_column_form_test() {
+  let root =
+    campy_view.node("form", "root")
+    |> campy_view.with_props([
+      #("w", VInt(600)),
+      #("h", VInt(400)),
+      #("layout", VText("column")),
+    ])
+    |> campy_view.with_children([
+      control("label", "first", [#("text", VText("First")), #("h", VInt(20))]),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.PlaceWidget(
+      "button",
+      60,
+      120,
+      0,
+      0,
+    ))
+
+  prop(state, "root", "layout") |> should.equal(Ok(VText("free")))
+  prop(state, "button_1", "x") |> should.equal(Ok(VInt(60)))
+  prop(state, "button_1", "y") |> should.equal(Ok(VInt(120)))
+}
+
+pub fn copy_paste_creates_fresh_ids_test() {
+  let state =
+    design_state(
+      design_root([
+        control("button", "ok", [
+          #("x", VInt(10)),
+          #("y", VInt(10)),
+          #("w", VInt(80)),
+          #("h", VInt(30)),
+        ]),
+      ]),
+    )
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["ok"]))
+    |> campy_ide_model.update(campy_ide_model.CopySelection)
+    |> campy_ide_model.update(campy_ide_model.Paste)
+
+  state.selection |> should.equal(["button_1"])
+  parent(state, "button_1") |> should.equal(Some("root"))
+  prop(state, "button_1", "x") |> should.equal(Ok(VInt(26)))
+  campy_view.ids(form_view(state))
+  |> should.equal(["root", "ok", "button_1"])
+  list.length(state.undo) |> should.equal(1)
+}
+
+pub fn cut_then_paste_moves_the_subtree_test() {
+  let state =
+    design_state(
+      design_root([
+        control("button", "ok", [
+          #("x", VInt(10)),
+          #("y", VInt(10)),
+          #("w", VInt(80)),
+          #("h", VInt(30)),
+        ]),
+      ]),
+    )
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["ok"]))
+    |> campy_ide_model.update(campy_ide_model.CutSelection)
+
+  campy_view.ids(form_view(state)) |> should.equal(["root"])
+  state.selection |> should.equal([])
+
+  let state = campy_ide_model.update(state, campy_ide_model.Paste)
+  campy_view.ids(form_view(state)) |> should.equal(["root", "button_1"])
+  state.selection |> should.equal(["button_1"])
+}
+
+pub fn paste_into_a_selected_container_test() {
+  let state =
+    design_state(
+      design_root([
+        control("button", "ok", [
+          #("x", VInt(10)),
+          #("y", VInt(10)),
+          #("w", VInt(80)),
+          #("h", VInt(30)),
+        ]),
+        panel_node("panel", 100, 50, 300, 200),
+      ]),
+    )
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["ok"]))
+    |> campy_ide_model.update(campy_ide_model.CopySelection)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["panel"]))
+    |> campy_ide_model.update(campy_ide_model.Paste)
+
+  parent(state, "button_1") |> should.equal(Some("panel"))
+}
+
+pub fn duplicate_offsets_and_selects_the_copy_test() {
+  let state =
+    design_state(
+      design_root([
+        control("button", "ok", [
+          #("x", VInt(10)),
+          #("y", VInt(10)),
+          #("w", VInt(80)),
+          #("h", VInt(30)),
+        ]),
+      ]),
+    )
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["ok"]))
+    |> campy_ide_model.update(campy_ide_model.DuplicateSelection)
+
+  state.selection |> should.equal(["button_1"])
+  prop(state, "button_1", "x") |> should.equal(Ok(VInt(26)))
+  prop(state, "button_1", "y") |> should.equal(Ok(VInt(26)))
+  campy_view.ids(form_view(state))
+  |> should.equal(["root", "ok", "button_1"])
+}
+
+pub fn duplicate_of_a_container_copies_its_children_test() {
+  let root =
+    design_root([
+      panel_node("panel", 20, 20, 200, 120)
+      |> campy_view.with_child(
+        control("label", "inside", [
+          #("x", VInt(5)),
+          #("y", VInt(5)),
+          #("w", VInt(40)),
+          #("h", VInt(20)),
+        ]),
+      ),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(
+      campy_ide_model.SelectControls(["inside", "panel"]),
+    )
+    |> campy_ide_model.update(campy_ide_model.DuplicateSelection)
+
+  campy_view.ids(form_view(state))
+  |> should.equal(["root", "panel", "inside", "panel_1", "label_1"])
+  parent(state, "label_1") |> should.equal(Some("panel_1"))
+}
+
+pub fn delete_and_undo_restore_the_subtree_test() {
+  let original =
+    design_root([
+      control("button", "ok", [
+        #("x", VInt(10)),
+        #("y", VInt(10)),
+        #("w", VInt(80)),
+        #("h", VInt(30)),
+      ]),
+    ])
+  let state =
+    design_state(original)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["ok"]))
+    |> campy_ide_model.update(campy_ide_model.DeleteSelection)
+
+  campy_view.ids(form_view(state)) |> should.equal(["root"])
+  state.selection |> should.equal([])
+  state.status |> should.equal("Deleted 1")
+
+  let state = campy_ide_model.update(state, campy_ide_model.Undo)
+  campy_view.ids(form_view(state)) |> should.equal(["root", "ok"])
+}
+
+pub fn z_order_commands_reorder_siblings_test() {
+  let root =
+    design_root([
+      control("button", "a", [
+        #("x", VInt(0)),
+        #("y", VInt(0)),
+        #("w", VInt(10)),
+        #("h", VInt(10)),
+      ]),
+      control("button", "b", [
+        #("x", VInt(0)),
+        #("y", VInt(0)),
+        #("w", VInt(10)),
+        #("h", VInt(10)),
+      ]),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["a"]))
+    |> campy_ide_model.update(campy_ide_model.BringToFront)
+
+  campy_view.ids(form_view(state)) |> should.equal(["root", "b", "a"])
+
+  let state = campy_ide_model.update(state, campy_ide_model.SendToBack)
+  campy_view.ids(form_view(state)) |> should.equal(["root", "a", "b"])
+}
+
+pub fn commit_geometry_reparents_and_keeps_absolute_position_test() {
+  let root =
+    design_root([
+      control("button", "btn", [
+        #("x", VInt(20)),
+        #("y", VInt(20)),
+        #("w", VInt(80)),
+        #("h", VInt(30)),
+      ]),
+      panel_node("panel", 100, 80, 300, 200),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["btn"]))
+    |> campy_ide_model.update(campy_ide_model.CommitGeometry(
+      [#("btn", campy_design.Rect(150, 150, 90, 34))],
+      Some(#("btn", "panel")),
+    ))
+
+  parent(state, "btn") |> should.equal(Some("panel"))
+  prop(state, "btn", "x") |> should.equal(Ok(VInt(50)))
+  prop(state, "btn", "y") |> should.equal(Ok(VInt(70)))
+  campy_design.absolute(form_view(state), "btn")
+  |> should.equal(Some(campy_design.Rect(150, 150, 90, 34)))
+
+  let state = campy_ide_model.update(state, campy_ide_model.Undo)
+  parent(state, "btn") |> should.equal(Some("root"))
+  prop(state, "btn", "x") |> should.equal(Ok(VInt(20)))
+}
+
+pub fn commit_geometry_without_reparent_updates_the_rect_test() {
+  let root =
+    design_root([
+      control("button", "btn", [
+        #("x", VInt(20)),
+        #("y", VInt(20)),
+        #("w", VInt(80)),
+        #("h", VInt(30)),
+      ]),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(campy_ide_model.CommitGeometry(
+      [#("btn", campy_design.Rect(60, 90, 100, 40))],
+      None,
+    ))
+
+  prop(state, "btn", "x") |> should.equal(Ok(VInt(60)))
+  prop(state, "btn", "y") |> should.equal(Ok(VInt(90)))
+  prop(state, "btn", "w") |> should.equal(Ok(VInt(100)))
+  prop(state, "btn", "h") |> should.equal(Ok(VInt(40)))
+}
+
+pub fn group_move_of_a_container_and_child_keeps_relative_geometry_test() {
+  let root =
+    design_root([
+      panel_node("panel", 100, 50, 200, 100)
+      |> campy_view.with_child(
+        control("label", "inside", [
+          #("x", VInt(20)),
+          #("y", VInt(20)),
+          #("w", VInt(40)),
+          #("h", VInt(20)),
+        ]),
+      ),
+    ])
+
+  let state =
+    design_state(root)
+    |> campy_ide_model.update(
+      campy_ide_model.SelectControls(["panel", "inside"]),
+    )
+    |> campy_ide_model.update(campy_ide_model.CommitGeometry(
+      [
+        #("panel", campy_design.Rect(200, 150, 200, 100)),
+        #("inside", campy_design.Rect(220, 170, 40, 20)),
+      ],
+      None,
+    ))
+
+  prop(state, "panel", "x") |> should.equal(Ok(VInt(200)))
+  prop(state, "panel", "y") |> should.equal(Ok(VInt(150)))
+  prop(state, "inside", "x") |> should.equal(Ok(VInt(20)))
+  prop(state, "inside", "y") |> should.equal(Ok(VInt(20)))
+  campy_design.absolute(form_view(state), "inside")
+  |> should.equal(Some(campy_design.Rect(220, 170, 40, 20)))
 }

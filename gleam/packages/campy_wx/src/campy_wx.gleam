@@ -258,10 +258,22 @@ fn create_node(
   }
 
   use ref <- result.try(created)
+  let design = plan.bool_of(node.props, "design") |> plan.unwrap_or(False)
 
-  case plan.bool_of(node.props, "design") |> plan.unwrap_or(False) {
+  case design {
     True -> native.connect_design(ref, kind)
     False -> native.connect(ref, kind)
+  }
+
+  // Design-mode containers are otherwise invisible (a plain wxPanel has no
+  // chrome), which makes empty panels and groups impossible to find.
+  case design {
+    True ->
+      case kind {
+        "panel" | "group" -> native.set_background(ref, 232, 237, 247)
+        _ -> Nil
+      }
+    False -> Nil
   }
 
   case kind {
@@ -883,6 +895,13 @@ fn event_value(widget: Widget) -> Value {
 pub fn set_tree(shell: Shell, id: String, items: List(plan.TreeItem)) -> Nil {
   case get_widget(shell, id) {
     Ok(widget) -> native.tree_set(widget.ref, items)
+    Error(_) -> Nil
+  }
+}
+
+pub fn set_selection(shell: Shell, id: String, index: Int) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.set_selection(widget.ref, widget.kind, index)
     Error(_) -> Nil
   }
 }

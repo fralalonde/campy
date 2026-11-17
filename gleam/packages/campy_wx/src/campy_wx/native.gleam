@@ -144,6 +144,9 @@ pub fn set_enabled(ref: Dynamic, enabled: Bool) -> Nil
 @external(erlang, "campy_wx_native", "set_visible")
 pub fn set_visible(ref: Dynamic, visible: Bool) -> Nil
 
+@external(erlang, "campy_wx_native", "set_background")
+pub fn set_background(ref: Dynamic, r: Int, g: Int, b: Int) -> Nil
+
 @external(erlang, "campy_wx_native", "focus")
 pub fn focus(ref: Dynamic) -> Nil
 

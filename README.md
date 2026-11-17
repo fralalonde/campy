@@ -34,14 +34,20 @@ project directory to open another project.
 - **Project format** (`campy_project`): a project is a directory with canonical
   `campy.json`, `modules/<slug>/form.json`, and `handlers.gleam`; unknown fields
   survive a round trip.
+- **Widget catalog** (`campy_catalog`): the target-neutral widget table (kinds,
+  labels, events, default geometry and properties).
+- **Designer** (`campy_design`): absolute geometry, hit-testing, resize/move,
+  structural edits, drop adoption, and reparenting.
 - **IDE model** (`campy_ide_model`): tabs, active module, selection, console,
-  undo/redo. Display-free and headless-tested.
-- **IDE shell** (`gleam/apps/campy_ide_wx`): module tree, Scintilla code view,
-  console, inspector grid, save, undo/redo.
+  undo/redo, palette placement, clipboard, duplicate/delete, and z-order.
+- **IDE shell** (`gleam/apps/campy_ide_wx`): module tree, widget palette, form
+  canvas with selection chrome, Scintilla code view, console, inspector, save,
+  undo/redo.
 - **Sample project**: `examples/demo`.
 
-Not built yet: form designer canvas, form preview in the IDE, Run/hot update,
-the ABI v2 runtime, and peer-node deploy. See [`docs/PHASE2.md`](docs/PHASE2.md).
+Not built yet: editable inspector/events, generated source, form preview in the
+IDE, Run/hot update, the ABI v2 runtime, and peer-node deploy. See
+[`docs/PHASE2.md`](docs/PHASE2.md).
 
 ## Development
 
