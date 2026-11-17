@@ -33,9 +33,11 @@ it. Option 2 (native children + selection chrome) is implemented on wx.
   `LD_LIBRARY_PATH=<compatible OpenSSL 3 dir> just check` until OTP is rebuilt.
   The IDE and wx tests do not need crypto.
 
-**Next task.** **Gate G2**: stop for the human designer-feel check after M2
-(design the demo form from scratch, run it, reopen it, and diff the JSON). Do
-not start M3 (ABI v2 runtime, appgen, Run) until G2 passes.
+**Next task.** **Gate G2**: stop for the human designer-feel check after M2.
+Until M3 exists, G2 covers designing a form, saving, inspecting/diffing the
+canonical JSON, and reopening it (the plan's "run it" step belongs to M3).
+Reopen proof can use `CAMPY_WX_SMOKE=1` on the saved project. Do not start M3
+(ABI v2 runtime, appgen, Run) until G2 passes.
 
 **Layout.**
 ```
