@@ -83,6 +83,36 @@ click 400 800
 sleep 1
 shot t33-greet-clicked
 
+# --- T4.3/G4: node manager — start a peer, deploy, drive, upgrade, kill -----
+# The Nodes tab is the fifth notebook tab: client ≈ (520, 147).
+click 520 147
+sleep 2
+shot t43-nodes-page
+# Start peer (button row, client ≈ (489, 173)); the peer boots in ~2 s.
+click 489 173
+sleep 3
+shot t43-peer-started
+# Deploy active form: builds locally, pushes the runtime + app beams, starts
+# the actor on the peer, and attaches the Run page to it.
+click 739 173
+sleep 30
+shot t43-peer-deployed
+# Greet on the peer app's live preview: remote event, local console lines.
+click 505 235
+sleep 2
+shot t43-peer-greet
+# Back to Nodes for the management buttons (deploy switched to Run).
+click 520 147
+sleep 2
+# Redeploy (upgrade) with the same source: version 2 + republish.
+click 882 173
+sleep 20
+shot t43-peer-redeploy
+# Stop the peer: the app attached to it detaches and the console reports it.
+click 604 173
+sleep 3
+shot t43-peer-stopped
+
 # --- T2.1/T2.5: selection chrome and body drag ------------------------------
 # The text control is at canvas (0,24), 600x28; canvas origin is client (202,194).
 click 499 205

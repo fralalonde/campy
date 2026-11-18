@@ -12,7 +12,9 @@ import campy_appgen
 import campy_catalog
 import campy_design
 import campy_ide_model as model
+import campy_peer
 import campy_project
+import campy_runner
 import campy_source
 import campy_view.{type Node, VBool, VInt, VList, VMap, VText}
 import campy_view/diff
@@ -150,6 +152,11 @@ fn loop(
         }
         "tool-run" -> toggle_run(shell, state, current, dir)
         "tool-stop" -> toggle_run(shell, state, current, dir)
+        "nodes-start" -> start_peer(shell, state, current, dir)
+        "nodes-stop" -> stop_peer(shell, state, current, dir)
+        "nodes-deploy" -> deploy_to_peer(shell, state, current, dir)
+        "nodes-redeploy" -> redeploy_on_peer(shell, state, current, dir)
+        "nodes-app-stop" -> toggle_run(shell, state, current, dir)
         "menu-help-keys" -> {
           campy_wx.show_message(shell, "Keyboard shortcuts", help_text())
           loop(shell, state, current, dir, drag)
@@ -171,6 +178,7 @@ fn loop(
           loop(shell, state, next, dir, NoDrag)
         }
       }
+
     campy_wx.KeyPressed(key) ->
       handle_key(shell, state, current, dir, drag, key)
     campy_wx.Accelerator(action) ->
@@ -242,11 +250,18 @@ fn poll_app(
         Error(_) -> state
         Ok(campy_app.View(document, gen)) -> {
           io.println("[app] view generation " <> int.to_string(gen))
+          let first = state.live_view == None
           let previous = state
           let state = model.update(state, model.RunView(document, gen))
           let next = view(state)
           let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
+          // Follow the app to the Run page only when it first attaches;
+          // later generations must not yank the user off another page.
+          case first {
+            True -> campy_wx.select_page(shell, "tabs", page_index(state))
+            False -> Nil
+          }
           poll_app(shell, state, next)
         }
         Ok(campy_app.Report(text)) -> {
@@ -519,6 +534,45 @@ fn write_file(path: String, contents: String) -> Result(Nil, String)
 @external(erlang, "campy_ide_wx_ffi", "compile_and_load")
 fn compile_and_load(dir: String, module: String) -> Result(Nil, String)
 
+@external(erlang, "campy_ide_wx_ffi", "start_app_on")
+fn start_app_on(
+  node: String,
+  spec: campy_app.Spec,
+  reply: process.Subject(campy_app.Reply),
+) -> Result(process.Subject(campy_app.Msg), String)
+
+@external(erlang, "campy_ide_wx_ffi", "load_code_on")
+fn load_code_on(
+  node: String,
+  module: String,
+  beam_path: String,
+) -> Result(Nil, String)
+
+@external(erlang, "campy_ide_wx_ffi", "pause_on")
+fn pause_on(node: String, pid: process.Pid) -> Result(Nil, String)
+
+@external(erlang, "campy_ide_wx_ffi", "resume_on")
+fn resume_on(node: String, pid: process.Pid) -> Result(Nil, String)
+
+/// The ebin directories a peer needs for the runtime; paths under the repo
+/// root so they resolve on the (local) peer node too.
+fn runtime_dirs() -> List(String) {
+  let runner = root() <> "/gleam/packages/campy_runner/build/dev/erlang"
+  [
+    runner <> "/gleam_stdlib/ebin",
+    runner <> "/gleam_erlang/ebin",
+    runner <> "/gleam_otp/ebin",
+    runner <> "/campy_view/ebin",
+    runner <> "/campy_app/ebin",
+    runner <> "/campy_runner/ebin",
+  ]
+}
+
+/// The scratch build's app modules.
+fn apps_dir() -> String {
+  scratch_dir() <> "/build/dev/erlang/campy_apps/ebin"
+}
+
 /// The repo root for the scratch app package. `CAMPY_ROOT` wins when set
 /// (workspace.py exports it); otherwise it is derived from the process cwd,
 /// which is the app package three levels under the repo root.
@@ -567,6 +621,7 @@ fn deploy(state: model.State) -> Result(campy_app.Running, String) {
             slug: module.slug,
             module: module_name,
             version: 1,
+            node: "",
             dispatch: subject,
             reply: reply,
           ))
@@ -604,6 +659,221 @@ fn write_scratch_package(dir: String) -> Result(Nil, String) {
       <> root()
       <> "/gleam/packages/campy_app\" }\n",
   )
+}
+
+/// Start a peer node named after the Nodes page field.
+fn start_peer(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+) {
+  let previous = state
+  let state = model.update(state, model.ShowNodes)
+  let state = case campy_peer.start_distribution("campy_ide") {
+    Error(reason) ->
+      model.update(state, model.Log("distribution failed: " <> reason))
+    Ok(Nil) ->
+      case campy_peer.start(state.nodes_name) {
+        Ok(peer) -> model.update(state, model.PeerStarted(peer))
+        Error(reason) ->
+          model.update(
+            state,
+            model.Log("peer " <> state.nodes_name <> " failed: " <> reason),
+          )
+      }
+  }
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  refresh(shell, Some(previous), state)
+  loop(shell, state, next, dir, NoDrag)
+}
+
+/// Stop the selected peer. Anything attached to it detaches (PeerStopped).
+fn stop_peer(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+) {
+  let previous = state
+  let state = case model.selected_peer(state) {
+    Ok(peer) -> {
+      campy_peer.stop(peer)
+      model.update(state, model.PeerStopped(peer.node))
+    }
+    Error(error) -> model.update(state, model.Log(error))
+  }
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  refresh(shell, Some(previous), state)
+  loop(shell, state, next, dir, NoDrag)
+}
+
+/// Deploy the active form to the selected peer: generate, build locally,
+/// push the runtime + app beams, and start the actor on the peer. The Run
+/// page attaches to the peer app exactly like the in-VM one.
+fn deploy_to_peer(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+) {
+  let previous = state
+  let state = case model.active_module(state) {
+    Error(error) -> model.update(state, model.Log("Deploy failed: " <> error))
+    Ok(module) ->
+      case model.selected_peer(state) {
+        Error(error) ->
+          model.update(state, model.Log("Deploy failed: " <> error))
+        Ok(peer) -> deploy_module_to_peer(state, module, peer)
+      }
+  }
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  refresh(shell, Some(previous), state)
+  campy_wx.select_page(shell, "tabs", page_index(state))
+  loop(shell, state, next, dir, NoDrag)
+}
+
+fn deploy_module_to_peer(
+  state: model.State,
+  module: campy_project.Module,
+  peer: campy_peer.Peer,
+) -> model.State {
+  case campy_appgen.generate(module.slug, module.form, module.handlers) {
+    Error(error) -> model.update(state, model.Log("Deploy failed: " <> error))
+    Ok(source) -> {
+      let dir = scratch_dir()
+      let module_name = campy_appgen.module_name(module.slug)
+      let _ = make_dir(dir <> "/src")
+      let built =
+        write_file(dir <> "/src/" <> module_name <> ".gleam", source)
+        |> result.try(fn(_) { write_scratch_package(dir) })
+        |> result.try(fn(_) { compile_and_load(dir, module_name) })
+        |> result.try(fn(_) {
+          // Runtime beams for a fresh peer; idempotent for a warm one.
+          campy_peer.deploy_dirs(peer.node, runtime_dirs())
+        })
+        |> result.try(fn(_) { campy_peer.deploy_dir(peer.node, apps_dir()) })
+      case built {
+        Error(error) ->
+          model.update(state, model.Log("Deploy failed: " <> error))
+        Ok(_) -> {
+          let reply = process.new_subject()
+          case
+            start_app_on(peer.node, deploy_spec(module, module_name), reply)
+          {
+            Ok(subject) -> {
+              io.println(
+                "[ide] deployed " <> module.slug <> " to " <> peer.node,
+              )
+              model.update(
+                state,
+                model.RunStarted(campy_app.Running(
+                  name: module.slug,
+                  slug: module.slug,
+                  module: module_name,
+                  version: 1,
+                  node: peer.node,
+                  dispatch: subject,
+                  reply: reply,
+                )),
+              )
+            }
+            Error(error) -> {
+              io.println(
+                "[ide] deploy to " <> peer.node <> " failed: " <> error,
+              )
+              model.update(state, model.Log("Deploy failed: " <> error))
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Redeploy (hot-upgrade) the app attached to a peer: rebuild, load the new
+/// beam on the peer, pause/resume the actor around the load, then Upgrade.
+fn redeploy_on_peer(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+) {
+  let previous = state
+  let state = model.update(state, model.ShowNodes)
+  let state = case state.running {
+    Some(running) if running.node != "" -> upgrade_on_peer(state, running)
+    Some(_) -> model.update(state, model.Log("Nothing deployed to a peer"))
+    None -> model.update(state, model.Log("Nothing running"))
+  }
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  refresh(shell, Some(previous), state)
+  loop(shell, state, next, dir, NoDrag)
+}
+
+fn upgrade_on_peer(
+  state: model.State,
+  running: campy_app.Running,
+) -> model.State {
+  let next_version = running.version + 1
+  let beam = apps_dir() <> "/" <> running.module <> ".beam"
+  case model.active_module(state) {
+    Error(error) -> model.update(state, model.Log("Redeploy failed: " <> error))
+    Ok(module) ->
+      case campy_appgen.generate(module.slug, module.form, module.handlers) {
+        Error(error) ->
+          model.update(state, model.Log("Redeploy failed: " <> error))
+        Ok(source) -> {
+          let dir = scratch_dir()
+          let written =
+            write_file(dir <> "/src/" <> running.module <> ".gleam", source)
+          case written {
+            Error(error) ->
+              model.update(state, model.Log("Redeploy failed: " <> error))
+            Ok(_) -> {
+              let _ = compile_and_load(dir, running.module)
+              case load_code_on(running.node, running.module, beam) {
+                Ok(_) -> {
+                  // The owner pid: pause/resume go through sys on the peer.
+                  let assert Ok(owner) = process.subject_owner(running.dispatch)
+                  let _ = pause_on(running.node, owner)
+                  let state =
+                    model.update(state, model.RunCodeUpdated(next_version))
+                  let updated = case state.running {
+                    Some(now) -> now
+                    None -> running
+                  }
+                  let _ = resume_on(running.node, owner)
+                  process.send(
+                    updated.dispatch,
+                    campy_app.Upgrade(
+                      running.module,
+                      running.version,
+                      next_version,
+                    ),
+                  )
+                  io.println(
+                    "[ide] redeployed "
+                    <> running.slug
+                    <> " on "
+                    <> running.node
+                    <> " to version "
+                    <> int.to_string(next_version),
+                  )
+                  state
+                }
+                Error(error) ->
+                  model.update(state, model.Log("Redeploy failed: " <> error))
+              }
+            }
+          }
+        }
+      }
+  }
 }
 
 /// Start or stop the running app for the active module.
@@ -1360,6 +1630,20 @@ fn handle(
     "inspector" -> inspector_changed(state, value)
     "events" -> event_selected(state, value)
     "modules" -> module_selected(state, value)
+    "nodes-name" ->
+      case value {
+        campy_view.VText(name) -> model.update(state, model.SetNodesName(name))
+        _ -> state
+      }
+    "nodes-list" ->
+      case value {
+        campy_view.VInt(index) ->
+          case list.drop(model.peer_nodes(state), index) {
+            [node, ..] -> model.update(state, model.PeerSelected(node))
+            [] -> state
+          }
+        _ -> state
+      }
     _ -> {
       let kind = string.drop_start(id, string.length("palette-"))
       case string.starts_with(id, "palette-") {
@@ -1378,7 +1662,8 @@ fn page_selected(state: model.State, value: campy_view.Value) -> model.State {
   case value {
     VInt(1) -> model.update(state, model.ShowCode)
     VInt(2) -> model.update(state, model.ShowSource)
-    VInt(_) -> model.update(state, model.ShowForm)
+    VInt(4) -> model.update(state, model.ShowNodes)
+    VInt(_) -> model.update(state, model.ShowTabs)
     _ -> state
   }
 }
@@ -1686,6 +1971,7 @@ fn refresh(
       set_code(shell, state)
       set_source(shell, state)
       set_console(shell, state)
+      set_nodes(shell, state)
       campy_wx.select_page(shell, "tabs", page_index(state))
     }
     Some(previous) -> {
@@ -1711,6 +1997,10 @@ fn refresh(
       }
       case previous.console == state.console {
         False -> set_console(shell, state)
+        True -> Nil
+      }
+      case previous.peers == state.peers {
+        False -> set_nodes(shell, state)
         True -> Nil
       }
     }
@@ -1763,13 +2053,18 @@ fn sync_shortcuts(
 }
 
 pub fn page_index(state: model.State) -> Int {
-  case state.running {
-    Some(_) -> 3
-    None ->
-      case state.source_view, state.code_view {
-        True, _ -> 2
-        False, True -> 1
-        False, False -> 0
+  case state.nodes_view {
+    // The Nodes page is an explicit choice; it wins even while an app runs.
+    True -> 4
+    False ->
+      case state.running {
+        Some(_) -> 3
+        None ->
+          case state.source_view, state.code_view {
+            True, _ -> 2
+            False, True -> 1
+            False, False -> 0
+          }
       }
   }
 }
@@ -1845,6 +2140,10 @@ fn typed_grid_editors(
       }
     })
   Nil
+}
+
+fn set_nodes(shell: campy_wx.Shell, state: model.State) {
+  campy_wx.set_items(shell, "nodes-list", model.peer_nodes(state))
 }
 
 fn set_console(shell: campy_wx.Shell, state: model.State) {
@@ -2297,6 +2596,7 @@ fn centre(state: model.State) -> Node {
         code_page(),
         source_page(),
         run_page(state),
+        nodes_page(state),
       ]),
     campy_view.node("panel", "console-header")
       |> campy_view.with_props([
@@ -2361,6 +2661,61 @@ fn source_page() -> Node {
     campy_view.node("editor", "source")
     |> campy_view.with_props([#("grow", VBool(True))])
     |> campy_view.with_events([]),
+  ])
+}
+
+/// The Nodes page: start/stop peer BEAM nodes, deploy the active form to one,
+/// and manage the app attached to it. Replies from a peer app arrive over
+/// distribution on the same reply subject the in-VM run uses, so the console
+/// and the Run page work identically for both.
+fn nodes_page(state: model.State) -> Node {
+  campy_view.node("page", "page-nodes")
+  |> campy_view.with_props([
+    #("text", VText("Nodes")),
+    #("layout", VText("column")),
+  ])
+  |> campy_view.with_children([
+    campy_view.node("panel", "nodes-controls")
+      |> campy_view.with_props([
+        #("layout", VText("row")),
+        #("border", VInt(4)),
+        #("h", VInt(34)),
+      ])
+      |> campy_view.with_children([
+        campy_view.node("label", "nodes-name-label")
+          |> campy_view.with_props([#("text", VText("Peer name:"))]),
+        campy_view.node("text", "nodes-name")
+          |> campy_view.with_props([
+            #("w", VInt(160)),
+            #("text", VText(state.nodes_name)),
+          ])
+          |> campy_view.with_events(["change"]),
+        campy_view.node("button", "nodes-start")
+          |> campy_view.with_events(["click"])
+          |> campy_view.with_props([#("text", VText("Start peer"))]),
+        campy_view.node("button", "nodes-stop")
+          |> campy_view.with_events(["click"])
+          |> campy_view.with_props([#("text", VText("Stop peer"))]),
+        campy_view.node("button", "nodes-deploy")
+          |> campy_view.with_events(["click"])
+          |> campy_view.with_props([#("text", VText("Deploy active form"))]),
+        campy_view.node("button", "nodes-redeploy")
+          |> campy_view.with_events(["click"])
+          |> campy_view.with_props([#("text", VText("Redeploy (upgrade)"))]),
+        campy_view.node("button", "nodes-app-stop")
+          |> campy_view.with_events(["click"])
+          |> campy_view.with_props([#("text", VText("Stop app"))]),
+      ]),
+    campy_view.node("label", "nodes-list-label")
+      |> campy_view.with_props([
+        #("text", VText("Peers (start one, select it, then deploy):")),
+      ]),
+    campy_view.node("list", "nodes-list")
+      |> campy_view.with_props([
+        #("grow", VBool(True)),
+        #("items", VList(list.map(model.peer_nodes(state), VText))),
+      ])
+      |> campy_view.with_events(["select"]),
   ])
 }
 

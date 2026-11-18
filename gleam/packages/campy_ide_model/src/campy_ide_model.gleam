@@ -13,6 +13,7 @@ import campy_app
 import campy_appgen
 import campy_catalog
 import campy_design
+import campy_peer.{type Peer}
 import campy_project.{type Module, type Project}
 import campy_view.{type Node, type Value, VText}
 import gleam/dict
@@ -40,6 +41,10 @@ pub type State {
     /// The generated-source page. At most one of `code_view` and
     /// `source_view` is true; both false means the design canvas (Form).
     source_view: Bool,
+    /// The Nodes page. It overrides the Form/Code/Source flags while set;
+    /// Run (an attached app) still wins because page_index checks running
+    /// first.
+    nodes_view: Bool,
     /// Copied subtrees with their canvas-absolute rectangles, in selection
     /// order. Copies are cloned again on paste so pasting twice does not
     /// create duplicate ids; the rect keeps sizer/aligned children placeable.
@@ -53,6 +58,12 @@ pub type State {
     /// The latest published view document from the running app, with the
     /// generation it was derived from.
     live_view: Option(campy_view.Document),
+    /// Known peer nodes, started through the node manager.
+    peers: List(Peer),
+    /// The name typed into the Nodes page's peer-name field.
+    nodes_name: String,
+    /// The peer the app tree selection points at, by node name.
+    selected_peer: Option(String),
   )
 }
 
@@ -96,6 +107,13 @@ pub type Command {
   RunReport(String)
   RunCodeUpdated(Int)
   RunStopped
+  PeerStarted(Peer)
+  PeerStopped(String)
+  PeerSelected(String)
+  PeerGone(String)
+  SetNodesName(String)
+  ShowNodes
+  ShowTabs
   SetHandlers(String)
   OpenHandler(control_id: String, event: String)
 }
@@ -113,10 +131,14 @@ pub fn new(project: Project) -> State {
       status: "",
       code_view: False,
       source_view: False,
+      nodes_view: False,
       clipboard: [],
       armed: None,
       running: None,
       live_view: None,
+      peers: [],
+      nodes_name: "node1",
+      selected_peer: None,
     )
 
   case project.modules {
@@ -1099,6 +1121,95 @@ pub fn run_stopped(state: State) -> State {
   |> log("App stopped")
 }
 
+/// Record a freshly started peer.
+pub fn peer_started(state: State, peer: Peer) -> State {
+  let known = list.any(state.peers, fn(p) { p.node == peer.node })
+  let peers = case known {
+    True -> state.peers
+    False -> list.append(state.peers, [peer])
+  }
+  State(..state, peers: peers, selected_peer: Some(peer.node))
+  |> log("peer " <> peer.node <> " started")
+  |> set_status("")
+}
+
+/// A peer was stopped and is gone.
+pub fn peer_stopped(state: State, node: String) -> State {
+  let peers = list.filter(state.peers, fn(p) { p.node != node })
+  let selected = case state.selected_peer {
+    Some(selected) if selected == node -> None
+    _ -> state.selected_peer
+  }
+  // An app attached to that peer's node is gone with it.
+  let state = case state.running {
+    Some(running) if running.node == node ->
+      State(..state, running: None, live_view: None)
+    _ -> state
+  }
+  State(..state, peers: peers, selected_peer: selected)
+  |> log("peer " <> node <> " stopped")
+}
+
+/// The peer the app tree selection points at.
+pub fn peer_selected(state: State, node: String) -> State {
+  State(..state, selected_peer: Some(node))
+}
+
+/// A peer vanished (down/crashed); detach anything attached to it.
+pub fn peer_gone(state: State, node: String) -> State {
+  let peers = list.filter(state.peers, fn(p) { p.node != node })
+  let state = case state.running {
+    Some(running) if running.node == node -> {
+      let state = State(..state, running: None, live_view: None)
+      log(state, "peer " <> node <> " is down; app detached")
+    }
+    _ -> state
+  }
+  State(..state, peers: peers)
+}
+
+/// The selected (or only) peer, if any.
+pub fn selected_peer(state: State) -> Result(Peer, String) {
+  case state.selected_peer {
+    Some(node) ->
+      case list.find(state.peers, fn(p) { p.node == node }) {
+        Ok(peer) -> Ok(peer)
+        Error(Nil) -> first_peer(state)
+      }
+    None -> first_peer(state)
+  }
+}
+
+fn first_peer(state: State) -> Result(Peer, String) {
+  case state.peers {
+    [peer, ..] -> Ok(peer)
+    [] -> Error("no peer nodes; start one on the Nodes page")
+  }
+}
+
+/// Peer node names for the nodes list.
+pub fn peer_nodes(state: State) -> List(String) {
+  list.map(state.peers, fn(peer) { peer.node })
+}
+
+/// Peer names for the app tree, `node` plus the apps attached to it.
+pub fn peer_lines(state: State) -> List(String) {
+  let apps = case state.running {
+    Some(running) if running.node != "" -> [running.slug]
+    _ -> []
+  }
+  case state.peers {
+    [] -> ["(no peers)"]
+    peers ->
+      list.flat_map(peers, fn(peer) {
+        case apps {
+          [] -> [peer.node]
+          apps -> [peer.node, ..list.map(apps, fn(app) { "  " <> app })]
+        }
+      })
+  }
+}
+
 /// The generated module name for the active form, per ABI v2 dispatch.
 pub fn run_module(state: State) -> Result(String, String) {
   case active_module(state) {
@@ -1143,6 +1254,13 @@ pub fn update(state: State, command: Command) -> State {
     RunReport(text) -> run_report(state, text)
     RunCodeUpdated(version) -> run_code_updated(state, version)
     RunStopped -> run_stopped(state)
+    PeerStarted(peer) -> peer_started(state, peer)
+    PeerStopped(node) -> peer_stopped(state, node)
+    PeerSelected(node) -> peer_selected(state, node)
+    PeerGone(node) -> peer_gone(state, node)
+    SetNodesName(name) -> State(..state, nodes_name: name)
+    ShowNodes -> State(..state, nodes_view: True)
+    ShowTabs -> State(..state, nodes_view: False)
     SetControlRect(id, rect) -> set_control_rect(state, id, rect)
     SetControlProp(id, name, value) -> set_control_prop(state, id, name, value)
     SetHandlers(handlers) -> set_handlers(state, handlers)

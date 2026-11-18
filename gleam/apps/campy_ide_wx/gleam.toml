@@ -9,6 +9,8 @@ campy_app = { path = "../../packages/campy_app" }
 gleam_erlang = ">= 1.3.0 and < 2.0.0"
 gleam_otp = ">= 1.3.0 and < 2.0.0"
 campy_appgen = { path = "../../packages/campy_appgen" }
+campy_peer = { path = "../../packages/campy_peer" }
+campy_runner = { path = "../../packages/campy_runner" }
 campy_catalog = { path = "../../packages/campy_catalog" }
 campy_design = { path = "../../packages/campy_design" }
 campy_ide_model = { path = "../../packages/campy_ide_model" }

@@ -747,8 +747,7 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 - **T3.4** Code update — done (2026-11-18). See the T3.4 status bullet above.
 - **T4.1** `campy_peer` — done (2026-11-18). See the T4.1 status bullet above.
 - **T4.2** `campy_runner` — done (2026-11-18). See the T4.2 status bullet above.
-- **T4.3** Node manager UI: nodes → apps tree, deploy, version, restart,
-  rollback, console lines.
+- **T4.3** Node manager UI — done (2026-11-18). See the T4.3 status bullet above.
 - **T4.4** Debug v1: supervisor tree, process list, app state viewer
   (`:sys.get_state`), `:dbg` trace toggle.
 - Gate G4: deploy to a peer node, kill the peer (console reports it), restart,

@@ -50,13 +50,16 @@ pub type Snapshot {
 
 /// A running app instance, recorded by the IDE model: the app's dispatch
 /// subject plus the reply channel the shell polls. `version` is the code
-/// version the actor currently runs; code updates bump it.
+/// version the actor currently runs; code updates bump it. `node` is the
+/// node the actor lives on: an empty string means in-VM (the IDE node),
+/// otherwise `name@host` of the peer node.
 pub type Running {
   Running(
     name: String,
     slug: String,
     module: String,
     version: Int,
+    node: String,
     dispatch: Subject(Msg),
     reply: Subject(Reply),
   )

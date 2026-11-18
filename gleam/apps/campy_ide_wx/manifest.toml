@@ -11,8 +11,10 @@ packages = [
   { name = "campy_appgen", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_source", "campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_appgen" },
   { name = "campy_catalog", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_catalog" },
   { name = "campy_design", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_catalog", "campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_design" },
-  { name = "campy_ide_model", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_app", "campy_appgen", "campy_catalog", "campy_design", "campy_project", "campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_ide_model" },
+  { name = "campy_ide_model", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_app", "campy_appgen", "campy_catalog", "campy_design", "campy_peer", "campy_project", "campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_ide_model" },
+  { name = "campy_peer", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_stdlib"], source = "local", path = "../../packages/campy_peer" },
   { name = "campy_project", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_project" },
+  { name = "campy_runner", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_app", "campy_peer", "campy_view", "gleam_erlang", "gleam_stdlib"], source = "local", path = "../../packages/campy_runner" },
   { name = "campy_source", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_source" },
   { name = "campy_view", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../../packages/campy_view" },
   { name = "campy_wx", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_wx" },
@@ -28,7 +30,9 @@ campy_appgen = { path = "../../packages/campy_appgen" }
 campy_catalog = { path = "../../packages/campy_catalog" }
 campy_design = { path = "../../packages/campy_design" }
 campy_ide_model = { path = "../../packages/campy_ide_model" }
+campy_peer = { path = "../../packages/campy_peer" }
 campy_project = { path = "../../packages/campy_project" }
+campy_runner = { path = "../../packages/campy_runner" }
 campy_source = { path = "../../packages/campy_source" }
 campy_view = { path = "../../packages/campy_view" }
 campy_wx = { path = "../../packages/campy_wx" }
