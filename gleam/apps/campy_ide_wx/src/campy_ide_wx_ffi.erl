@@ -1,5 +1,5 @@
 -module(campy_ide_wx_ffi).
--export([make_dir/1, write_file/2, compile_and_load/2, cwd/0, start_app_on/3, load_code_on/3, pause_on/2, resume_on/2, format_term/1, spawn_tracer/3, trace_send_receive/4, stop_tracer/2, processes_on/1, trace_log_text/1]).
+-export([make_dir/1, write_file/2, compile_and_load/2, cwd/0, start_app_on/3, load_code_on/3, pause_on/2, resume_on/2, format_term/1, spawn_tracer/3, trace_send_receive/4, stop_tracer/2, processes_on/1, trace_log_text/1, copy_file/2]).
 
 make_dir(Dir) ->
     case filelib:ensure_path(Dir) of
@@ -88,6 +88,13 @@ processes_on(_) ->
 %% Decode a trace_log message forwarded by the tracer process.
 trace_log_text({trace_log, Text}) -> {ok, Text};
 trace_log_text(_) -> {error, nil}.
+
+%% Keep a copy of a built beam under the versions directory for rollback.
+copy_file(From, To) ->
+    case file:copy(From, To) of
+        {ok, _} -> {ok, nil};
+        {error, Reason} -> {error, reason(Reason)}
+    end.
 
 %% Format any term (an app's state snapshot) for the debug viewer.
 format_term(Term) ->

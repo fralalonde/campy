@@ -157,6 +157,7 @@ fn loop(
         "nodes-stop" -> stop_peer(shell, state, current, dir)
         "nodes-deploy" -> deploy_to_peer(shell, state, current, dir)
         "nodes-redeploy" -> redeploy_on_peer(shell, state, current, dir)
+        "nodes-rollback" -> rollback_on_node(shell, state, current, dir)
         "nodes-app-stop" -> toggle_run(shell, state, current, dir)
         "debug-state" -> dump_state(shell, state, current, dir)
         "debug-trace" -> toggle_trace(shell, state, current, dir)
@@ -570,6 +571,9 @@ fn resume_on(node: String, pid: process.Pid) -> Result(Nil, String)
 @external(erlang, "campy_ide_wx_ffi", "format_term")
 fn format_term(term: a) -> String
 
+@external(erlang, "campy_ide_wx_ffi", "copy_file")
+fn copy_file(from: String, to: String) -> Result(Nil, String)
+
 @external(erlang, "campy_ide_wx_ffi", "spawn_tracer")
 fn spawn_tracer(node: String, master: process.Pid, label: String) -> Dynamic
 
@@ -609,6 +613,30 @@ fn runtime_dirs() -> List(String) {
 /// The scratch build's app modules.
 fn apps_dir() -> String {
   scratch_dir() <> "/build/dev/erlang/campy_apps/ebin"
+}
+
+/// Stored beams per version, for rollback: versions/<module>-v<N>.beam.
+fn versions_dir() -> String {
+  scratch_dir() <> "/versions"
+}
+
+/// Archive a built beam under its version. A failed copy is not fatal —
+/// rollback just becomes unavailable for that version.
+fn archive_beam(module: String, version: Int) -> Nil {
+  let _ =
+    make_dir(versions_dir())
+    |> result.try(fn(_) {
+      copy_file(
+        apps_dir() <> "/" <> module <> ".beam",
+        versions_dir()
+          <> "/"
+          <> module
+          <> "-v"
+          <> int.to_string(version)
+          <> ".beam",
+      )
+    })
+  Nil
 }
 
 /// The repo root for the scratch app package. `CAMPY_ROOT` wins when set
@@ -886,6 +914,7 @@ fn deploy_module_to_peer(
         Error(error) ->
           model.update(state, model.Log("Deploy failed: " <> error))
         Ok(_) -> {
+          archive_beam(module_name, 1)
           let reply = process.new_subject()
           case
             start_app_on(peer.node, deploy_spec(module, module_name), reply)
@@ -941,6 +970,78 @@ fn redeploy_on_peer(
   loop(shell, state, next, dir, NoDrag)
 }
 
+/// Roll the attached app back to the previous stored beam: load it in place
+/// (locally or on the peer), pause/resume the actor around the load, then
+/// Upgrade to the older version. The app's `migrate/2` sees the direction.
+fn rollback_on_node(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+) {
+  let previous = state
+  let state = model.update(state, model.ShowNodes)
+  let state = case state.running {
+    Some(running) if running.version > 1 -> {
+      let target = running.version - 1
+      let beam =
+        versions_dir()
+        <> "/"
+        <> running.module
+        <> "-v"
+        <> int.to_string(target)
+        <> ".beam"
+      case running.node {
+        "" ->
+          case campy_app.load_code(running.module, beam) {
+            Ok(_) -> upgrade_to(state, running, target)
+            Error(reason) ->
+              model.update(state, model.Log("Rollback failed: " <> reason))
+          }
+        node ->
+          case load_code_on(node, running.module, beam) {
+            Ok(_) -> upgrade_to(state, running, target)
+            Error(reason) ->
+              model.update(state, model.Log("Rollback failed: " <> reason))
+          }
+      }
+    }
+    Some(_) -> model.update(state, model.Log("No stored previous version"))
+    None -> model.update(state, model.Log("Nothing running"))
+  }
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  refresh(shell, Some(previous), state)
+  loop(shell, state, next, dir, NoDrag)
+}
+
+/// The pause/Upgrade/resume sequence shared by redeploy and rollback.
+fn upgrade_to(
+  state: model.State,
+  running: campy_app.Running,
+  version: Int,
+) -> model.State {
+  let assert Ok(owner) = process.subject_owner(running.dispatch)
+  let _ = pause_on(running.node, owner)
+  let state = model.update(state, model.RunCodeUpdated(version))
+  let updated = case state.running {
+    Some(now) -> now
+    None -> running
+  }
+  let _ = resume_on(running.node, owner)
+  process.send(
+    updated.dispatch,
+    campy_app.Upgrade(running.module, running.version, version),
+  )
+  io.println(
+    "[ide] rolled back "
+    <> running.slug
+    <> " to version "
+    <> int.to_string(version),
+  )
+  state
+}
+
 fn upgrade_on_peer(
   state: model.State,
   running: campy_app.Running,
@@ -964,6 +1065,7 @@ fn upgrade_on_peer(
               let _ = compile_and_load(dir, running.module)
               case load_code_on(running.node, running.module, beam) {
                 Ok(_) -> {
+                  archive_beam(running.module, next_version)
                   // The owner pid: pause/resume go through sys on the peer.
                   let assert Ok(owner) = process.subject_owner(running.dispatch)
                   let _ = pause_on(running.node, owner)
@@ -2893,28 +2995,28 @@ fn nodes_page(state: model.State) -> Node {
       ])
       |> campy_view.with_children([
         campy_view.node("label", "nodes-name-label")
-          |> campy_view.with_props([#("text", VText("Peer name:"))]),
+          |> campy_view.with_props([#("text", VText("Peer:"))]),
         campy_view.node("text", "nodes-name")
           |> campy_view.with_props([
-            #("w", VInt(160)),
+            #("w", VInt(110)),
             #("text", VText(state.nodes_name)),
           ])
           |> campy_view.with_events(["change"]),
         campy_view.node("button", "nodes-start")
           |> campy_view.with_events(["click"])
-          |> campy_view.with_props([#("text", VText("Start peer"))]),
+          |> campy_view.with_props([#("text", VText("Start"))]),
         campy_view.node("button", "nodes-stop")
           |> campy_view.with_events(["click"])
-          |> campy_view.with_props([#("text", VText("Stop peer"))]),
+          |> campy_view.with_props([#("text", VText("Stop"))]),
         campy_view.node("button", "nodes-deploy")
           |> campy_view.with_events(["click"])
-          |> campy_view.with_props([#("text", VText("Deploy active form"))]),
+          |> campy_view.with_props([#("text", VText("Deploy"))]),
         campy_view.node("button", "nodes-redeploy")
           |> campy_view.with_events(["click"])
-          |> campy_view.with_props([#("text", VText("Redeploy (upgrade)"))]),
-        campy_view.node("button", "nodes-app-stop")
+          |> campy_view.with_props([#("text", VText("Upgrade"))]),
+        campy_view.node("button", "nodes-rollback")
           |> campy_view.with_events(["click"])
-          |> campy_view.with_props([#("text", VText("Stop app"))]),
+          |> campy_view.with_props([#("text", VText("Rollback"))]),
       ]),
     campy_view.node("label", "nodes-list-label")
       |> campy_view.with_props([

@@ -55,8 +55,9 @@ project directory to open another project.
   compiled beams, start/stop app actors, status; the IDE drives it over
   Erlang distribution and receives reports on its own subjects.
 - **Node manager** (in `campy_ide_wx`): the Nodes page — start/stop peer
-  nodes, deploy the active form to one, hot-redeploy (upgrade) remotely, and
-  watch the peer's reports in the same console.
+  nodes, deploy the active form to one, hot-redeploy (upgrade) remotely,
+  roll back to the stored previous beam, and watch the peer's reports in the
+  same console.
 - **Debug v1** (in `campy_ide_wx`): the Debug page — process list of the
   app's node, state snapshot dumps, and a send/receive trace whose lines
   stream into the console.

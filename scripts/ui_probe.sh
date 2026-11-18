@@ -89,12 +89,12 @@ click 520 147
 sleep 2
 shot t43-nodes-page
 # Start peer (button row, client ≈ (489, 173)); the peer boots in ~2 s.
-click 489 173
+click 418 173
 sleep 3
 shot t43-peer-started
 # Deploy active form: builds locally, pushes the runtime + app beams, starts
 # the actor on the peer, and attaches the Run page to it.
-click 739 173
+click 581 173
 sleep 30
 shot t43-peer-deployed
 # Greet on the peer app's live preview: remote event, local console lines.
@@ -105,7 +105,7 @@ shot t43-peer-greet
 click 520 147
 sleep 2
 # Redeploy (upgrade) with the same source: version 2 + republish.
-click 882 173
+click 671 173
 sleep 20
 shot t43-peer-redeploy
 # --- T4.4: debug page — state dump, send/receive trace, process list --------
@@ -137,22 +137,27 @@ shot t44-debug-after
 click 520 147
 sleep 2
 # Stop the peer: the app attached to it detaches and the console reports it.
-click 604 173
+click 505 173
 sleep 3
 shot t43-peer-stopped
 
 # --- G4: restart the peer and redeploy the app on it ------------------------
-click 489 173
+click 418 173
 sleep 3
 shot g4-peer-restarted
 # Deploy again (the app went down with the peer): a fresh deploy, then a hot
 # upgrade to version 2 to complete the gate script.
-click 739 173
+click 581 173
 sleep 30
 shot g4-redeployed
-click 882 173
+click 671 173
 sleep 20
 shot g4-upgraded-v2
+
+# --- Rollback: load the stored v1 beam on the peer, Upgrade back to v1 ------
+click 764 173
+sleep 15
+shot rollback-v1
 
 # --- T2.1/T2.5: selection chrome and body drag ------------------------------
 # The text control is at canvas (0,24), 600x28; canvas origin is client (202,194).
