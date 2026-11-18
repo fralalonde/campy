@@ -30,7 +30,6 @@ pub type Incoming {
   /// A canvas needs painting; the caller should call `paint`.
   Paint(id: String)
   /// Mouse input on a selection handle: role 0..7 resize, 8 move.
-  MouseHandle(role: Int, kind: String, x: Int, y: Int)
   /// A left click on a design widget; coordinates are relative to that widget.
   Mouse(id: String, kind: String, x: Int, y: Int, control: Bool)
   /// A frame-level shortcut key from char_hook.
@@ -53,9 +52,22 @@ pub opaque type Shell {
     widgets: Dict(String, Widget),
     by_wx: Dict(Int, String),
     next_wx: Int,
-    handles: List(Dynamic),
-    handle_base: Int,
+    chrome: Chrome,
   )
+}
+
+/// Selection chrome drawn by the canvas' own paint handler. There are no
+/// chrome widgets: nothing to place, nothing to hide, no extra windows.
+pub type Chrome {
+  Chrome(
+    selection: Option(#(Int, Int, Int, Int)),
+    single: Bool,
+    marquee: Option(#(Int, Int, Int, Int)),
+  )
+}
+
+fn empty_chrome() -> Chrome {
+  Chrome(selection: None, single: False, marquee: None)
 }
 
 type Widget {
@@ -106,8 +118,7 @@ pub fn start(title: String, width: Int, height: Int) -> Shell {
     widgets: dict.from_list([#("__window__", frame_widget)]),
     by_wx: dict.from_list([#(frame_id, "__window__")]),
     next_wx: frame_id + 1,
-    handles: [],
-    handle_base: 900_000,
+    chrome: empty_chrome(),
   )
 }
 
@@ -335,12 +346,6 @@ fn create_node(
   case kind {
     "toolbar" -> native.realize_toolbar(ref)
     _ -> Nil
-  }
-
-  let shell = case kind, list.is_empty(shell.handles) {
-    "canvas", True ->
-      Shell(..shell, handles: native.handles_create(ref, shell.handle_base))
-    _, _ -> shell
   }
 
   Ok(#(shell, widget))
@@ -799,12 +804,7 @@ fn remove_subtree_registry(shell: Shell, id: String) -> Shell {
 /// The single receive point: wx events are normalised and mapped to declared
 /// view events; every other message is handed back untouched.
 pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
-  let handle_base = shell.handle_base
-
   case native.next_message(timeout_ms) {
-    native.MouseEvent(wx_id, kind, x, y, _control)
-      if wx_id >= handle_base && wx_id < handle_base + 9
-    -> MouseHandle(wx_id - shell.handle_base, kind, x, y)
     native.MouseEvent(wx_id, kind, x, y, control)
       if kind == "left_down" || kind == "motion" || kind == "left_up"
     -> design_mouse(shell, wx_id, kind, x, y, control)
@@ -879,7 +879,30 @@ fn grid_event(
   }
 }
 
-/// Paint a canvas: background, grid, and border, in form coordinates.
+/// The view event a widget reports for its connected wx event.
+fn event_value(widget: Widget) -> Value {
+  case widget.kind {
+    "text" | "memo" -> VText(native.get_text(widget.ref))
+    "checkbox" | "radio" -> VBool(native.get_bool(widget.ref, widget.kind))
+    "choice" | "list" -> VInt(native.get_selection(widget.ref, widget.kind))
+    "slider" -> VInt(native.get_int(widget.ref, widget.kind))
+    "progress" -> VInt(native.get_int(widget.ref, widget.kind))
+    "notebook" -> VInt(native.notebook_selection(widget.ref))
+    "tree" -> VText(native.tree_selected_key(widget.ref))
+    "grid" ->
+      case native.grid_cell(widget.ref) {
+        native.GridCell(row, col, text) ->
+          VMap([
+            #("col", VInt(col)),
+            #("row", VInt(row)),
+            #("text", VText(text)),
+          ])
+      }
+    _ -> VBool(True)
+  }
+}
+
+/// Paint a canvas: background, grid, chrome, and border, in form coordinates.
 pub fn paint(shell: Shell, id: String) -> Nil {
   case get_widget(shell, id) {
     Error(_) -> Nil
@@ -889,7 +912,16 @@ pub fn paint(shell: Shell, id: String) -> Nil {
           let width = plan.int_of(widget.props, "w") |> plan.unwrap_or(400)
           let height = plan.int_of(widget.props, "h") |> plan.unwrap_or(300)
           let grid = plan.int_of(widget.props, "grid") |> plan.unwrap_or(24)
-          native.paint_canvas(widget.ref, width, height, grid)
+          let chrome = shell.chrome
+          native.paint_canvas(
+            widget.ref,
+            width,
+            height,
+            grid,
+            chrome.selection,
+            chrome.marquee,
+            chrome.single,
+          )
         }
         _ -> Nil
       }
@@ -925,101 +957,40 @@ fn paint_event(shell: Shell, wx_id: Int) -> Incoming {
   }
 }
 
-/// Place the selection chrome around a control rectangle (canvas
-/// coordinates). `None` hides every chrome widget. The outline is four 2 px
-/// strips (always on top); a single selection adds eight small resize handles
-/// and a small move grip. Multi-selection shows only the outline and grip.
+/// Selection chrome around a control rectangle (canvas coordinates). `None`
+/// hides it. The chrome is painted by the canvas itself and repainted here, so
+/// there are no chrome widgets to place or hide.
 pub fn show_selection(
   shell: Shell,
   rect: Option(#(Int, Int, Int, Int)),
   resizable: Bool,
 ) -> Nil {
-  case rect {
-    None ->
-      list.each(shell.handles, fn(handle) { native.handle_show(handle, False) })
-    Some(#(x, y, width, height)) -> {
-      let #(canvas, canvas_w, canvas_h) = canvas_widget(shell)
-
-      // The outline sits just outside the control: a strip on the control's
-      // own edge would swallow clicks meant for the control body. The 9 px
-      // resize handles still straddle the edge, as expected.
-      case list.drop(shell.handles, 13) {
-        [outline_top, outline_bottom, outline_left, outline_right, ..] -> {
-          place_strip(canvas, outline_top, x, y - 2, width, 2)
-          place_strip(canvas, outline_bottom, x, y + height, width, 2)
-          place_strip(canvas, outline_left, x - 2, y, 2, height)
-          place_strip(canvas, outline_right, x + width, y, 2, height)
-        }
-        _ -> Nil
-      }
-
-      let clamp_x = fn(value: Int) { int.max(0, int.min(value, canvas_w - 12)) }
-      let clamp_y = fn(value: Int) { int.max(0, int.min(value, canvas_h - 12)) }
-      let offset = 4
-      let mid_x = clamp_x(x + width / 2 - offset)
-      let mid_y = clamp_y(y + height / 2 - offset)
-
-      case shell.handles {
-        [nw, n, ne, e, se, s, sw, west, grip, ..] -> {
-          case resizable {
-            True -> {
-              place_handle(
-                canvas,
-                nw,
-                clamp_x(x - offset),
-                clamp_y(y - offset),
-                9,
-                9,
-              )
-              place_handle(canvas, n, mid_x, clamp_y(y - offset), 9, 9)
-              place_handle(
-                canvas,
-                ne,
-                clamp_x(x + width - offset),
-                clamp_y(y - offset),
-                9,
-                9,
-              )
-              place_handle(canvas, e, clamp_x(x + width - offset), mid_y, 9, 9)
-              place_handle(
-                canvas,
-                se,
-                clamp_x(x + width - offset),
-                clamp_y(y + height - offset),
-                9,
-                9,
-              )
-              place_handle(canvas, s, mid_x, clamp_y(y + height - offset), 9, 9)
-              place_handle(
-                canvas,
-                sw,
-                clamp_x(x - offset),
-                clamp_y(y + height - offset),
-                9,
-                9,
-              )
-              place_handle(canvas, west, clamp_x(x - offset), mid_y, 9, 9)
-            }
-            False ->
-              list.each([nw, n, ne, e, se, s, sw, west], fn(handle) {
-                native.handle_show(handle, False)
-              })
-          }
-          place_handle(
-            canvas,
-            grip,
-            int.max(0, int.min(x + 3, canvas_w - 12)),
-            int.max(0, int.min(y + 3, canvas_h - 12)),
-            12,
-            12,
-          )
-        }
-        _ -> Nil
-      }
-    }
-  }
+  let chrome =
+    Chrome(selection: rect, single: resizable, marquee: shell.chrome.marquee)
+  let shell = Shell(..shell, chrome: chrome)
+  invalidate_canvas(shell)
 }
 
+/// Marquee outline while a placement/selection drag is active.
+pub fn show_marquee(shell: Shell, rect: Option(#(Int, Int, Int, Int))) -> Nil {
+  let chrome =
+    Chrome(
+      selection: shell.chrome.selection,
+      single: shell.chrome.single,
+      marquee: rect,
+    )
+  let shell = Shell(..shell, chrome: chrome)
+  invalidate_canvas(shell)
+}
+
+/// A canvas repaint draws background, grid, and the current chrome.
+pub fn invalidate_canvas(shell: Shell) -> Nil {
+  let #(canvas, _, _) = canvas_widget(shell)
+  native.refresh(canvas)
+}
+
+/// Cursor feedback for hit-tested handles: pass the role under the pointer,
+/// or anything outside 0..8 to restore the arrow.
 fn canvas_widget(shell: Shell) -> #(Dynamic, Int, Int) {
   case
     list.find(dict.values(shell.widgets), fn(widget) { widget.kind == "canvas" })
@@ -1033,39 +1004,20 @@ fn canvas_widget(shell: Shell) -> #(Dynamic, Int, Int) {
   }
 }
 
-fn place_handle(
-  canvas: Dynamic,
-  handle: Dynamic,
-  x: Int,
-  y: Int,
-  w: Int,
-  h: Int,
-) -> Nil {
-  native.handle_place(canvas, handle, x, y, w, h)
-  native.handle_show(handle, True)
-  native.handle_raise(handle)
+pub fn set_canvas_cursor(shell: Shell, role: Int) -> Nil {
+  let #(canvas, _, _) = canvas_widget(shell)
+  native.set_cursor(canvas, role)
 }
 
-fn event_value(widget: Widget) -> Value {
-  case widget.kind {
-    "text" | "memo" -> VText(native.get_text(widget.ref))
-    "checkbox" | "radio" -> VBool(native.get_bool(widget.ref, widget.kind))
-    "choice" | "list" -> VInt(native.get_selection(widget.ref, widget.kind))
-    "slider" -> VInt(native.get_int(widget.ref, widget.kind))
-    "progress" -> VInt(native.get_int(widget.ref, widget.kind))
-    "notebook" -> VInt(native.notebook_selection(widget.ref))
-    "tree" -> VText(native.tree_selected_key(widget.ref))
-    "grid" ->
-      case native.grid_cell(widget.ref) {
-        native.GridCell(row, col, text) ->
-          VMap([
-            #("col", VInt(col)),
-            #("row", VInt(row)),
-            #("text", VText(text)),
-          ])
-      }
-    _ -> VBool(True)
-  }
+pub fn capture_canvas(shell: Shell) -> Nil {
+  let #(canvas, _, _) = canvas_widget(shell)
+  native.capture(canvas)
+}
+
+pub fn release_canvas(shell: Shell) -> Nil {
+  let #(canvas, _, _) = canvas_widget(shell)
+  native.release(canvas)
+  native.release_capture()
 }
 
 pub fn set_tree(shell: Shell, id: String, items: List(plan.TreeItem)) -> Nil {
@@ -1215,99 +1167,6 @@ pub fn freeze_canvas(shell: Shell) -> Nil {
 pub fn thaw_canvas(shell: Shell) -> Nil {
   let #(canvas, _, _) = canvas_widget(shell)
   native.thaw(canvas)
-}
-
-/// One native call per motion event: the outline strips and grip follow the
-/// previewed rectangle. Used during a drag; `show_selection` restores the
-/// resize handles on commit.
-pub fn move_outline(shell: Shell, rect: Option(#(Int, Int, Int, Int))) -> Nil {
-  case rect {
-    None -> Nil
-    Some(#(x, y, w, h)) ->
-      case list.drop(shell.handles, 13) {
-        [top, bottom, left, right, ..] ->
-          case list.take(list.drop(shell.handles, 8), 1) {
-            [grip, ..] -> {
-              let #(canvas, _, _) = canvas_widget(shell)
-              native.move_outline(
-                canvas,
-                [grip, top, bottom, left, right],
-                x,
-                y,
-                w,
-                h,
-              )
-            }
-            _ -> Nil
-          }
-        _ -> Nil
-      }
-  }
-}
-
-pub fn capture_canvas(shell: Shell) -> Nil {
-  let #(canvas, _, _) = canvas_widget(shell)
-  native.capture(canvas)
-}
-
-pub fn release_canvas(shell: Shell) -> Nil {
-  let #(canvas, _, _) = canvas_widget(shell)
-  native.release(canvas)
-  native.release_capture()
-}
-
-/// Draw a marquee rectangle with four thin mini-frame strips.
-pub fn show_marquee(shell: Shell, rect: Option(#(Int, Int, Int, Int))) -> Nil {
-  let strips = list.drop(shell.handles, 9)
-
-  case rect {
-    None -> list.each(strips, fn(strip) { native.handle_show(strip, False) })
-    Some(#(x, y, w, h)) ->
-      case strips {
-        [top, bottom, left, right, ..] -> {
-          let #(canvas, _, _) = canvas_widget(shell)
-          place_strip(canvas, top, x, y, w, 2)
-          place_strip(canvas, bottom, x, y + h - 2, w, 2)
-          place_strip(canvas, left, x, y, 2, h)
-          place_strip(canvas, right, x + w - 2, y, 2, h)
-        }
-        _ -> Nil
-      }
-  }
-}
-
-fn place_strip(
-  canvas: Dynamic,
-  strip: Dynamic,
-  x: Int,
-  y: Int,
-  w: Int,
-  h: Int,
-) -> Nil {
-  native.handle_place(canvas, strip, int.max(0, x), int.max(0, y), w, h)
-  native.handle_show(strip, True)
-  native.handle_raise(strip)
-}
-
-pub fn capture_handle(shell: Shell, role: Int) -> Nil {
-  case handle_at(shell.handles, role) {
-    Ok(handle) -> native.capture(handle)
-    Error(Nil) -> Nil
-  }
-}
-
-pub fn release_handle(shell: Shell, role: Int) -> Nil {
-  case handle_at(shell.handles, role) {
-    Ok(handle) -> native.release(handle)
-    Error(Nil) -> Nil
-  }
-}
-
-fn handle_at(handles: List(Dynamic), role: Int) -> Result(Dynamic, Nil) {
-  case list.drop(handles, role) {
-    [handle, ..] -> Ok(handle)
-    [] -> Error(Nil)
-  }
 }
 
 pub fn select_page(shell: Shell, id: String, index: Int) -> Nil {

@@ -77,11 +77,13 @@ The probe requires Xvfb, xdotool, ImageMagick, and openbox (installed in
 5. Any geometry commit runs `campy_design.freeze` first (materializes resolved
    coordinates, sets free layout, drops `border`/`gap`), then `set_rect`; group
    moves commit every rect in one undo entry.
-6. Selection chrome is 17 borderless always-on-top **mini-frames**: 0-7 resize,
-   8 move grip, 9-12 marquee strips, 13-16 selection outline strips. Child
-   panels draw above controls but do not receive input on GTK; popups were
-   input-dead. Hide all chrome when selection is empty; show resize handles only
-   for a single selection.
+6. Selection chrome is **painted by the canvas' own paint handler** (outline,
+   9 px handles, grip, marquee) and interaction is **hit-tested on canvas
+   events** (`campy_ide_wx.handle_role_at`). There are no chrome widgets at
+   all: top-level mini-frames each became a separate taskbar entry on Wayland,
+   and child panels swallowed the pointer. Hide chrome when the selection is
+   empty; resize handles only for a single selection; cursor feedback comes
+   from `set_canvas_cursor`.
 7. The `design` prop selects design-mode events; do not overload `events`
    containing `select`, because the module tree uses that key for its own
    selection.
@@ -633,15 +635,16 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
      do not freeze a column/row form. Events lists only the selected control's
      declared events; selecting one appends the ABI v2 stub when missing and
      opens Code.
-  4. **Selection UX.** 2 px blue outline strips just outside the control, eight
-     9 px blue resize handles and a 12 px blue grip. Outline strips are drawn
-     outside the control so they do not swallow body clicks. Anchors are placed
-     with the canvas *client* origin (`clientToScreen`), and a frame move/resize
-     repositions them, so they stay on the control when the window moves or the
-     pane is resized. Dragging a control's body moves the current selection
-     (single or group) using GTK's implicit grab; a click without motion is a
-     model no-op. Ctrl-click toggles, marquee still selects; chrome hides off
-     the Form page.
+  4. **Selection UX.** The chrome is painted in the canvas' buffered paint DC:
+     a 2 px blue outline 2 px outside the control, nine 9 px hollow handles on
+     the corners and edge midpoints (single selection), a 36x12 grip inside the
+     top-left, and the marquee outline. Because the chrome is pixels, it can
+     never be misplaced, swallow clicks, or show up in the task switcher; it
+     repaints on `show_selection`/`show_marquee`. Handles and the move gesture
+     are **hit-tested on canvas events** (`handle_role_at`, ±6 px zones,
+     corners first); drag gestures use GTK's implicit grab on the pressed
+     widget; a click without motion is a model no-op. Ctrl-click toggles,
+     marquee still selects; chrome hides off the Form page.
   5. **Shortcuts.** A page-aware `wxAcceleratorTable` handles Ctrl+S/Q,
      Ctrl+1/2/3 and Escape even inside grid editors; `char_hook` on the canvas
      and design widgets handles Ctrl+Z/Y, Ctrl+X/C/V, Ctrl+D and Delete on the

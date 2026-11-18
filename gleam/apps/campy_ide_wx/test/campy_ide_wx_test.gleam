@@ -4,6 +4,7 @@ import campy_project
 import campy_view.{VInt, VText}
 import campy_wx
 import gleam/list
+import gleam/option.{None, Some}
 import gleam/string
 import gleeunit
 import gleeunit/should
@@ -443,4 +444,33 @@ pub fn events_display_lists_only_declared_events_test() {
   |> should.equal(["click"])
   campy_ide_wx.events_display(state_from(view, []))
   |> should.equal([])
+}
+
+// --- T2.5: hit-tested handle zones ----------------------------------------
+
+pub fn handle_roles_come_from_corners_first_test() {
+  let rect = #(100, 80, 200, 100)
+
+  campy_ide_wx.handle_role_at(rect, 100, 80) |> should.equal(Some(0))
+  campy_ide_wx.handle_role_at(rect, 300, 80) |> should.equal(Some(2))
+  campy_ide_wx.handle_role_at(rect, 300, 180) |> should.equal(Some(4))
+  campy_ide_wx.handle_role_at(rect, 100, 180) |> should.equal(Some(6))
+}
+
+pub fn handle_roles_on_edges_test() {
+  let rect = #(100, 80, 200, 100)
+
+  campy_ide_wx.handle_role_at(rect, 200, 78) |> should.equal(Some(1))
+  campy_ide_wx.handle_role_at(rect, 302, 130) |> should.equal(Some(3))
+  campy_ide_wx.handle_role_at(rect, 250, 182) |> should.equal(Some(5))
+  campy_ide_wx.handle_role_at(rect, 98, 130) |> should.equal(Some(7))
+}
+
+pub fn handle_role_tolerates_the_9px_handle_size_test() {
+  let rect = #(100, 80, 200, 100)
+
+  campy_ide_wx.handle_role_at(rect, 94, 74) |> should.equal(Some(0))
+  campy_ide_wx.handle_role_at(rect, 306, 186) |> should.equal(Some(4))
+  campy_ide_wx.handle_role_at(rect, 93, 74) |> should.equal(None)
+  campy_ide_wx.handle_role_at(rect, 200, 130) |> should.equal(None)
 }

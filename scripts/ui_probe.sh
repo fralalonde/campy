@@ -87,6 +87,16 @@ sleep 1
 xdotool mouseup 1
 sleep 1
 shot t25-body-drag
+# Resize by pressing the south-east corner of the selected control. The
+# control is 600x28 at canvas (60,64), clipped to the 600-wide canvas, so its
+# visible SE corner is canvas (600,92) = xdotool (201+600, 163+92) = (801,255).
+xdotool mousemove --window "$win" 799 255 mousedown 1
+sleep 0.3
+xdotool mousemove --sync --window "$win" 839 275
+sleep 1
+xdotool mouseup 1
+sleep 1
+shot resize-via-handle
 
 # --- T2.3/T2.5: vertical property grid -------------------------------------
 # One field per row; value column starts around client x=1119. Row order:

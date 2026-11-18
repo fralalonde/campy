@@ -79,8 +79,6 @@ fn loop(
       campy_wx.paint(shell, id)
       loop(shell, view, phase, status, tick + 1)
     }
-    campy_wx.MouseHandle(_, _, _, _) ->
-      loop(shell, view, phase, status, tick + 1)
     campy_wx.Mouse(_, _, _, _, _) -> loop(shell, view, phase, status, tick + 1)
     campy_wx.KeyPressed(_) -> loop(shell, view, phase, status, tick + 1)
     campy_wx.Accelerator(_) -> loop(shell, view, phase, status, tick + 1)

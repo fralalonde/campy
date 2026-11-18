@@ -6,6 +6,7 @@
 
 import campy_wx/plan.{type TreeItem}
 import gleam/dynamic.{type Dynamic}
+import gleam/option.{type Option}
 
 pub type NativeMessage {
   WxEvent(wx_id: Int, event_type: String)
@@ -154,6 +155,9 @@ pub fn set_enabled(ref: Dynamic, enabled: Bool) -> Nil
 @external(erlang, "campy_wx_native", "set_visible")
 pub fn set_visible(ref: Dynamic, visible: Bool) -> Nil
 
+@external(erlang, "campy_wx_native", "refresh_window")
+pub fn refresh(ref: Dynamic) -> Nil
+
 @external(erlang, "campy_wx_native", "set_background")
 pub fn set_background(ref: Dynamic, r: Int, g: Int, b: Int) -> Nil
 
@@ -300,7 +304,15 @@ pub fn apply_shortcuts(ref: Dynamic) -> Nil
 pub fn canvas(parent: Dynamic, id: Int) -> Dynamic
 
 @external(erlang, "campy_wx_native", "paint_canvas")
-pub fn paint_canvas(ref: Dynamic, width: Int, height: Int, grid: Int) -> Nil
+pub fn paint_canvas(
+  ref: Dynamic,
+  width: Int,
+  height: Int,
+  grid: Int,
+  selection: Option(#(Int, Int, Int, Int)),
+  marquee: Option(#(Int, Int, Int, Int)),
+  single: Bool,
+) -> Nil
 
 @external(erlang, "campy_wx_native", "connect_design")
 pub fn connect_design(ref: Dynamic, kind: String) -> Nil
@@ -342,6 +354,9 @@ pub fn release(ref: Dynamic) -> Nil
 
 @external(erlang, "campy_wx_native", "release_capture")
 pub fn release_capture() -> Nil
+
+@external(erlang, "campy_wx_native", "set_cursor")
+pub fn set_cursor(ref: Dynamic, role: Int) -> Nil
 
 @external(erlang, "campy_wx_native", "now_ms")
 pub fn now_ms() -> Int

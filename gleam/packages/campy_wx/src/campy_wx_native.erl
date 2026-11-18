@@ -14,13 +14,11 @@
     editor/2, editor_set/3, editor_show_end/1,
     open_dialog/2, save_dialog/3, show_message/3,
     set_tooltip/2,
-    canvas/2, paint_canvas/4, connect_design/2,
-    handles_create/2, handle_place/6, handle_show/2, handle_raise/1,
-    move_outline/6,
-    capture/1, release/1, release_capture/0, set_shortcuts/2,
+    canvas/2, paint_canvas/7, connect_design/2,
+    capture/1, release/1, release_capture/0, set_cursor/2, set_shortcuts/2,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
-    set_items/3, set_enabled/2, set_visible/2, set_background/4, focus/1,
+    set_items/3, set_enabled/2, set_visible/2, set_background/4, refresh_window/1, focus/1,
     focus_ignoring_children/1, set_editable/2, raise/1, destroy/1, apply_shortcuts/1,
     get_text/1, get_int/2, get_bool/2, get_selection/2,
     now_ms/0, getenv/1
@@ -210,6 +208,10 @@ set_enabled(Ref, Enabled) ->
 
 set_visible(Ref, Visible) ->
     wxWindow:show(Ref, [{show, Visible}]),
+    ok.
+
+refresh_window(Ref) ->
+    wxWindow:refresh(Ref),
     ok.
 
 set_background(Ref, R, G, B) ->
@@ -513,7 +515,11 @@ canvas(Parent, Id) ->
     wxPanel:connect(Panel, paint, []),
     Panel.
 
-paint_canvas(Canvas, Width, Height, GridStep) ->
+%% Paint the design canvas: background, grid, border, then the selection
+%% chrome and the active marquee. The chrome lives in the canvas' own DC, so
+%% there are no extra top-level windows (they appeared as separate taskbar
+%% entries on Wayland) and nothing can swallow pointer input.
+paint_canvas(Canvas, Width, Height, GridStep, Selection, Marquee, Single) ->
     DC = wxBufferedPaintDC:new(Canvas),
     wxDC:setBackground(DC, wxBrush:new({245, 246, 248})),
     wxDC:clear(DC),
@@ -524,7 +530,58 @@ paint_canvas(Canvas, Width, Height, GridStep) ->
     wxDC:drawLine(DC, {Width - 1, 0}, {Width - 1, Height - 1}),
     wxDC:drawLine(DC, {Width - 1, Height - 1}, {0, Height - 1}),
     wxDC:drawLine(DC, {0, Height - 1}, {0, 0}),
+    draw_marquee(DC, Marquee),
+    draw_selection(DC, Selection, Single),
     wxBufferedPaintDC:destroy(DC),
+    ok.
+
+%% #x/y/w/h tuples arrive as {x, y, w, h}; Selection is none | {X, Y, W, H}.
+draw_selection(_DC, none, _Single) ->
+    ok;
+draw_selection(DC, {X, Y, W, H}, Single) ->
+    Blue = {45, 110, 220},
+    wxDC:setBrush(DC, wxBrush:new(Blue)),
+    wxDC:setPen(DC, wxPen:new(Blue)),
+    wxDC:drawRectangle(DC, {X - 2, Y - 2, W + 4, 2}),
+    wxDC:drawRectangle(DC, {X - 2, Y + H, W + 4, 2}),
+    wxDC:drawRectangle(DC, {X - 2, Y - 2, 2, H + 4}),
+    wxDC:drawRectangle(DC, {X + W, Y - 2, 2, H + 4}),
+    case Single of
+        true -> draw_handles(DC, {X, Y, W, H}, Blue);
+        false -> ok
+    end,
+    ok.
+
+draw_handles(DC, {X, Y, W, H}, Blue) ->
+    wxDC:setBrush(DC, wxBrush:new({245, 246, 248})),
+    wxDC:setPen(DC, wxPen:new(Blue)),
+    lists:foreach(
+        fun({HX, HY}) -> wxDC:drawRectangle(DC, {HX - 4, HY - 4, 9, 9}) end,
+        [
+            {X, Y},
+            {X + W div 2, Y},
+            {X + W, Y},
+            {X + W, Y + H div 2},
+            {X + W, Y + H},
+            {X + W div 2, Y + H},
+            {X, Y + H},
+            {X, Y + H div 2}
+        ]
+    ),
+    wxDC:setBrush(DC, wxBrush:new(Blue)),
+    wxDC:drawRectangle(DC, {X + 4, Y + 4, 36, 12}),
+    ok.
+
+draw_marquee(_DC, none) ->
+    ok;
+draw_marquee(DC, {X, Y, W, H}) ->
+    Blue = {45, 110, 220},
+    wxDC:setBrush(DC, wxBrush:new({0, 0, 0, 0})),
+    wxDC:setPen(DC, wxPen:new(Blue)),
+    wxDC:drawRectangle(DC, {X - 2, Y - 2, W + 4, 2}),
+    wxDC:drawRectangle(DC, {X - 2, Y + H, W + 4, 2}),
+    wxDC:drawRectangle(DC, {X - 2, Y - 2, 2, H + 4}),
+    wxDC:drawRectangle(DC, {X + W, Y - 2, 2, H + 4}),
     ok.
 
 draw_grid(_DC, _Width, _Height, Step) when Step =< 0 ->
@@ -578,46 +635,6 @@ connect_mouse(Module, Ref) ->
     catch Module:connect(Ref, motion, []),
     catch Module:connect(Ref, left_up, []),
     catch Module:connect(Ref, command_menu_selected, []),
-    ok.
-
-handles_create(Parent, Base) ->
-    [create_handle(Parent, Base + Index, Index) || Index <- lists:seq(0, 8)] ++
-        [create_strip(Parent, Base + Index) || Index <- lists:seq(9, 16)].
-
-create_strip(Parent, Id) ->
-    Ref = wxMiniFrame:new(Parent, Id, <<"">>, [
-        {style, ?wxFRAME_NO_TASKBAR bor ?wxBORDER_NONE bor ?wxSTAY_ON_TOP},
-        {size, {2, 2}}
-    ]),
-    wxMiniFrame:setBackgroundColour(Ref, {45, 110, 220}),
-    wxWindow:hide(Ref),
-    Ref.
-
-create_handle(Parent, Id, 8) ->
-    mini_handle(Parent, Id, {12, 12}, {45, 110, 220}, ?wxCURSOR_SIZING);
-create_handle(Parent, Id, Role) ->
-    mini_handle(Parent, Id, {9, 9}, {45, 110, 220}, handle_cursor(Role)).
-
-mini_handle(Parent, Id, Size, Colour, Cursor) ->
-    Ref = wxMiniFrame:new(Parent, Id, <<"">>, [
-        {style, ?wxFRAME_NO_TASKBAR bor ?wxBORDER_NONE bor ?wxSTAY_ON_TOP},
-        {size, Size}
-    ]),
-    wxMiniFrame:setBackgroundColour(Ref, Colour),
-    wxMiniFrame:setCursor(Ref, wxCursor:new(Cursor)),
-    connect_handle(Ref),
-    wxWindow:hide(Ref),
-    Ref.
-
-handle_cursor(Role) when Role =:= 0; Role =:= 4 -> ?wxCURSOR_SIZENWSE;
-handle_cursor(Role) when Role =:= 2; Role =:= 6 -> ?wxCURSOR_SIZENESW;
-handle_cursor(Role) when Role =:= 1; Role =:= 5 -> ?wxCURSOR_SIZENS;
-handle_cursor(_) -> ?wxCURSOR_SIZEWE.
-
-connect_handle(Ref) ->
-    catch wxMiniFrame:connect(Ref, left_down, []),
-    catch wxMiniFrame:connect(Ref, motion, []),
-    catch wxMiniFrame:connect(Ref, left_up, []),
     ok.
 
 %% Frame accelerator table. Accelerators are matched before character
@@ -684,6 +701,23 @@ capture(Ref) ->
     wxWindow:captureMouse(Ref),
     ok.
 
+%% Role 0..7 resize edges, 8 move, none/other restores the arrow. Cursors are
+%% cached per kind; creating one per motion event is wasteful.
+set_cursor(Ref, Role) when Role >= 0, Role =< 8 ->
+    wxWindow:setCursor(Ref, cursor_for(Role)),
+    ok;
+set_cursor(Ref, _Role) ->
+    wxWindow:setCursor(Ref, wxCursor:new(?wxCURSOR_ARROW)),
+    ok.
+
+cursor_for(8) -> wxCursor:new(?wxCURSOR_SIZING);
+cursor_for(Role) -> wxCursor:new(handle_cursor(Role)).
+
+handle_cursor(Role) when Role =:= 0; Role =:= 4 -> ?wxCURSOR_SIZENWSE;
+handle_cursor(Role) when Role =:= 2; Role =:= 6 -> ?wxCURSOR_SIZENESW;
+handle_cursor(Role) when Role =:= 1; Role =:= 5 -> ?wxCURSOR_SIZENS;
+handle_cursor(_) -> ?wxCURSOR_SIZEWE.
+
 release(Ref) ->
     catch wxWindow:releaseMouse(Ref),
     ok.
@@ -698,44 +732,6 @@ release_capture() ->
     catch
         _:_ -> ok
     end.
-
-%% One native call per motion event: the client origin is computed once and
-%% the outline strips plus the grip are all placed here.
-move_outline(Canvas, Refs, X, Y, W, H) ->
-    {CX, CY} = wxWindow:clientToScreen(Canvas, {0, 0}),
-    [Grip, Top, Bottom, Left, Right] = Refs,
-    place_chrome(Grip, CX + X + 4, CY + Y + 4, 36, 12),
-    place_chrome(Top, CX + X - 2, CY + Y - 2, W + 4, 2),
-    place_chrome(Bottom, CX + X - 2, CY + Y + H, W + 4, 2),
-    place_chrome(Left, CX + X - 2, CY + Y - 2, 2, H + 4),
-    place_chrome(Right, CX + X + W, CY + Y - 2, 2, H + 4),
-    ok.
-
-place_chrome(Ref, X, Y, W, H) ->
-    wxWindow:move(Ref, {X, Y}),
-    wxWindow:setSize(Ref, {W, H}),
-    wxWindow:show(Ref),
-    wxWindow:raise(Ref),
-    ok.
-
-handle_place(Canvas, Ref, X, Y, Width, Height) ->
-    %% Client origin is the form's 0,0; getScreenPosition can include frame
-    %% chrome on GTK and offsets every anchor by a few pixels.
-    {CX, CY} = wxWindow:clientToScreen(Canvas, {0, 0}),
-    wxWindow:move(Ref, {CX + X, CY + Y}),
-    wxWindow:setSize(Ref, {Width, Height}),
-    ok.
-
-handle_show(Ref, Visible) ->
-    case Visible of
-        true -> wxWindow:show(Ref);
-        false -> wxWindow:hide(Ref)
-    end,
-    ok.
-
-handle_raise(Ref) ->
-    wxMiniFrame:raise(Ref),
-    ok.
 
 %% Events
 

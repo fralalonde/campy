@@ -122,8 +122,6 @@ fn loop(
       campy_wx.paint(shell, id)
       loop(shell, state, current, dir, drag)
     }
-    campy_wx.MouseHandle(role, kind, x, y) ->
-      handle_mouse(shell, state, current, dir, drag, role, kind, x, y)
     campy_wx.Mouse(id, kind, x, y, control) ->
       handle_design_mouse(
         shell,
@@ -337,9 +335,10 @@ fn cancel_drag(
       campy_wx.thaw_canvas(shell)
       state
     }
-    ResizeDrag(id, _, _, _, #(rx, ry, rw, rh), _) -> {
-      let #(px, py, pw, ph) = preview_in_parent(state, id, #(rx, ry, rw, rh))
-      campy_wx.preview_rect(shell, id, px, py, pw, ph)
+    ResizeDrag(drag_id, _, _, _, #(rx, ry, rw, rh), _, origins) -> {
+      let #(px, py, pw, ph) =
+        preview_in_parent_cached(origins, drag_id, #(rx, ry, rw, rh))
+      campy_wx.preview_rect(shell, drag_id, px, py, pw, ph)
       campy_wx.release_canvas(shell)
       campy_wx.thaw_canvas(shell)
       state
@@ -468,28 +467,20 @@ fn drag_origins(
   }
 }
 
+/// The drag engine. All gesture events arrive on the canvas after it captured
+/// the pointer, so coordinates are canvas-relative and no separate chrome
+/// widgets are needed for interaction.
 fn handle_mouse(
   shell: campy_wx.Shell,
   state: model.State,
   current: Node,
   dir: String,
   drag: Drag,
-  role: Int,
   kind: String,
   x: Int,
   y: Int,
 ) {
   case kind {
-    "left_down" -> {
-      let next_drag = start_drag(state, role, x, y)
-      case next_drag {
-        NoDrag -> loop(shell, state, current, dir, NoDrag)
-        _ -> {
-          campy_wx.capture_handle(shell, role)
-          loop(shell, state, current, dir, next_drag)
-        }
-      }
-    }
     "motion" -> {
       let drag = drag_at(drag, x, y)
       let #(px, py) = drag_point(drag, x, y)
@@ -504,17 +495,9 @@ fn handle_mouse(
       // motion to the pressed control), so moving the outline cannot shift the
       // coordinate base. A grip drag captures the grip itself and must keep
       // its chrome still (invariant 6).
-      case drag {
-        // One native call per motion: the outline and grip follow, the resize
-        // handles are restored by `refresh` on commit.
-        MoveDrag(_, _, _, True, _, _) ->
-          campy_wx.move_outline(shell, previews_rect(previews))
-        _ -> Nil
-      }
       loop(shell, state, current, dir, drag)
     }
     "left_up" -> {
-      campy_wx.release_handle(shell, role)
       campy_wx.release_canvas(shell)
       campy_wx.thaw_canvas(shell)
       let #(px, py) = drag_point(drag, x, y)
@@ -560,109 +543,124 @@ fn handle_design_mouse(
   y: Int,
   control: Bool,
 ) {
+  // Every gesture coordinate is canvas space from here on.
+  let #(ax, ay) = event_absolute(state, id, x, y)
   case kind {
-    "left_down" ->
+    "left_down" -> {
       case state.armed {
         Some(kind) ->
           start_placement(shell, state, current, dir, kind, id, x, y)
         None ->
-          case id {
-            "canvas" ->
-              case hit_target(state, x, y) {
-                Some(target) ->
-                  case control {
-                    True -> {
-                      let previous = state
-                      let state = toggle_selection(state, target)
-                      let next = view(state)
-                      let shell = rebind(shell, current, next)
-                      refresh(shell, Some(previous), state)
-                      campy_wx.focus(shell, "canvas")
-                      loop(shell, state, next, dir, NoDrag)
-                    }
-                    False -> {
-                      let previous = state
-                      let state = case list.contains(state.selection, target) {
-                        True -> state
-                        False -> model.select_controls(state, [target])
+          // Hit-tested handles come first: a press inside one of the selected
+          // control's handle zones starts a resize.
+          case handle_hit(state, ax, ay) {
+            Some(role) -> begin_resize(shell, state, current, dir, role, ax, ay)
+            None ->
+              case id {
+                "canvas" ->
+                  case hit_target(state, x, y) {
+                    Some(target) ->
+                      case control {
+                        True -> {
+                          let previous = state
+                          let state = toggle_selection(state, target)
+                          let next = view(state)
+                          let shell = rebind(shell, current, next)
+                          refresh(shell, Some(previous), state)
+                          campy_wx.focus(shell, "canvas")
+                          loop(shell, state, next, dir, NoDrag)
+                        }
+                        False -> {
+                          let previous = state
+                          let state = case
+                            list.contains(state.selection, target)
+                          {
+                            True -> state
+                            False -> model.select_controls(state, [target])
+                          }
+                          let next = view(state)
+                          let shell = rebind(shell, current, next)
+                          refresh(shell, Some(previous), state)
+                          campy_wx.focus(shell, "canvas")
+                          begin_body_move(shell, state, next, dir, ax, ay)
+                        }
                       }
-                      let next = view(state)
-                      let shell = rebind(shell, current, next)
+                    None -> {
+                      let state = model.select_controls(state, [])
+                      campy_wx.show_selection(shell, None, False)
+                      campy_wx.capture_canvas(shell)
+                      let previous = state
                       refresh(shell, Some(previous), state)
-                      campy_wx.focus(shell, "canvas")
-                      begin_body_move(shell, state, next, dir, x, y)
+                      loop(shell, state, current, dir, MarqueeDrag(ax, ay))
                     }
                   }
-                None -> {
+                _ -> {
                   let previous = state
-                  let state = model.select_controls(state, [])
-                  let next = view(state)
-                  let shell = rebind(shell, current, next)
-                  campy_wx.show_selection(shell, None, False)
-                  campy_wx.capture_canvas(shell)
-                  refresh(shell, Some(previous), state)
-                  loop(shell, state, next, dir, MarqueeDrag(x, y))
-                }
-              }
-            _ ->
-              case control {
-                True -> {
-                  let previous = state
-                  let state = toggle_widget_selection(state, id)
-                  let next = view(state)
-                  let shell = rebind(shell, current, next)
-                  refresh(shell, Some(previous), state)
-                  campy_wx.focus(shell, "canvas")
-                  loop(shell, state, next, dir, NoDrag)
-                }
-                False -> {
-                  let previous = state
-                  let state = case list.contains(state.selection, id) {
-                    True -> state
-                    False -> select_control(state, id, "select")
+                  let state = case control {
+                    True -> toggle_widget_selection(state, id)
+                    False ->
+                      case list.contains(state.selection, id) {
+                        True -> state
+                        False -> select_control(state, id, "select")
+                      }
                   }
                   let next = view(state)
                   let shell = rebind(shell, current, next)
                   refresh(shell, Some(previous), state)
                   campy_wx.focus(shell, "canvas")
-                  let #(ax, ay) = event_absolute(state, id, x, y)
                   begin_body_move(shell, state, next, dir, ax, ay)
                 }
               }
           }
       }
+    }
     "motion" ->
       case drag {
+        NoDrag ->
+          case model.active_module(state) {
+            Ok(_module) -> {
+              // Hover feedback for the hit-tested handles.
+              let role = case list.length(state.selection) {
+                1 -> handle_role_of_selection(state, ax, ay)
+                _ -> None
+              }
+              campy_wx.set_canvas_cursor(shell, case role {
+                Some(value) -> value
+                None -> 99
+              })
+              loop(shell, state, current, dir, drag)
+            }
+            Error(_) -> loop(shell, state, current, dir, drag)
+          }
         PlacementDrag(_kind, start_x, start_y) -> {
-          let #(px, py) = event_absolute(state, id, x, y)
           campy_wx.show_marquee(
             shell,
-            Some(normalize_rect(start_x, start_y, px, py)),
+            Some(normalize_rect(start_x, start_y, ax, ay)),
           )
           loop(shell, state, current, dir, drag)
         }
         MarqueeDrag(start_x, start_y) -> {
           campy_wx.show_marquee(
             shell,
-            Some(normalize_rect(start_x, start_y, x, y)),
+            Some(normalize_rect(start_x, start_y, ax, ay)),
           )
           loop(shell, state, current, dir, drag)
         }
-        MoveDrag(_, _, _, _, _, origins) -> {
-          let #(ax, ay) = event_absolute_cached(origins, id, x, y)
-          handle_mouse(shell, state, current, dir, drag, 8, kind, ax, ay)
-        }
-        _ -> loop(shell, state, current, dir, drag)
+        MoveDrag(_, _, _, _, _, _) ->
+          handle_mouse(shell, state, current, dir, drag, kind, ax, ay)
+        ResizeDrag(_, _, _, _, _, _, _) ->
+          handle_mouse(shell, state, current, dir, drag, kind, ax, ay)
       }
     "left_up" ->
       case drag {
-        MoveDrag(_, _, _, _, _, origins) -> {
-          let #(ax, ay) = event_absolute_cached(origins, id, x, y)
-          handle_mouse(shell, state, current, dir, drag, 8, kind, ax, ay)
+        MoveDrag(_, _, _, _, _, _) ->
+          handle_mouse(shell, state, current, dir, drag, kind, ax, ay)
+        ResizeDrag(_, _, _, _, _, _, _) -> {
+          campy_wx.set_canvas_cursor(shell, 99)
+          handle_mouse(shell, state, current, dir, drag, kind, ax, ay)
         }
         PlacementDrag(kind, start_x, start_y) -> {
-          let #(px, py) = event_absolute(state, id, x, y)
-          let rect = normalize_rect(start_x, start_y, px, py)
+          let rect = normalize_rect(start_x, start_y, ax, ay)
           campy_wx.release_canvas(shell)
           campy_wx.show_marquee(shell, None)
           let previous = state
@@ -680,8 +678,9 @@ fn handle_design_mouse(
           refresh(shell, Some(previous), state)
           loop(shell, state, next, dir, NoDrag)
         }
+        NoDrag -> loop(shell, state, current, dir, drag)
         MarqueeDrag(start_x, start_y) -> {
-          let rect = normalize_rect(start_x, start_y, x, y)
+          let rect = normalize_rect(start_x, start_y, ax, ay)
           campy_wx.release_canvas(shell)
           campy_wx.show_marquee(shell, None)
           let state = case model.active_module(state) {
@@ -703,7 +702,6 @@ fn handle_design_mouse(
           refresh(shell, Some(previous), state)
           loop(shell, state, next, dir, NoDrag)
         }
-        _ -> loop(shell, state, current, dir, drag)
       }
     _ -> loop(shell, state, current, dir, drag)
   }
@@ -764,24 +762,6 @@ fn start_placement(
 
 /// Convert a click on any design widget into canvas coordinates. Labels often
 /// do not emit mouse events on GTK, but buttons, panels, and text fields do.
-/// Same as `event_absolute` but uses the origins cached at drag start, so a
-/// motion event never resolves the document.
-fn event_absolute_cached(
-  origins: dict.Dict(String, #(Int, Int)),
-  id: String,
-  x: Int,
-  y: Int,
-) -> #(Int, Int) {
-  case id {
-    "canvas" -> #(x, y)
-    _ ->
-      case dict.get(origins, id) {
-        Ok(#(ox, oy)) -> #(ox + x, oy + y)
-        Error(_) -> #(x, y)
-      }
-  }
-}
-
 fn event_absolute(
   state: model.State,
   id: String,
@@ -800,21 +780,6 @@ fn event_absolute(
           }
       }
   }
-}
-
-/// Native children are positioned relative to their parent, while drags are
-/// tracked in canvas coordinates.
-fn preview_in_parent(
-  state: model.State,
-  id: String,
-  rect: #(Int, Int, Int, Int),
-) -> #(Int, Int, Int, Int) {
-  let #(x, y, w, h) = rect
-  let #(ox, oy) = case model.active_module(state) {
-    Error(_) -> #(0, 0)
-    Ok(module) -> campy_design.parent_origin(module.form.view, id)
-  }
-  #(x - ox, y - oy, w, h)
 }
 
 /// A single-control move that ends over another container reparents it. Group
@@ -865,26 +830,6 @@ fn move_reparent(
   }
 }
 
-fn start_drag(state: model.State, role: Int, x: Int, y: Int) -> Drag {
-  case role == 8 {
-    True ->
-      case selection_items(state) {
-        [] -> NoDrag
-        items ->
-          MoveDrag(items, x, y, False, #(x, y), drag_origins(state, items))
-      }
-    False ->
-      case state.selection {
-        [id] ->
-          case selection_items(state) {
-            [#(_, rect), ..] -> ResizeDrag(id, role, x, y, rect, #(x, y))
-            [] -> NoDrag
-          }
-        _ -> NoDrag
-      }
-  }
-}
-
 fn selection_items(
   state: model.State,
 ) -> List(#(String, #(Int, Int, Int, Int))) {
@@ -914,12 +859,120 @@ fn selection_items(
   }
 }
 
+/// A resize gesture starts on a hit-tested handle zone. The control's
+/// absolute rectangle and its parent origin are captured once.
+fn start_resize(state: model.State, role: Int, x: Int, y: Int) -> Drag {
+  case state.selection {
+    [id] ->
+      case selection_items(state) {
+        [#(_, rect), ..] ->
+          ResizeDrag(
+            id,
+            role,
+            x,
+            y,
+            rect,
+            #(x, y),
+            drag_origins(state, selection_items(state)),
+          )
+        [] -> NoDrag
+      }
+    _ -> NoDrag
+  }
+}
+
+fn begin_resize(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  role: Int,
+  x: Int,
+  y: Int,
+) {
+  // The press landed on the control body, so GTK's implicit grab delivers the
+  // matching motion and release to the same widget. Capturing the canvas from
+  // inside a child press loses the release on GTK.
+  campy_wx.freeze_canvas(shell)
+  loop(shell, state, current, dir, start_resize(state, role, x, y))
+}
+
+/// Which handle role is under the point, in canvas coordinates. Corners win
+/// over edges; the tolerance matches the 9 px handle size.
+pub fn handle_role_at(
+  rect: #(Int, Int, Int, Int),
+  x: Int,
+  y: Int,
+) -> Option(Int) {
+  let #(rx, ry, rw, rh) = rect
+  let near = fn(value: Int, target: Int) {
+    value >= target - 6 && value <= target + 6
+  }
+  let left = near(x, rx)
+  let right = near(x, rx + rw)
+  let top = near(y, ry)
+  let bottom = near(y, ry + rh)
+  let on_x = x >= rx && x <= rx + rw
+  let on_y = y >= ry && y <= ry + rh
+
+  case left && top {
+    True -> Some(0)
+    False ->
+      case right && top {
+        True -> Some(2)
+        False ->
+          case right && bottom {
+            True -> Some(4)
+            False ->
+              case left && bottom {
+                True -> Some(6)
+                False ->
+                  case top && on_x {
+                    True -> Some(1)
+                    False ->
+                      case right && on_y {
+                        True -> Some(3)
+                        False ->
+                          case bottom && on_x {
+                            True -> Some(5)
+                            False ->
+                              case left && on_y {
+                                True -> Some(7)
+                                False -> None
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+      }
+  }
+}
+
+fn handle_hit(state: model.State, ax: Int, ay: Int) -> Option(Int) {
+  case list.length(state.selection) {
+    1 -> handle_role_of_selection(state, ax, ay)
+    _ -> None
+  }
+}
+
+fn handle_role_of_selection(
+  state: model.State,
+  ax: Int,
+  ay: Int,
+) -> Option(Int) {
+  case selection_items(state) {
+    [#(_, rect), ..] -> handle_role_at(rect, ax, ay)
+    [] -> None
+  }
+}
+
 fn drag_at(drag: Drag, x: Int, y: Int) -> Drag {
   case drag {
     MoveDrag(items, start_x, start_y, follow, _, origins) ->
       MoveDrag(items, start_x, start_y, follow, #(x, y), origins)
-    ResizeDrag(id, role, start_x, start_y, rect, _) ->
-      ResizeDrag(id, role, start_x, start_y, rect, #(x, y))
+    ResizeDrag(id, role, start_x, start_y, rect, _, origins) ->
+      ResizeDrag(id, role, start_x, start_y, rect, #(x, y), origins)
     _ -> drag
   }
 }
@@ -929,6 +982,7 @@ fn drag_at(drag: Drag, x: Int, y: Int) -> Drag {
 fn drag_origins_of(drag: Drag) -> dict.Dict(String, #(Int, Int)) {
   case drag {
     MoveDrag(_, _, _, _, _, origins) -> origins
+    ResizeDrag(_, _, _, _, _, _, origins) -> origins
     _ -> dict.new()
   }
 }
@@ -953,7 +1007,7 @@ fn preview_in_parent_cached(
 fn drag_point(drag: Drag, fallback_x: Int, fallback_y: Int) -> #(Int, Int) {
   case drag {
     MoveDrag(_, _, _, _, #(x, y), _) -> #(x, y)
-    ResizeDrag(_, _, _, _, _, #(x, y)) -> #(x, y)
+    ResizeDrag(_, _, _, _, _, point, _) -> point
     _ -> #(fallback_x, fallback_y)
   }
 }
@@ -972,7 +1026,15 @@ fn drag_previews(
         let #(id, #(rx, ry, rw, rh)) = item
         #(id, #(rx + x - start_x, ry + y - start_y, rw, rh))
       })
-    ResizeDrag(id, role, start_x, start_y, #(rx, ry, rw, rh), _current) -> {
+    ResizeDrag(
+      id,
+      role,
+      start_x,
+      start_y,
+      #(rx, ry, rw, rh),
+      _current,
+      _origins,
+    ) -> {
       let dx = x - start_x
       let dy = y - start_y
       let left = case role {
@@ -1031,6 +1093,7 @@ type Drag {
     start_y: Int,
     rect: #(Int, Int, Int, Int),
     current: #(Int, Int),
+    origins: dict.Dict(String, #(Int, Int)),
   )
 }
 
@@ -1483,21 +1546,6 @@ fn selection_rect(state: model.State) -> Option(#(Int, Int, Int, Int)) {
       Some(
         list.fold(rest, first, fn(acc, item) {
           let #(_, rect) = item
-          union(acc, rect)
-        }),
-      )
-  }
-}
-
-fn previews_rect(
-  previews: List(#(String, #(Int, Int, Int, Int))),
-) -> Option(#(Int, Int, Int, Int)) {
-  case previews {
-    [] -> None
-    [#(_, first), ..rest] ->
-      Some(
-        list.fold(rest, first, fn(acc, preview) {
-          let #(_, rect) = preview
           union(acc, rect)
         }),
       )
