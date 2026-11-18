@@ -2664,6 +2664,14 @@ fn handle(
     "tabs" -> page_selected(state, value)
     "inspector-tabs" -> state
     "inspector" -> inspector_changed(state, value)
+    "code" ->
+      // Live typing on the Code page: adopt the buffer quietly (no undo
+      // entry; Scintilla owns text undo) so the model tracks the editor and
+      // a later refresh never reverts or scrolls away typed text.
+      model.update(
+        state,
+        model.TypedHandlers(campy_wx.editor_text(shell, "code")),
+      )
     "events" -> {
       // Adopt the Code buffer first: clicking an event must not silently
       // discard edits typed but not yet saved.
@@ -3439,6 +3447,10 @@ fn complete_at_caret(
   case state.lsp.client, state.lsp.file {
     Some(client), Some(file) -> {
       let #(line, column) = campy_wx.editor_caret(shell, "code")
+      io.println(
+        "[lsp] completions requested at " <> int.to_string(line) <> ":"
+        <> int.to_string(column),
+      )
       campy_lsp.completion(client, file, line, column)
       state
     }
@@ -3485,6 +3497,10 @@ fn handle_lsp(
   let previous = state
   let state = case message {
     DiagnosticsMsg(file, rows) -> {
+      // stdout evidence: diagnostics are important enough to see in the log.
+      io.println(
+        "[lsp] " <> file <> ": " <> int.to_string(list.length(rows)),
+      )
       let state =
         model.update(state, model.LspDiagnostics(file, to_diags(rows)))
       // Console evidence: one line per diagnostic of the open document.
@@ -3519,6 +3535,9 @@ fn handle_lsp(
       state
     }
     CompletionsMsg(labels) -> {
+      io.println(
+        "[lsp] completions arrived: " <> int.to_string(list.length(labels)),
+      )
       campy_wx.editor_completions(shell, "code", labels)
       state
     }

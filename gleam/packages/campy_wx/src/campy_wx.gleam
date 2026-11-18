@@ -1103,6 +1103,7 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
     native.WxEvent(wx_id, "close") -> run_closed(shell, wx_id)
     native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
     native.WxEvent(wx_id, "command") -> command_event(shell, wx_id)
+    native.WxEvent(wx_id, "change") -> change_event(shell, wx_id)
     native.WxEvent(_wx_id, "move") -> FrameMoved
     native.WxEvent(_wx_id, "size") -> FrameMoved
     native.WxEvent(_wx_id, _event_type) -> Idle
@@ -1140,6 +1141,20 @@ fn lookup_widget(shell: Shell, wx_id: Int) -> Result(#(Widget, Bool), Nil) {
             Error(Nil) -> Error(Nil)
           }
         None -> Error(Nil)
+      }
+  }
+}
+
+/// A text change in a Scintilla editor: routed as a change event on the
+/// editor's view id (the IDE adopts Code-page typing from it). Run-window
+/// editors route to the running app like any other run event.
+fn change_event(shell: Shell, wx_id: Int) -> Incoming {
+  case lookup_widget(shell, wx_id) {
+    Error(Nil) -> Idle
+    Ok(#(widget, is_run)) ->
+      case is_run {
+        True -> RunEvent(widget.view_id, "change", VText(""))
+        False -> Event(widget.view_id, "change", VText(""))
       }
   }
 }

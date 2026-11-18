@@ -1295,6 +1295,10 @@ editor_set(Editor, Text, ReadOnly) ->
     wxStyledTextCtrl:setReadOnly(Editor, false),
     wxStyledTextCtrl:setText(Editor, Text),
     wxStyledTextCtrl:setReadOnly(Editor, ReadOnly),
+    %% A programmatic load is one giant undoable action: enough Ctrl+Z would
+    %% wipe the loaded document to an empty buffer. Cut the stack after a
+    %% load so undo only covers the user's own edits.
+    catch wxStyledTextCtrl:emptyUndoBuffer(Editor),
     ok.
 
 %% ---------------------------------------------------------------------------
@@ -2168,8 +2172,11 @@ release_capture() ->
 connect(Ref, <<"editor">>) ->
     %% Key events flow to the IDE so the clipboard/undo keys work
     %% deterministically on this GTK build; {skip, true} lets Scintilla
-    %% process everything as usual too.
+    %% process everything as usual too. Text changes are delivered too:
+    %% the Code page adopts the buffer as the model's handlers, so refresh
+    %% never reverts typed text and the language server sees live edits.
     wxStyledTextCtrl:connect(Ref, key_down, [{skip, true}]),
+    catch wxStyledTextCtrl:connect(Ref, stc_change, []),
     ok;
 connect(Ref, <<"window">>) ->
     wxFrame:connect(Ref, close_window, []),
@@ -2258,6 +2265,11 @@ next_message(Timeout) ->
                             %% index, then to the stored entries.
                             Text = jump_pick(Obj, Event),
                             {stc_jump, Id, Text};
+                        stc_change ->
+                            %% A text change in any Scintilla editor. Routed
+                            %% as a plain change event on the editor's view
+                            %% id; the IDE adopts Code-page typing from it.
+                            {wx_event, Id, <<"change">>};
                         _ ->
                             {wx_event, Id, event_type(Event)}
                     end;

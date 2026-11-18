@@ -426,6 +426,11 @@ pub type Command {
   TracingStarted(Dynamic)
   TracingStopped
   SetHandlers(String)
+  /// Live typing in the Code editor: adopt the buffer as the module's
+  /// handler source WITHOUT an undo entry or a status change — text undo
+  /// belongs to Scintilla, and the model must track the buffer so refresh
+  /// never reverts it.
+  TypedHandlers(String)
   OpenHandler(control_id: String, event: String)
   /// The language-server client the editor will use (spawned once per run).
   LspStarted(campy_lsp.Client)
@@ -1224,6 +1229,40 @@ fn commit_handlers(state: State, module: Module, handlers: String) -> State {
   )
 }
 
+/// Live typing: replace the active module's handler source without touching
+/// undo/redo and without a status line. Scintilla owns text-level undo; the
+/// model just has to stay in sync with the buffer so a refresh never
+/// reverts typed text.
+fn type_handlers(state: State, handlers: String) -> State {
+  case active_module(state) {
+    Error(_) -> state
+    Ok(module) ->
+      case module.handlers == handlers {
+        True -> state
+        False -> {
+          let updated = campy_project.Module(..module, handlers: handlers)
+
+          let modules =
+            list.map(state.project.modules, fn(candidate) {
+              case candidate.slug == module.slug {
+                True -> updated
+                False -> candidate
+              }
+            })
+
+          State(
+            ..state,
+            project: campy_project.Project(
+              title: state.project.title,
+              modules: modules,
+              extra: state.project.extra,
+            ),
+          )
+        }
+      }
+  }
+}
+
 /// The event keys a control declares in the document. The designer view
 /// rewrites events to `select`, so always read the module's form, not the
 /// canvas subtree.
@@ -1634,6 +1673,7 @@ pub fn update(state: State, command: Command) -> State {
     SetControlRect(id, rect) -> set_control_rect(state, id, rect)
     SetControlProp(id, name, value) -> set_control_prop(state, id, name, value)
     SetHandlers(handlers) -> set_handlers(state, handlers)
+    TypedHandlers(handlers) -> type_handlers(state, handlers)
     OpenHandler(control_id, event) -> open_handler(state, control_id, event)
     LspStarted(client) ->
       State(..state, lsp: Lsp(..state.lsp, client: Some(client)))
