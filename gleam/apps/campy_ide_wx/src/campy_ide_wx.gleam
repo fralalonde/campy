@@ -56,7 +56,7 @@ fn interactive(project: campy_project.Project, dir: String) {
     model.new(project)
     |> model.update(model.Log("Loaded " <> dir))
     |> model.update(model.SetStatus(dir))
-    |> start_lsp
+    |> start_lsp(dir)
   let current_view = view(state)
 
   let assert Ok(shell) = campy_wx.mount(shell, current_view)
@@ -68,8 +68,8 @@ fn interactive(project: campy_project.Project, dir: String) {
 /// (the editor's handlers.gleam documents are mirrored there so the server
 /// sees a real Gleam project). Failure is not fatal: the editor keeps working
 /// without language intelligence.
-fn start_lsp(state: model.State) -> model.State {
-  let root = lsp_workspace_dir()
+fn start_lsp(state: model.State, dir: String) -> model.State {
+  let root = lsp_workspace_dir(dir)
   case write_lsp_workspace(root) {
     Error(error) ->
       model.update(
@@ -171,7 +171,7 @@ fn loop(
   }
   // Mirror the Code editor's buffer into the language server. The loop runs
   // at least every idle tick, so typed text reaches the server within ~100ms.
-  let state = sync_lsp(shell, state)
+  let state = sync_lsp(shell, state, dir)
   case campy_wx.next(shell, 100) {
     campy_wx.Closed -> {
       case state.lsp.client {
@@ -254,6 +254,24 @@ fn loop(
         _ -> Nil
       }
       loop(shell, state, current, dir, drag)
+    }
+    campy_wx.Jumped(_view_id, text) -> {
+      // Jump-to-symbol: the picked "name:line" moves the caret to the line.
+      let previous = state
+      let state = case string.split_once(text, ":") {
+        Ok(#(name, line)) -> {
+          let assert Ok(line) = int.parse(line)
+          campy_wx.select_page(shell, "tabs", 1)
+          campy_wx.goto_editor_position(shell, "code", line, 0)
+          campy_wx.focus(shell, "code")
+          model.update(state, model.SetStatus("Jumped to " <> name))
+        }
+        Error(_) -> state
+      }
+      let next = view(state)
+      let shell = rebind(shell, current, next)
+      refresh(shell, Some(previous), state)
+      loop(shell, state, next, dir, drag)
     }
     campy_wx.Message(message) ->
       case lsp_message(message) {
@@ -1933,6 +1951,7 @@ fn handle(
     "menu-form" -> model.update(state, model.ShowForm)
     "menu-code" -> model.update(state, model.ShowCode)
     "menu-source" -> model.update(state, model.ShowSource)
+    "menu-outline" -> outline(state)
     "menu-copy" | "tool-copy" -> model.update(state, model.CopySelection)
     "menu-cut" | "tool-cut" -> model.update(state, model.CutSelection)
     "menu-paste" | "tool-paste" -> model.update(state, model.Paste)
@@ -2405,12 +2424,17 @@ pub fn page_index(state: model.State) -> Int {
 fn set_code(shell: campy_wx.Shell, state: model.State) {
   campy_wx.highlight_gleam(shell, "code")
   case model.active_module(state) {
-    Ok(module) -> campy_wx.set_editor(shell, "code", module.handlers, False)
-    Error(_) -> campy_wx.set_editor(shell, "code", "", True)
+    Ok(module) -> {
+      campy_wx.set_editor(shell, "code", module.handlers, False)
+      // Token-color the new document (a replacement resets the styling
+      // bytes), then paint the latest language-server diagnostics on top.
+      campy_wx.style_gleam(shell, "code", module.handlers)
+    }
+    Error(_) -> {
+      campy_wx.set_editor(shell, "code", "", True)
+      campy_wx.style_gleam(shell, "code", "")
+    }
   }
-  // Token-color the new document (a replacement resets the styling bytes),
-  // then paint the latest language-server diagnostics on top.
-  campy_wx.style_gleam(shell, "code")
   paint_diagnostics(shell, state)
 }
 
@@ -2435,16 +2459,62 @@ pub fn paint_diagnostics(shell: campy_wx.Shell, state: model.State) -> Nil {
 // Gleam language server integration
 // ---------------------------------------------------------------------------
 
-/// The analysis workspace the language server runs in. The editor's
+/// The analysis workspace the language server runs in: one per project, so
+/// two open projects do not fight over one build directory. The editor's
 /// handlers.gleam documents are mirrored into it as regular src modules, so
-/// `gleam lsp` sees a real Gleam project (handlers import campy_app/campy_view).
-pub fn lsp_workspace_dir() -> String {
-  root() <> "/generated/lsp"
+/// `gleam lsp` sees a real Gleam project (handlers import
+/// campy_app/campy_view).
+///
+/// The path is canonical: the server echoes absolute, dot-free URIs back in
+/// diagnostics and definitions, and the IDE matches messages against the
+/// document it opened by comparing these paths.
+pub fn lsp_workspace_dir(dir: String) -> String {
+  let project = case
+    string.split(canonical_path(dir), "/")
+    |> list.last
+  {
+    Ok(name) -> name
+    Error(_) -> "project"
+  }
+
+  canonical_path(root()) <> "/generated/lsp/" <> project
+}
+
+/// Collapse `.` and `..` segments in an absolute path without touching the
+/// filesystem ("/a/b/../c" -> "/a/c"). The language server canonicalises the
+/// URIs it echoes, so the IDE's own paths must be dot-free to match.
+pub fn canonical_path(path: String) -> String {
+  case string.starts_with(path, "/") {
+    False -> path
+    True ->
+      "/" <> string.join(canonical_segments(string.split(path, "/"), []), "/")
+  }
+}
+
+fn canonical_segments(
+  parts: List(String),
+  resolved: List(String),
+) -> List(String) {
+  case parts {
+    [] -> list.reverse(resolved)
+    [part, ..rest] ->
+      case part {
+        // "." and "" are dropped; ".." pops one segment.
+        "." -> canonical_segments(rest, resolved)
+        "" -> canonical_segments(rest, resolved)
+        ".." ->
+          case resolved {
+            [] -> canonical_segments(rest, [])
+            [_, ..up] -> canonical_segments(rest, up)
+          }
+        _ -> canonical_segments(rest, [part, ..resolved])
+      }
+  }
 }
 
 /// Path of one module's handlers document inside the analysis workspace.
-pub fn handlers_path(slug: String) -> String {
-  lsp_workspace_dir() <> "/src/" <> slug <> "_handlers.gleam"
+pub fn handlers_path(dir: String, slug: String) -> String {
+  lsp_workspace_dir(dir) <> "/src/" <> slug <> "_handlers.gleam"
 }
 
 fn write_lsp_workspace(dir: String) -> Result(Nil, String) {
@@ -2471,22 +2541,34 @@ fn write_lsp_workspace(dir: String) -> Result(Nil, String) {
 /// analysis copy on disk, didOpen the first time a file appears, then push
 /// full-text didChange whenever the buffer changed. Runs once per event-loop
 /// pass; it is a no-op without an active module or server.
-pub fn sync_lsp(shell: campy_wx.Shell, state: model.State) -> model.State {
+pub fn sync_lsp(
+  shell: campy_wx.Shell,
+  state: model.State,
+  dir: String,
+) -> model.State {
   case model.active_module(state) {
     Error(_) -> state
     Ok(module) -> {
-      let file = handlers_path(module.slug)
+      let file = handlers_path(dir, module.slug)
       let text = analysis_text(campy_wx.editor_text(shell, "code"))
       case state.lsp.client {
         None -> state
-        Some(client) -> {
-          let _ = write_file(file, text)
+        Some(client) ->
           case state.lsp.file {
             Some(open) if open == file ->
               case text == state.lsp.text {
                 True -> state
                 False -> {
-                  campy_wx.style_gleam(shell, "code")
+                  // Mirror the new analysis copy on disk and push it. The
+                  // editor buffer holds the dialect text; the styling is
+                  // token-level, so color the buffer text, not the analysis
+                  // copy that goes to the server.
+                  let _ = write_file(file, text)
+                  campy_wx.style_gleam(
+                    shell,
+                    "code",
+                    campy_wx.editor_text(shell, "code"),
+                  )
                   campy_lsp.change(client, file, state.lsp.version + 1, text)
                   model.update(
                     state,
@@ -2495,11 +2577,11 @@ pub fn sync_lsp(shell: campy_wx.Shell, state: model.State) -> model.State {
                 }
               }
             _ -> {
+              let _ = write_file(file, text)
               campy_lsp.open(client, file, text)
               model.update(state, model.LspPushed(file, 1, text))
             }
           }
-        }
       }
     }
   }
@@ -2544,6 +2626,19 @@ fn member_starts_uppercase(member: String) -> Bool {
   }
 }
 
+/// View/Outline: ask the server for the document's symbol outline. The reply
+/// logs `name@line` entries — jump-to-symbol — and StcJump routes a picked
+/// symbol to its declaration line.
+fn outline(state: model.State) -> model.State {
+  case state.lsp.client, state.lsp.file {
+    Some(client), Some(file) -> {
+      campy_lsp.symbols(client, file)
+      model.update(state, model.SetStatus("Fetching outline..."))
+    }
+    _, _ -> model.update(state, model.Log("No language server document open"))
+  }
+}
+
 /// Ctrl+Space: ask the server for completions at the caret. The reply shows
 /// the editor's completion popup.
 fn complete_at_caret(
@@ -2551,7 +2646,7 @@ fn complete_at_caret(
   state: model.State,
   dir: String,
 ) -> model.State {
-  let state = sync_lsp(shell, state)
+  let state = sync_lsp(shell, state, dir)
   case state.lsp.client, state.lsp.file {
     Some(client), Some(file) -> {
       let #(line, column) = campy_wx.editor_caret(shell, "code")
@@ -2569,7 +2664,7 @@ fn jump_to_definition(
   state: model.State,
   dir: String,
 ) -> model.State {
-  let state = sync_lsp(shell, state)
+  let state = sync_lsp(shell, state, dir)
   case state.lsp.client, state.lsp.file {
     Some(client), Some(file) -> {
       let #(line, column) = campy_wx.editor_caret(shell, "code")
@@ -2630,7 +2725,14 @@ fn handle_lsp(
           set_console(shell, state)
           paint_diagnostics(shell, state)
         }
-        False -> Nil
+        False ->
+          io.println(
+            "[lsp] diagnostics for another document: "
+            <> file
+            <> " (open: "
+            <> string.inspect(state.lsp.file)
+            <> ")",
+          )
       }
       state
     }
@@ -2657,7 +2759,30 @@ fn handle_lsp(
     DownMsg(reason) -> model.update(state, model.LspDown("[lsp] " <> reason))
     // The outline is not wired to a pane yet; the request is still useful
     // later, so the message is simply dropped.
-    SymbolsMsg(_) -> state
+    SymbolsMsg(items) -> {
+      let state =
+        list.fold(items, state, fn(state, item) {
+          let #(name, line) = item
+          model.update(
+            state,
+            model.Log(
+              "symbol " <> name <> " @ line " <> int.to_string(line + 1),
+            ),
+          )
+        })
+      set_console(shell, state)
+      // Jump-to-symbol: the editor's completion popup lists the outline;
+      // picking an entry moves the caret to its line (StcJump below).
+      campy_wx.editor_jump_list(
+        shell,
+        "code",
+        list.map(items, fn(item) {
+          let #(name, line) = item
+          name <> ":" <> int.to_string(line)
+        }),
+      )
+      state
+    }
   }
   let next = view(state)
   let shell = rebind(shell, current, next)
@@ -2676,9 +2801,10 @@ pub fn source_text(state: model.State) -> String {
 }
 
 fn set_source(shell: campy_wx.Shell, state: model.State) {
+  let text = source_text(state)
   campy_wx.highlight_gleam(shell, "source")
-  campy_wx.set_editor(shell, "source", source_text(state), True)
-  campy_wx.style_gleam(shell, "source")
+  campy_wx.set_editor(shell, "source", text, True)
+  campy_wx.style_gleam(shell, "source", text)
 }
 
 fn handlers_of(state: model.State) -> String {
@@ -3082,6 +3208,7 @@ fn menubar() -> Node {
       menu_item("menu-form", "Form            Ctrl+1"),
       menu_item("menu-code", "Code            Ctrl+2"),
       menu_item("menu-source", "Generated source    Ctrl+3"),
+      menu_item("menu-outline", "Outline            Ctrl+F12"),
     ]),
     menu("help-menu", "Help", [
       menu_item("menu-help-keys", "Keyboard shortcuts    F1"),

@@ -12,7 +12,7 @@
     grid/2, grid_set/2, grid_configure/5, grid_cell/1,
     grid_number_cell/4, grid_text_cell/3, grid_read_only/4,
     editor/2, editor_set/3, editor_show_end/1, editor_gleam/1,
-    editor_style_gleam/1, editor_get_text/1, editor_caret/1, editor_goto/3,
+    editor_style_gleam/2, editor_get_text/1, editor_caret/1, editor_goto/3,
     editor_diagnostics/2, editor_autocomplete/2,
     open_dialog/2, save_dialog/3, show_message/3,
     set_tooltip/2,
@@ -23,7 +23,8 @@
     set_items/3, set_enabled/2, set_visible/2, set_background/4, refresh_window/1, update_window/1, focus/1,
     focus_ignoring_children/1, set_editable/2, raise/1, destroy/1, apply_shortcuts/1,
     get_text/1, get_int/2, get_bool/2, get_selection/2,
-    now_ms/0, getenv/1, editor_word_at/1, editor_replace_line/3
+    now_ms/0, getenv/1, editor_word_at/1, editor_replace_line/3, editor_jump_list/2,
+    editor_jumped/1, editor_connect_jump/1
 ]).
 
 -include_lib("wx/include/wx.hrl").
@@ -527,9 +528,12 @@ editor_gleam(Editor) ->
     ok.
 
 %% Token-color the whole buffer. Runs after every document replacement (the
-%% styling bytes live in the document, so a replacement resets them).
-editor_style_gleam(Editor) ->
-    Runs = gleam_runs(wxStyledTextCtrl:getTextRaw(Editor)),
+%% styling bytes live in the document, so a replacement resets them). The
+%% text is passed in by the caller: reading it back through wx in the same
+%% command batch as the preceding setText can return stale content, while
+%% styling itself is a pure write and lands in order.
+editor_style_gleam(Editor, Text) ->
+    Runs = gleam_runs(Text),
     wxStyledTextCtrl:startStyling(Editor, 0),
     apply_runs(Editor, Runs).
 
@@ -654,6 +658,26 @@ editor_replace_line(Editor, Line, NewText) ->
 
 %% Show the end of a freshly rewritten source file, so an appended ABI stub is
 %% visible immediately after the event click opens the Code page.
+%% Jump-to-symbol list: Scintilla's autocomp popup with "name:line" entries.
+%% The selection arrives as an stc_autocomp_selection event (connected here);
+%% editor_jumped/1 reads the picked text.
+editor_jump_list(Editor, Entries) ->
+    wxStyledTextCtrl:connect(Editor, stc_autocomp_selection, []),
+    %% OTP 27 removed string:join; interleave with lists:join.
+    Spaced = lists:join(<<" ">>, Entries),
+    Options = unicode:characters_to_binary(erlang:iolist_to_binary(Spaced)),
+    wxStyledTextCtrl:autoCompShow(Editor, 0, Options),
+    ok.
+
+editor_jumped(Editor) ->
+    Text = unicode:characters_to_binary(
+             wxStyledTextCtrl:autoCompGetCurrentText(Editor)),
+    {ok, Text}.
+
+%% (The selection event is connected by editor_jump_list/2; kept for clarity.)
+editor_connect_jump(_Editor) ->
+    ok.
+
 %% wxTextCtrl:getValue does not work on wxStyledTextCtrl; read the buffer
 %% directly.
 editor_get_text(Editor) ->
@@ -665,7 +689,7 @@ editor_caret(Editor) ->
     Pos = wxStyledTextCtrl:getCurrentPos(Editor),
     Line = wxStyledTextCtrl:lineFromPosition(Editor, Pos),
     Col = Pos - wxStyledTextCtrl:positionFromLine(Editor, Line),
-    {editor_caret, Line, Col}.
+    {caret, Line, Col}.
 
 editor_goto(Editor, Line, Col) ->
     Start = wxStyledTextCtrl:positionFromLine(Editor, Line),

@@ -521,8 +521,18 @@ pub fn analysis_text_preserves_lines_and_module_paths_test() {
 /// The Code editor's handlers document lives in the generated analysis
 /// workspace as one file per module.
 pub fn handlers_path_points_at_the_analysis_workspace_test() {
-  let path = campy_ide_wx.handlers_path("greeter")
+  let path = campy_ide_wx.handlers_path("../../examples/demo", "greeter")
 
   should.be_true(string.ends_with(path, "/src/greeter_handlers.gleam"))
-  should.be_true(string.contains(path, "generated/lsp"))
+  should.be_true(string.contains(path, "generated/lsp/demo"))
+  // The server echoes canonical, dot-free URIs; our paths must match.
+  should.be_false(string.contains(path, ".."))
+}
+
+/// Dot segments collapse: the IDE's cwd-relative root becomes a plain
+/// absolute path, so the paths the language server echoes match.
+pub fn canonical_path_collapses_dot_segments_test() {
+  campy_ide_wx.canonical_path("/a/b/../c") |> should.equal("/a/c")
+  campy_ide_wx.canonical_path("/a/./b/") |> should.equal("/a/b")
+  campy_ide_wx.canonical_path("/a/b/c/../../../d") |> should.equal("/d")
 }

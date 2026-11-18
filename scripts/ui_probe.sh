@@ -111,6 +111,16 @@ xdotool key ctrl+z
 sleep 2
 shot t55-diagnostics-cleared
 
+# Jump-to-symbol: View > Outline lists the document's symbols; picking one
+# jumps to its line. F12 jumps to the declaration of the symbol under the
+# caret (cross-file, e.g. Notify from campy_app).
+click 105 12
+sleep 1
+shot t55-outline-menu
+xdotool key Down Down Down Down Return
+sleep 3
+shot t55-outline
+
 # --- T4.3/G4: node manager — start a peer, deploy, drive, upgrade, kill -----
 # The Nodes tab is the fifth notebook tab: client ≈ (520, 147).
 click 520 147

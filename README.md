@@ -58,6 +58,12 @@ project directory to open another project.
   nodes, deploy the active form to one, hot-redeploy (upgrade) remotely,
   roll back to the stored previous beam, and watch the peer's reports in the
   same console.
+- **Language intelligence**: the Code editor speaks the Gleam language
+  server (campy_lsp, language-agnostic LSP over stdio) — Gleam syntax
+  highlighting, live on-the-fly diagnostics with squiggles + margin
+  markers, Ctrl+Space completions, F12 jump-to-definition, and a
+  View > Outline jump-to-symbol list. Other languages plug in by
+  configuration.
 - **Console**: app replies stream into the IDE console immediately, and the
   header tracks what is running and where.
 - **Debug v1** (in `campy_ide_wx`): the Debug page — process list of the

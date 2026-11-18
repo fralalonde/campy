@@ -10,6 +10,7 @@ import gleam/option.{type Option}
 
 pub type NativeMessage {
   WxEvent(wx_id: Int, event_type: String)
+  StcJump(wx_id: Int)
   MouseEvent(wx_id: Int, event_type: String, x: Int, y: Int, control: Bool)
   /// A grid edit carries the edited cell explicitly. Reading the grid cursor
   /// after the event can point at the next cell: Enter moves the cursor before
@@ -310,6 +311,12 @@ pub fn editor_marker_clear(editor: Dynamic) -> Nil
 @external(erlang, "campy_wx_native", "editor_replace_line")
 pub fn editor_replace_line(editor: Dynamic, line: Int, new_text: String) -> Nil
 
+@external(erlang, "campy_wx_native", "editor_jump_list")
+pub fn editor_jump_list(editor: Dynamic, entries: List(String)) -> Nil
+
+@external(erlang, "campy_wx_native", "editor_jumped")
+pub fn editor_jumped(editor: Dynamic) -> Result(String, Nil)
+
 @external(erlang, "campy_wx_native", "editor_show_end")
 pub fn editor_show_end(editor: Dynamic) -> Nil
 
@@ -319,7 +326,7 @@ pub fn editor_gleam(editor: Dynamic) -> Nil
 /// Token-color the editor's current buffer (container-lexer styling). Run
 /// after every document replacement: `set_editor` resets the styling bytes.
 @external(erlang, "campy_wx_native", "editor_style_gleam")
-pub fn editor_style_gleam(editor: Dynamic) -> Nil
+pub fn editor_style_gleam(editor: Dynamic, text: String) -> Nil
 
 @external(erlang, "campy_wx_native", "editor_get_text")
 pub fn editor_get_text(editor: Dynamic) -> String

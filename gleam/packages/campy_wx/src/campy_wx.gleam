@@ -23,6 +23,8 @@ pub type Incoming {
   Event(id: String, key: String, value: Value)
   /// A non-wx message addressed to the renderer's process.
   Message(message: Dynamic)
+  /// An editor's jump list picked an entry ("name:line").
+  Jumped(view_id: String, text: String)
   /// Nothing happened before the timeout.
   Idle
   /// The top-level window asked to close.
@@ -810,6 +812,22 @@ fn remove_subtree_registry(shell: Shell, id: String) -> Shell {
 
 /// The single receive point: wx events are normalised and mapped to declared
 /// view events; every other message is handed back untouched.
+/// The editor's jump list picked an entry: report the chosen "name:line".
+pub fn stc_jump(shell: Shell, wx_id: Int) -> Incoming {
+  case dict.get(shell.by_wx, wx_id) {
+    Error(Nil) -> Idle
+    Ok(view_id) ->
+      case get_widget(shell, view_id) {
+        Ok(widget) ->
+          case native.editor_jumped(widget.ref) {
+            Ok(text) -> Jumped(view_id, text)
+            Error(Nil) -> Idle
+          }
+        Error(_) -> Idle
+      }
+  }
+}
+
 pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
   case native.next_message(timeout_ms) {
     native.MouseEvent(wx_id, kind, x, y, control)
@@ -827,6 +845,7 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
     native.WxEvent(_wx_id, "move") -> FrameMoved
     native.WxEvent(_wx_id, "size") -> FrameMoved
     native.WxEvent(_wx_id, _event_type) -> Idle
+    native.StcJump(wx_id) -> stc_jump(shell, wx_id)
     native.Other(message) -> Message(message)
     native.Idle -> Idle
   }
@@ -1155,11 +1174,12 @@ pub fn highlight_gleam(shell: Shell, id: String) -> Nil {
   }
 }
 
-/// Token-color a highlighted editor's current buffer. Call after every
-/// `set_editor` (a document replacement resets the styling bytes).
-pub fn style_gleam(shell: Shell, id: String) -> Nil {
+/// Token-color a highlighted editor's buffer with the given text (the text
+/// the caller just put in the editor — reading it back through wx in the same
+/// command batch can return stale content). Call after every `set_editor`.
+pub fn style_gleam(shell: Shell, id: String, text: String) -> Nil {
   case get_widget(shell, id) {
-    Ok(widget) -> native.editor_style_gleam(widget.ref)
+    Ok(widget) -> native.editor_style_gleam(widget.ref, text)
     Error(_) -> Nil
   }
 }
@@ -1194,6 +1214,19 @@ pub fn goto_editor_position(
 ) -> Nil {
   case get_widget(shell, id) {
     Ok(widget) -> native.editor_goto(widget.ref, line, column)
+    Error(_) -> Nil
+  }
+}
+
+/// Show a jump-to-symbol list in a text editor's completion popup; entries
+/// are "name:line". The picked entry arrives as `Jumped` on the shell.
+pub fn editor_jump_list(
+  shell: Shell,
+  id: String,
+  entries: List(String),
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_jump_list(widget.ref, entries)
     Error(_) -> Nil
   }
 }
