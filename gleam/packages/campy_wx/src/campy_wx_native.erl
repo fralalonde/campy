@@ -699,7 +699,9 @@ release_capture() ->
     end.
 
 handle_place(Canvas, Ref, X, Y, Width, Height) ->
-    {CX, CY} = wxWindow:getScreenPosition(Canvas),
+    %% Client origin is the form's 0,0; getScreenPosition can include frame
+    %% chrome on GTK and offsets every anchor by a few pixels.
+    {CX, CY} = wxWindow:clientToScreen(Canvas, {0, 0}),
     wxWindow:move(Ref, {CX + X, CY + Y}),
     wxWindow:setSize(Ref, {Width, Height}),
     ok.
@@ -719,7 +721,9 @@ handle_raise(Ref) ->
 
 connect(Ref, <<"window">>) ->
     wxFrame:connect(Ref, close_window, []),
-    catch wxFrame:connect(Ref, command_menu_selected, []);
+    catch wxFrame:connect(Ref, command_menu_selected, []),
+    catch wxFrame:connect(Ref, size, []),
+    catch wxFrame:connect(Ref, move, []);
     %% char_hook is intentionally not connected: on this GTK build it consumes
     %% character events for wxGrid's editor (and fires alongside accelerators,
     %% double-applying Undo). The accelerator table below is the single
@@ -836,6 +840,7 @@ event_type(Event) when is_tuple(Event) ->
         wxCommand -> <<"command">>;
         wxClose -> <<"close">>;
         wxSize -> <<"size">>;
+        wxMove -> <<"move">>;
         wxPaint -> <<"paint">>;
         wxMouse -> <<"mouse">>;
         _ -> <<"other">>

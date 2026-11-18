@@ -68,6 +68,16 @@ shot t25-full-shell
 # The text control is at canvas (0,24), 600x28; canvas origin is client (202,194).
 click 499 205
 shot t25-selection-outline
+# The selection chrome is a top-level mini-frame; it must follow the window.
+xdotool windowmove "$win" 370 150
+sleep 1
+shot t25-chrome-after-move
+xdotool windowsize "$win" 1180 800
+sleep 1
+shot t25-chrome-after-resize
+xdotool windowsize "$win" 1280 860
+xdotool windowmove "$win" 320 140
+sleep 1
 # Drag the control body (not a handle) by 60x40. Screenshot mid-gesture to show
 # the preview and the outline following it; then commit.
 xdotool mousemove --window "$win" 499 205 mousedown 1

@@ -635,10 +635,13 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
      opens Code.
   4. **Selection UX.** 2 px blue outline strips just outside the control, eight
      9 px blue resize handles and a 12 px blue grip. Outline strips are drawn
-     outside the control so they do not swallow body clicks. Dragging a
-     control's body moves the current selection (single or group) using GTK's
-     implicit grab; a click without motion is a model no-op. Ctrl-click toggles,
-     marquee still selects; chrome hides off the Form page.
+     outside the control so they do not swallow body clicks. Anchors are placed
+     with the canvas *client* origin (`clientToScreen`), and a frame move/resize
+     repositions them, so they stay on the control when the window moves or the
+     pane is resized. Dragging a control's body moves the current selection
+     (single or group) using GTK's implicit grab; a click without motion is a
+     model no-op. Ctrl-click toggles, marquee still selects; chrome hides off
+     the Form page.
   5. **Shortcuts.** A page-aware `wxAcceleratorTable` handles Ctrl+S/Q,
      Ctrl+1/2/3 and Escape even inside grid editors; `char_hook` on the canvas
      and design widgets handles Ctrl+Z/Y, Ctrl+X/C/V, Ctrl+D and Delete on the

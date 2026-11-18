@@ -37,6 +37,9 @@ pub type Incoming {
   KeyPressed(Key)
   /// A frame accelerator; works even while a grid cell editor has focus.
   Accelerator(action: String)
+  /// The frame moved or resized; screen-anchored selection chrome must be
+  /// repositioned.
+  FrameMoved
 }
 
 pub type Key {
@@ -814,6 +817,8 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
     native.WxEvent(wx_id, "close") if wx_id == shell.frame_id -> Closed
     native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
     native.WxEvent(wx_id, "command") -> command_event(shell, wx_id)
+    native.WxEvent(_wx_id, "move") -> FrameMoved
+    native.WxEvent(_wx_id, "size") -> FrameMoved
     native.WxEvent(_wx_id, _event_type) -> Idle
     native.Other(message) -> Message(message)
     native.Idle -> Idle

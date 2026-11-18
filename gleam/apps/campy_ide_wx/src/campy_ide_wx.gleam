@@ -167,6 +167,20 @@ fn loop(
       handle_key(shell, state, current, dir, drag, key)
     campy_wx.Accelerator(action) ->
       handle_accelerator(shell, state, current, dir, drag, action)
+    campy_wx.FrameMoved -> {
+      // Reposition screen-anchored chrome after the window moves/resizes, but
+      // never fight a live drag preview (child move events can arrive too).
+      case drag {
+        NoDrag ->
+          campy_wx.show_selection(
+            shell,
+            selection_rect(state),
+            list.length(state.selection) == 1,
+          )
+        _ -> Nil
+      }
+      loop(shell, state, current, dir, drag)
+    }
     campy_wx.Message(_message) -> loop(shell, state, current, dir, drag)
     campy_wx.Idle -> loop(shell, state, current, dir, drag)
   }
