@@ -60,6 +60,9 @@ project directory to open another project.
 - **Debug v1** (in `campy_ide_wx`): the Debug page — process list of the
   app's node, state snapshot dumps, and a send/receive trace whose lines
   stream into the console.
+- **Gate G4** passes end to end: deploy to a peer node, drive the app
+  remotely, hot-upgrade, inspect state, kill and restart the peer, and
+  redeploy.
 - **Run** (in `campy_ide_wx`): deploys the active form in-VM — scratch
   package, `gleam build`, code load — and starts the ABI v2 actor; a live
   **Run** page grafts the published view, canvas events route to the actor,

@@ -133,10 +133,26 @@ click 390 173
 sleep 2
 shot t44-debug-after
 
+# Back to Nodes for the stop/restart steps.
+click 520 147
+sleep 2
 # Stop the peer: the app attached to it detaches and the console reports it.
 click 604 173
 sleep 3
 shot t43-peer-stopped
+
+# --- G4: restart the peer and redeploy the app on it ------------------------
+click 489 173
+sleep 3
+shot g4-peer-restarted
+# Deploy again (the app went down with the peer): a fresh deploy, then a hot
+# upgrade to version 2 to complete the gate script.
+click 739 173
+sleep 30
+shot g4-redeployed
+click 882 173
+sleep 20
+shot g4-upgraded-v2
 
 # --- T2.1/T2.5: selection chrome and body drag ------------------------------
 # The text control is at canvas (0,24), 600x28; canvas origin is client (202,194).

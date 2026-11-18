@@ -824,6 +824,7 @@ fn stop_peer(
   let previous = state
   let state = case model.selected_peer(state) {
     Ok(peer) -> {
+      io.println("[ide] stopping peer " <> peer.node)
       campy_peer.stop(peer)
       model.update(state, model.PeerStopped(peer.node))
     }
