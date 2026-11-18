@@ -48,6 +48,9 @@ project directory to open another project.
 - **App generator** (`campy_appgen`): emits the per-form dispatch module
   (`campy_app_<slug>`) with the designed form embedded as `view/1` and the
   user's handlers verbatim.
+- **Peers** (`campy_peer`): local BEAM nodes via OTP's `peer` module —
+  boot, health round trips, calls over distribution, teardown, and runtime
+  distribution for the IDE node.
 - **Run** (in `campy_ide_wx`): deploys the active form in-VM — scratch
   package, `gleam build`, code load — and starts the ABI v2 actor; a live
   **Run** page grafts the published view, canvas events route to the actor,
