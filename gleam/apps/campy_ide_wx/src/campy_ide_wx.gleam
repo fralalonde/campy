@@ -15,6 +15,7 @@ import campy_source
 import campy_view.{type Node, VBool, VInt, VList, VMap, VText}
 import campy_view/diff
 import campy_wx
+import gleam/dict
 import gleam/int
 import gleam/io
 import gleam/list
@@ -325,19 +326,22 @@ fn cancel_drag(
       campy_wx.show_marquee(shell, None)
       state
     }
-    MoveDrag(items, _, _, _, _) -> {
+    MoveDrag(items, _, _, _, _, origins) -> {
       list.each(items, fn(item) {
         let #(id, #(rx, ry, rw, rh)) = item
-        let #(px, py, pw, ph) = preview_in_parent(state, id, #(rx, ry, rw, rh))
+        let #(px, py, pw, ph) =
+          preview_in_parent_cached(origins, id, #(rx, ry, rw, rh))
         campy_wx.preview_rect(shell, id, px, py, pw, ph)
       })
       campy_wx.release_canvas(shell)
+      campy_wx.thaw_canvas(shell)
       state
     }
     ResizeDrag(id, _, _, _, #(rx, ry, rw, rh), _) -> {
       let #(px, py, pw, ph) = preview_in_parent(state, id, #(rx, ry, rw, rh))
       campy_wx.preview_rect(shell, id, px, py, pw, ph)
       campy_wx.release_canvas(shell)
+      campy_wx.thaw_canvas(shell)
       state
     }
   }
@@ -432,8 +436,35 @@ fn begin_body_move(
 ) {
   case selection_items(state) {
     [] -> loop(shell, state, current, dir, NoDrag)
-    items ->
-      loop(shell, state, current, dir, MoveDrag(items, x, y, True, #(x, y)))
+    items -> {
+      // Freeze the canvas background and cache parent origins once: motion
+      // must not resolve the document or repaint the grid on every event.
+      campy_wx.freeze_canvas(shell)
+      loop(
+        shell,
+        state,
+        current,
+        dir,
+        MoveDrag(items, x, y, True, #(x, y), drag_origins(state, items)),
+      )
+    }
+  }
+}
+
+fn drag_origins(
+  state: model.State,
+  items: List(#(String, #(Int, Int, Int, Int))),
+) -> dict.Dict(String, #(Int, Int)) {
+  case model.active_module(state) {
+    Error(_) -> dict.new()
+    Ok(module) -> {
+      let layout = campy_design.resolve(module.form.view)
+      list.fold(items, dict.new(), fn(acc, item) {
+        let #(id, _) = item
+        let #(ox, oy) = campy_design.parent_origin_in(layout, id)
+        dict.insert(acc, id, #(ox, oy))
+      })
+    }
   }
 }
 
@@ -462,10 +493,11 @@ fn handle_mouse(
     "motion" -> {
       let drag = drag_at(drag, x, y)
       let #(px, py) = drag_point(drag, x, y)
+      let origins = drag_origins_of(drag)
       let previews = drag_previews(drag, px, py)
       list.each(previews, fn(preview) {
         let #(id, rect) = preview
-        let #(rx, ry, rw, rh) = preview_in_parent(state, id, rect)
+        let #(rx, ry, rw, rh) = preview_in_parent_cached(origins, id, rect)
         campy_wx.preview_rect(shell, id, rx, ry, rw, rh)
       })
       // A body drag needs no canvas capture (GTK's implicit grab keeps sending
@@ -473,12 +505,10 @@ fn handle_mouse(
       // coordinate base. A grip drag captures the grip itself and must keep
       // its chrome still (invariant 6).
       case drag {
-        MoveDrag(_, _, _, True, _) ->
-          campy_wx.show_selection(
-            shell,
-            previews_rect(previews),
-            list.length(state.selection) == 1,
-          )
+        // One native call per motion: the outline and grip follow, the resize
+        // handles are restored by `refresh` on commit.
+        MoveDrag(_, _, _, True, _, _) ->
+          campy_wx.move_outline(shell, previews_rect(previews))
         _ -> Nil
       }
       loop(shell, state, current, dir, drag)
@@ -486,6 +516,7 @@ fn handle_mouse(
     "left_up" -> {
       campy_wx.release_handle(shell, role)
       campy_wx.release_canvas(shell)
+      campy_wx.thaw_canvas(shell)
       let #(px, py) = drag_point(drag, x, y)
       // GTK/Wx can report the press coordinates in the release event for a
       // native child. The last motion event is the authoritative end point.
@@ -617,16 +648,16 @@ fn handle_design_mouse(
           )
           loop(shell, state, current, dir, drag)
         }
-        MoveDrag(_, _, _, _, _) -> {
-          let #(ax, ay) = event_absolute(state, id, x, y)
+        MoveDrag(_, _, _, _, _, origins) -> {
+          let #(ax, ay) = event_absolute_cached(origins, id, x, y)
           handle_mouse(shell, state, current, dir, drag, 8, kind, ax, ay)
         }
         _ -> loop(shell, state, current, dir, drag)
       }
     "left_up" ->
       case drag {
-        MoveDrag(_, _, _, _, _) -> {
-          let #(ax, ay) = event_absolute(state, id, x, y)
+        MoveDrag(_, _, _, _, _, origins) -> {
+          let #(ax, ay) = event_absolute_cached(origins, id, x, y)
           handle_mouse(shell, state, current, dir, drag, 8, kind, ax, ay)
         }
         PlacementDrag(kind, start_x, start_y) -> {
@@ -733,6 +764,24 @@ fn start_placement(
 
 /// Convert a click on any design widget into canvas coordinates. Labels often
 /// do not emit mouse events on GTK, but buttons, panels, and text fields do.
+/// Same as `event_absolute` but uses the origins cached at drag start, so a
+/// motion event never resolves the document.
+fn event_absolute_cached(
+  origins: dict.Dict(String, #(Int, Int)),
+  id: String,
+  x: Int,
+  y: Int,
+) -> #(Int, Int) {
+  case id {
+    "canvas" -> #(x, y)
+    _ ->
+      case dict.get(origins, id) {
+        Ok(#(ox, oy)) -> #(ox + x, oy + y)
+        Error(_) -> #(x, y)
+      }
+  }
+}
+
 fn event_absolute(
   state: model.State,
   id: String,
@@ -776,7 +825,7 @@ fn move_reparent(
   previews: List(#(String, #(Int, Int, Int, Int))),
 ) -> Option(#(String, String)) {
   case drag {
-    MoveDrag([#(id, original)], _, _, _, _) ->
+    MoveDrag([#(id, original)], _, _, _, _, _) ->
       case list.find(previews, fn(preview) { preview.0 == id }) {
         Error(Nil) -> None
         Ok(#(_, preview)) ->
@@ -821,7 +870,8 @@ fn start_drag(state: model.State, role: Int, x: Int, y: Int) -> Drag {
     True ->
       case selection_items(state) {
         [] -> NoDrag
-        items -> MoveDrag(items, x, y, False, #(x, y))
+        items ->
+          MoveDrag(items, x, y, False, #(x, y), drag_origins(state, items))
       }
     False ->
       case state.selection {
@@ -866,17 +916,43 @@ fn selection_items(
 
 fn drag_at(drag: Drag, x: Int, y: Int) -> Drag {
   case drag {
-    MoveDrag(items, start_x, start_y, follow, _) ->
-      MoveDrag(items, start_x, start_y, follow, #(x, y))
+    MoveDrag(items, start_x, start_y, follow, _, origins) ->
+      MoveDrag(items, start_x, start_y, follow, #(x, y), origins)
     ResizeDrag(id, role, start_x, start_y, rect, _) ->
       ResizeDrag(id, role, start_x, start_y, rect, #(x, y))
     _ -> drag
   }
 }
 
+/// Parent origins cached at drag start. Motion events must not resolve the
+/// document: they only add a delta to the captured rectangles.
+fn drag_origins_of(drag: Drag) -> dict.Dict(String, #(Int, Int)) {
+  case drag {
+    MoveDrag(_, _, _, _, _, origins) -> origins
+    _ -> dict.new()
+  }
+}
+
+fn preview_in_parent_cached(
+  origins: dict.Dict(String, #(Int, Int)),
+  id: String,
+  rect: #(Int, Int, Int, Int),
+) -> #(Int, Int, Int, Int) {
+  case dict.get(origins, id) {
+    Ok(#(ox, oy)) -> {
+      let #(x, y, w, h) = rect
+      #(x - ox, y - oy, w, h)
+    }
+    // Never reached for a body drag: every MoveDrag item gets an origin at
+    // gesture start. If a handle path reaches here, treat the rect as canvas
+    // coordinates (its origin is 0).
+    Error(_) -> rect
+  }
+}
+
 fn drag_point(drag: Drag, fallback_x: Int, fallback_y: Int) -> #(Int, Int) {
   case drag {
-    MoveDrag(_, _, _, _, #(x, y)) -> #(x, y)
+    MoveDrag(_, _, _, _, #(x, y), _) -> #(x, y)
     ResizeDrag(_, _, _, _, _, #(x, y)) -> #(x, y)
     _ -> #(fallback_x, fallback_y)
   }
@@ -891,7 +967,7 @@ fn drag_previews(
     NoDrag -> []
     PlacementDrag(_, _, _) -> []
     MarqueeDrag(_, _) -> []
-    MoveDrag(items, start_x, start_y, _follow, _current) ->
+    MoveDrag(items, start_x, start_y, _follow, _current, _) ->
       list.map(items, fn(item) {
         let #(id, #(rx, ry, rw, rh)) = item
         #(id, #(rx + x - start_x, ry + y - start_y, rw, rh))
@@ -946,6 +1022,7 @@ type Drag {
     start_y: Int,
     follow: Bool,
     current: #(Int, Int),
+    origins: dict.Dict(String, #(Int, Int)),
   )
   ResizeDrag(
     id: String,

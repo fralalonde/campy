@@ -1207,6 +1207,44 @@ pub fn preview_rect(
   }
 }
 
+pub fn freeze_canvas(shell: Shell) -> Nil {
+  let #(canvas, _, _) = canvas_widget(shell)
+  native.freeze(canvas)
+}
+
+pub fn thaw_canvas(shell: Shell) -> Nil {
+  let #(canvas, _, _) = canvas_widget(shell)
+  native.thaw(canvas)
+}
+
+/// One native call per motion event: the outline strips and grip follow the
+/// previewed rectangle. Used during a drag; `show_selection` restores the
+/// resize handles on commit.
+pub fn move_outline(shell: Shell, rect: Option(#(Int, Int, Int, Int))) -> Nil {
+  case rect {
+    None -> Nil
+    Some(#(x, y, w, h)) ->
+      case list.drop(shell.handles, 13) {
+        [top, bottom, left, right, ..] ->
+          case list.take(list.drop(shell.handles, 8), 1) {
+            [grip, ..] -> {
+              let #(canvas, _, _) = canvas_widget(shell)
+              native.move_outline(
+                canvas,
+                [grip, top, bottom, left, right],
+                x,
+                y,
+                w,
+                h,
+              )
+            }
+            _ -> Nil
+          }
+        _ -> Nil
+      }
+  }
+}
+
 pub fn capture_canvas(shell: Shell) -> Nil {
   let #(canvas, _, _) = canvas_widget(shell)
   native.capture(canvas)

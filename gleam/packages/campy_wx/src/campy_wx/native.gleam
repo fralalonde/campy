@@ -308,6 +308,16 @@ pub fn connect_design(ref: Dynamic, kind: String) -> Nil
 @external(erlang, "campy_wx_native", "handles_create")
 pub fn handles_create(parent: Dynamic, base: Int) -> List(Dynamic)
 
+@external(erlang, "campy_wx_native", "move_outline")
+pub fn move_outline(
+  canvas: Dynamic,
+  refs: List(Dynamic),
+  x: Int,
+  y: Int,
+  w: Int,
+  h: Int,
+) -> Nil
+
 @external(erlang, "campy_wx_native", "handle_place")
 pub fn handle_place(
   canvas: Dynamic,

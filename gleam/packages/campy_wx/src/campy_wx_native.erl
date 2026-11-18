@@ -16,6 +16,7 @@
     set_tooltip/2,
     canvas/2, paint_canvas/4, connect_design/2,
     handles_create/2, handle_place/6, handle_show/2, handle_raise/1,
+    move_outline/6,
     capture/1, release/1, release_capture/0, set_shortcuts/2,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
@@ -697,6 +698,25 @@ release_capture() ->
     catch
         _:_ -> ok
     end.
+
+%% One native call per motion event: the client origin is computed once and
+%% the outline strips plus the grip are all placed here.
+move_outline(Canvas, Refs, X, Y, W, H) ->
+    {CX, CY} = wxWindow:clientToScreen(Canvas, {0, 0}),
+    [Grip, Top, Bottom, Left, Right] = Refs,
+    place_chrome(Grip, CX + X + 4, CY + Y + 4, 36, 12),
+    place_chrome(Top, CX + X - 2, CY + Y - 2, W + 4, 2),
+    place_chrome(Bottom, CX + X - 2, CY + Y + H, W + 4, 2),
+    place_chrome(Left, CX + X - 2, CY + Y - 2, 2, H + 4),
+    place_chrome(Right, CX + X + W, CY + Y - 2, 2, H + 4),
+    ok.
+
+place_chrome(Ref, X, Y, W, H) ->
+    wxWindow:move(Ref, {X, Y}),
+    wxWindow:setSize(Ref, {W, H}),
+    wxWindow:show(Ref),
+    wxWindow:raise(Ref),
+    ok.
 
 handle_place(Canvas, Ref, X, Y, Width, Height) ->
     %% Client origin is the form's 0,0; getScreenPosition can include frame
