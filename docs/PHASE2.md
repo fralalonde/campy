@@ -37,6 +37,20 @@ it. Option 2 (native children + selection chrome) is implemented on wx.
   The IDE and wx tests do not need crypto.
 - Save/reopen on a throwaway copy writes canonical `form.json`/`handlers.gleam`
   and `CAMPY_WX_SMOKE=1` mounts the saved project.
+- **T3.1** `campy_app` — done (2026-11-18). The ABI v2 actor: `Event`
+  (control/key/value/generation), `Effect` (Log/Notify/Stop), `Reply`
+  (View/Report/Notify/Version/Stopped), `Spec` (name, module, form document,
+  state_version, optional migrate closure), and `Msg`
+  (EventReceived/Upgrade/SnapshotRequest/StopRequest). Dispatch resolves
+  `<control>_<event>` from the form (the control must exist and declare the
+  key), checks `function_exported/3`, and applies `handler/2` through
+  `campy_app_ffi` (raises are contained as HandlerError reports). After every
+  applied event the actor publishes `view/1`'s document with an incremented
+  generation. `Upgrade` runs the new module's `migrate/2` when the carried
+  version differs and republishes; `SnapshotRequest` returns the raw state for
+  the T4.4 viewer. 11 headless tests cover dispatch, no-ops, contained errors,
+  Stop effects/messages, upgrade/no-op, snapshot, and the naming rule.
+  264 tests total.
 
 **Next step.** **Gate G2**: design the demo form from scratch in the shell,
 save it, inspect/diff the canonical JSON, and reopen it. Do not start M3 (ABI v2
@@ -46,6 +60,7 @@ runtime, appgen, Run) until G2 passes.
 ```
 gleam/packages: campy_view campy_wx campy_project campy_ide_model
                 campy_design campy_catalog campy_manifest campy_source
+                campy_app
 gleam/apps:     campy_ide_wx
 examples/demo   canonical project (greeter, notes)
 scripts:        workspace.py (build/test runner), ui_probe.sh (X11 probe)
@@ -682,8 +697,8 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 
 ## 5. M3/M4 — run, deploy, debug
 
-- **T3.1** `campy_app` ABI v2 actor (state, `view`, dispatch, reports,
-  `state_version`, `migrate`), no polling, no bridge.
+- **T3.1** `campy_app` ABI v2 actor — done (2026-11-18). See the T3.1 status
+  bullet above.
 - **T3.2** `campy_appgen` v2 (embedded form, generated `init`/`view`, dispatch
   module name, ABI v2 stubs).
 - **T3.3** Attach client in the IDE: deploy in-VM first, send `View`, apply diffs,

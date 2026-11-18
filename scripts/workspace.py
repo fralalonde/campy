@@ -24,6 +24,7 @@ PACKAGES = [
         "campy_design",
         "campy_catalog",
         "campy_manifest",
+        "campy_app",
         "campy_source",
     )
 ] + [IDE]

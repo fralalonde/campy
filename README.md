@@ -42,6 +42,9 @@ project directory to open another project.
   direct wx calls) and doubles as the export path.
 - **Designer** (`campy_design`): absolute geometry, hit-testing, resize/move,
   structural edits, drop adoption, and reparenting.
+- **App runtime** (`campy_app`): the ABI v2 actor — state, `view`, dispatch by
+  handler name, contained handler errors, `Log`/`Notify`/`Stop` effects,
+  generation-stamped views, `state_version`, and `migrate`.
 - **IDE model** (`campy_ide_model`): tabs, active module, selection, console,
   undo/redo, palette placement, clipboard, duplicate/delete, z-order, inspector
   geometry/text edits, ABI v2 handler stubs, and Form/Code/Source page state.
