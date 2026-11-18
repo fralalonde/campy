@@ -58,6 +58,8 @@ project directory to open another project.
   nodes, deploy the active form to one, hot-redeploy (upgrade) remotely,
   roll back to the stored previous beam, and watch the peer's reports in the
   same console.
+- **Console**: app replies stream into the IDE console immediately, and the
+  header tracks what is running and where.
 - **Debug v1** (in `campy_ide_wx`): the Debug page — process list of the
   app's node, state snapshot dumps, and a send/receive trace whose lines
   stream into the console.

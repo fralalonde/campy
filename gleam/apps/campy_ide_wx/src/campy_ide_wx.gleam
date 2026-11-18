@@ -121,8 +121,16 @@ fn loop(
   dir: String,
   drag: Drag,
 ) {
-  // Drain the running app's replies before the next wx event.
-  let state = poll_app(shell, state, current)
+  // Drain the running app's replies before the next wx event; console text
+  // set outside a wx event needs an explicit frame repaint to show.
+  let drained = poll_app(shell, state, current)
+  let state = case drained.console != state.console {
+    True -> {
+      campy_wx.repaint(shell)
+      drained
+    }
+    False -> drained
+  }
   case campy_wx.next(shell, 100) {
     campy_wx.Closed -> {
       campy_wx.close(shell)
@@ -2869,7 +2877,7 @@ fn centre(state: model.State) -> Node {
         campy_view.node("label", "console-title")
           |> campy_view.with_props([#("text", VText("Console"))]),
         campy_view.node("label", "console-state")
-          |> campy_view.with_props([#("text", VText("  stopped"))]),
+          |> campy_view.with_props([#("text", VText(run_state(state)))]),
         campy_view.node("label", "console-spacer")
           |> campy_view.with_props([
             #("text", VText("")),
@@ -2923,6 +2931,20 @@ fn source_page() -> Node {
     |> campy_view.with_props([#("grow", VBool(True))])
     |> campy_view.with_events([]),
   ])
+}
+
+/// The console header's run-state label.
+fn run_state(state: model.State) -> String {
+  case state.running {
+    Some(running) ->
+      "  running "
+      <> running.slug
+      <> case running.node {
+        "" -> ""
+        node -> " on " <> node
+      }
+    None -> "  stopped"
+  }
 }
 
 /// The Debug page: the attached app's process list, its state snapshot, and

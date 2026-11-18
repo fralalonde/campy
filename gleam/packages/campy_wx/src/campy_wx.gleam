@@ -990,6 +990,14 @@ pub fn show_marquee(shell: Shell, rect: Option(#(Int, Int, Int, Int))) -> Nil {
   invalidate_canvas(shell)
 }
 
+/// Repaint the whole frame: refresh queues an expose and update flushes the
+/// pending paint immediately. Text set outside a wx event (draining app
+/// replies) leaves editor pixels stale otherwise.
+pub fn repaint(shell: Shell) -> Nil {
+  native.refresh(shell.frame)
+  native.update(shell.frame)
+}
+
 /// Lay out the sizers of widgets whose parent positions children freely.
 /// Free-layout parents are not managed by any sizer, so the frame-level
 /// layout pass never recalculates their children; everything else is laid

@@ -18,7 +18,7 @@
     capture/1, release/1, release_capture/0, set_cursor/2, set_shortcuts/2,
     freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
-    set_items/3, set_enabled/2, set_visible/2, set_background/4, refresh_window/1, focus/1,
+    set_items/3, set_enabled/2, set_visible/2, set_background/4, refresh_window/1, update_window/1, focus/1,
     focus_ignoring_children/1, set_editable/2, raise/1, destroy/1, apply_shortcuts/1,
     get_text/1, get_int/2, get_bool/2, get_selection/2,
     now_ms/0, getenv/1
@@ -220,6 +220,11 @@ set_visible(Ref, Visible) ->
 
 refresh_window(Ref) ->
     wxWindow:refresh(Ref),
+    ok.
+
+%% Refresh queues an expose; update flushes the pending paint immediately.
+update_window(Ref) ->
+    wxWindow:update(Ref),
     ok.
 
 %% Refresh queues an expose; update flushes the pending paint immediately,
