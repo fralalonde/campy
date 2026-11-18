@@ -12,6 +12,7 @@ import campy_appgen
 import campy_catalog
 import campy_design
 import campy_ide_model as model
+import campy_lsp
 import campy_peer
 import campy_project
 import campy_runner
@@ -48,15 +49,52 @@ pub fn main() {
 
 fn interactive(project: campy_project.Project, dir: String) {
   let shell = campy_wx.start("Campy — " <> project.title, 1280, 860)
+  // Gleam language server for the Code editor: completions, jump to
+  // declaration, and live diagnostics. Optional: the IDE works without it
+  // (plain highlighting and text only).
   let state =
     model.new(project)
     |> model.update(model.Log("Loaded " <> dir))
     |> model.update(model.SetStatus(dir))
+    |> start_lsp
   let current_view = view(state)
 
   let assert Ok(shell) = campy_wx.mount(shell, current_view)
   refresh(shell, None, state)
   loop(shell, state, current_view, dir, NoDrag)
+}
+
+/// Spawn the Gleam language server against the generated analysis workspace
+/// (the editor's handlers.gleam documents are mirrored there so the server
+/// sees a real Gleam project). Failure is not fatal: the editor keeps working
+/// without language intelligence.
+fn start_lsp(state: model.State) -> model.State {
+  let root = lsp_workspace_dir()
+  case write_lsp_workspace(root) {
+    Error(error) ->
+      model.update(
+        state,
+        model.Log("language server workspace failed: " <> error),
+      )
+    Ok(Nil) ->
+      case
+        campy_lsp.start(campy_lsp.Config(
+          language: "gleam",
+          command: #("gleam", ["lsp"]),
+          root: root,
+          master: process.self(),
+        ))
+      {
+        Ok(client) -> {
+          io.println("[ide] gleam language server started")
+          model.update(state, model.LspStarted(client))
+        }
+        Error(reason) -> {
+          io.println("[ide] gleam language server unavailable: " <> reason)
+          model.update(state, model.Log("no language server: " <> reason))
+        }
+      }
+  }
 }
 
 fn smoke(project: campy_project.Project, dir: String) {
@@ -131,8 +169,15 @@ fn loop(
     }
     False -> drained
   }
+  // Mirror the Code editor's buffer into the language server. The loop runs
+  // at least every idle tick, so typed text reaches the server within ~100ms.
+  let state = sync_lsp(shell, state)
   case campy_wx.next(shell, 100) {
     campy_wx.Closed -> {
+      case state.lsp.client {
+        Some(client) -> campy_lsp.stop(client)
+        None -> Nil
+      }
       campy_wx.close(shell)
       io.println("[ide] closed")
     }
@@ -176,7 +221,7 @@ fn loop(
         }
         _ -> {
           let previous = state
-          let state = handle(state, dir, id, key, value)
+          let state = handle(shell, state, dir, id, key, value)
           let next = view(state)
           let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
@@ -211,14 +256,18 @@ fn loop(
       loop(shell, state, current, dir, drag)
     }
     campy_wx.Message(message) ->
-      case trace_log_text(message) {
-        Ok(text) -> {
-          io.println("[trace] " <> text)
-          let state = model.update(state, model.RunReport(text))
-          set_console(shell, state)
-          loop(shell, state, current, dir, drag)
-        }
-        Error(_) -> loop(shell, state, current, dir, drag)
+      case lsp_message(message) {
+        Ok(lsp) -> handle_lsp(shell, state, current, dir, drag, lsp)
+        Error(_) ->
+          case trace_log_text(message) {
+            Ok(text) -> {
+              io.println("[trace] " <> text)
+              let state = model.update(state, model.RunReport(text))
+              set_console(shell, state)
+              loop(shell, state, current, dir, drag)
+            }
+            Error(_) -> loop(shell, state, current, dir, drag)
+          }
       }
     campy_wx.Idle -> loop(shell, state, current, dir, drag)
   }
@@ -336,8 +385,14 @@ fn handle_key(
   // base keys (save/quit/pages/escape). Ignore the latter here so a key is
   // never applied twice.
   let action = case shortcut(state, key) {
-    Save | Quit | ShowFormPage | ShowCodePage | ShowSourcePage | Cancel ->
-      NoShortcut
+    Save
+    | Quit
+    | ShowFormPage
+    | ShowCodePage
+    | ShowSourcePage
+    | Complete
+    | JumpToDefinition
+    | Cancel -> NoShortcut
     action -> action
   }
   dispatch_shortcut(shell, state, current, dir, drag, action)
@@ -376,6 +431,8 @@ pub fn accelerator_shortcut(action: String) -> Shortcut {
     "form" -> ShowFormPage
     "code" -> ShowCodePage
     "source" -> ShowSourcePage
+    "complete" -> Complete
+    "definition" -> JumpToDefinition
     _ -> NoShortcut
   }
 }
@@ -404,7 +461,7 @@ fn dispatch_shortcut(
     }
     action -> {
       let previous = state
-      let state = apply_shortcut(state, dir, action)
+      let state = apply_shortcut(shell, state, dir, action)
       let next = view(state)
       let shell = rebind(shell, current, next)
       refresh(shell, Some(previous), state)
@@ -426,12 +483,15 @@ fn focus_page(shell: campy_wx.Shell, state: model.State) -> Nil {
 }
 
 fn apply_shortcut(
+  shell: campy_wx.Shell,
   state: model.State,
   dir: String,
   action: Shortcut,
 ) -> model.State {
   case action {
-    Save -> save(state, dir)
+    Save -> save(shell, state, dir)
+    Complete -> complete_at_caret(shell, state, dir)
+    JumpToDefinition -> jump_to_definition(shell, state, dir)
     Undo -> model.update(state, model.Undo)
     Redo -> model.update(state, model.Redo)
     Copy -> model.update(state, model.CopySelection)
@@ -495,6 +555,10 @@ pub type Shortcut {
   ShowFormPage
   ShowCodePage
   ShowSourcePage
+  /// Language server: complete at the caret (Ctrl+Space).
+  Complete
+  /// Language server: jump to the declaration under the caret (F12).
+  JumpToDefinition
   Cancel
   NoShortcut
 }
@@ -543,6 +607,10 @@ pub fn shortcut(state: model.State, key: campy_wx.Key) -> Shortcut {
         _ -> DeleteControl
       }
     False, False, _, "escape" -> Cancel
+    // F12 and Ctrl+Space live in the accelerator table too; this mapping
+    // makes handle_key ignore them so they are never applied twice.
+    False, False, _, "351" -> JumpToDefinition
+    True, False, _, "32" -> Complete
     _, _, _, _ -> NoShortcut
   }
 }
@@ -552,6 +620,20 @@ fn make_dir(path: String) -> Result(Nil, String)
 
 @external(erlang, "campy_ide_wx_ffi", "write_file")
 fn write_file(path: String, contents: String) -> Result(Nil, String)
+
+/// A message projected by the campy_lsp client, decoded from the raw Erlang
+/// tuples the client sends to the master's mailbox.
+pub type LspMessage {
+  DiagnosticsMsg(file: String, rows: List(#(Int, Int, String, Int)))
+  CompletionsMsg(labels: List(String))
+  SymbolsMsg(items: List(#(String, Int)))
+  DefinitionMsg(file: String, line: Int, column: Int)
+  NoDefinitionMsg
+  DownMsg(reason: String)
+}
+
+@external(erlang, "campy_ide_wx_ffi", "lsp_message")
+fn lsp_message(message: Dynamic) -> Result(LspMessage, Nil)
 
 @external(erlang, "campy_ide_wx_ffi", "compile_and_load")
 fn compile_and_load(dir: String, module: String) -> Result(Nil, String)
@@ -1837,6 +1919,7 @@ type Drag {
 }
 
 fn handle(
+  shell: campy_wx.Shell,
   state: model.State,
   dir: String,
   id: String,
@@ -1844,7 +1927,7 @@ fn handle(
   value: campy_view.Value,
 ) -> model.State {
   case id {
-    "menu-save" | "tool-save" -> save(state, dir)
+    "menu-save" | "tool-save" -> save(shell, state, dir)
     "menu-undo" | "tool-undo" -> model.update(state, model.Undo)
     "menu-redo" | "tool-redo" -> model.update(state, model.Redo)
     "menu-form" -> model.update(state, model.ShowForm)
@@ -2118,7 +2201,21 @@ fn tree_selected(state: model.State, id: String) -> model.State {
   }
 }
 
-fn save(state: model.State, dir: String) -> model.State {
+fn save(shell: campy_wx.Shell, state: model.State, dir: String) -> model.State {
+  // Adopt the Code editor's current text first: the buffer is what the user
+  // sees, and typed-but-unsaved edits must survive the save. Other pages
+  // commit the model as-is.
+  let state = case state.page {
+    model.CodePage ->
+      case model.active_module(state) {
+        Ok(_module) -> {
+          let text = campy_wx.editor_text(shell, "code")
+          model.update(state, model.SetHandlers(text))
+        }
+        Error(_) -> state
+      }
+    _ -> state
+  }
   let state = case campy_project.save(state.project, dir) {
     Ok(Nil) -> model.update(state, model.Log("Saved " <> dir))
     Error(error) -> model.update(state, model.Log("Save failed: " <> error))
@@ -2295,31 +2392,212 @@ fn sync_shortcuts(
 }
 
 pub fn page_index(state: model.State) -> Int {
-  case state.debug_view {
-    True -> 5
-    False ->
-      case state.nodes_view {
-        // The Nodes page is an explicit choice; it wins even while an app runs.
-        True -> 4
-        False ->
-          case state.running {
-            Some(_) -> 3
-            None ->
-              case state.source_view, state.code_view {
-                True, _ -> 2
-                False, True -> 1
-                False, False -> 0
-              }
-          }
-      }
+  case state.page {
+    model.CodePage -> 1
+    model.SourcePage -> 2
+    model.RunPage -> 3
+    model.NodesPage -> 4
+    model.DebugPage -> 5
+    model.DesignPage -> 0
   }
 }
 
 fn set_code(shell: campy_wx.Shell, state: model.State) {
+  campy_wx.highlight_gleam(shell, "code")
   case model.active_module(state) {
     Ok(module) -> campy_wx.set_editor(shell, "code", module.handlers, False)
     Error(_) -> campy_wx.set_editor(shell, "code", "", True)
   }
+  // A document replacement resets the indicator ranges, so repaint the
+  // latest language-server diagnostics afterwards.
+  paint_diagnostics(shell, state)
+}
+
+/// Paint the language server's latest diagnostics (squiggles + margin
+/// markers) on the Code editor.
+pub fn paint_diagnostics(shell: campy_wx.Shell, state: model.State) -> Nil {
+  case state.page {
+    model.CodePage ->
+      campy_wx.editor_diagnostics(
+        shell,
+        "code",
+        list.map(state.lsp.diags, fn(diag: model.Diag) {
+          let model.Diag(line, end_line, text, severity) = diag
+          #(line, end_line, text, severity)
+        }),
+      )
+    _ -> Nil
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Gleam language server integration
+// ---------------------------------------------------------------------------
+
+/// The analysis workspace the language server runs in. The editor's
+/// handlers.gleam documents are mirrored into it as regular src modules, so
+/// `gleam lsp` sees a real Gleam project (handlers import campy_app/campy_view).
+pub fn lsp_workspace_dir() -> String {
+  root() <> "/generated/lsp"
+}
+
+/// Path of one module's handlers document inside the analysis workspace.
+pub fn handlers_path(slug: String) -> String {
+  lsp_workspace_dir() <> "/src/" <> slug <> "_handlers.gleam"
+}
+
+fn write_lsp_workspace(dir: String) -> Result(Nil, String) {
+  use _ <- result.try(make_dir(dir <> "/src"))
+  write_file(
+    dir <> "/gleam.toml",
+    "name = \"campy_handlers\"\n"
+      <> "version = \"0.1.0\"\n"
+      <> "target = \"erlang\"\n"
+      <> "gleam = \">= 1.16.0 and < 2.0.0\"\n"
+      <> "\n"
+      <> "[dependencies]\n"
+      <> "gleam_stdlib = \">= 0.70.0 and < 1.0.0\"\n"
+      <> "campy_view = { path = \""
+      <> root()
+      <> "/gleam/packages/campy_view\" }\n"
+      <> "campy_app = { path = \""
+      <> root()
+      <> "/gleam/packages/campy_app\" }\n",
+  )
+}
+
+/// Mirror the Code editor's document into the language server: write the
+/// analysis copy on disk, didOpen the first time a file appears, then push
+/// full-text didChange whenever the buffer changed. Runs once per event-loop
+/// pass; it is a no-op without an active module or server.
+pub fn sync_lsp(shell: campy_wx.Shell, state: model.State) -> model.State {
+  case model.active_module(state) {
+    Error(_) -> state
+    Ok(module) -> {
+      let file = handlers_path(module.slug)
+      let text = campy_wx.editor_text(shell, "code")
+      case state.lsp.client {
+        None -> state
+        Some(client) -> {
+          let _ = write_file(file, text)
+          case state.lsp.file {
+            Some(open) if open == file ->
+              case text == state.lsp.text {
+                True -> state
+                False -> {
+                  campy_lsp.change(client, file, state.lsp.version + 1, text)
+                  model.update(
+                    state,
+                    model.LspPushed(file, state.lsp.version + 1, text),
+                  )
+                }
+              }
+            _ -> {
+              campy_lsp.open(client, file, text)
+              model.update(state, model.LspPushed(file, 1, text))
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Ctrl+Space: ask the server for completions at the caret. The reply shows
+/// the editor's completion popup.
+fn complete_at_caret(
+  shell: campy_wx.Shell,
+  state: model.State,
+  dir: String,
+) -> model.State {
+  let state = sync_lsp(shell, state)
+  case state.lsp.client, state.lsp.file {
+    Some(client), Some(file) -> {
+      let #(line, column) = campy_wx.editor_caret(shell, "code")
+      campy_lsp.completion(client, file, line, column)
+      state
+    }
+    _, _ -> model.update(state, model.Log("No language server document open"))
+  }
+}
+
+/// F12: ask the server for the declaration at the caret; the reply moves the
+/// editor's caret to it.
+fn jump_to_definition(
+  shell: campy_wx.Shell,
+  state: model.State,
+  dir: String,
+) -> model.State {
+  let state = sync_lsp(shell, state)
+  case state.lsp.client, state.lsp.file {
+    Some(client), Some(file) -> {
+      let #(line, column) = campy_wx.editor_caret(shell, "code")
+      campy_lsp.definition(client, file, line, column)
+      state
+    }
+    _, _ -> model.update(state, model.Log("No language server document open"))
+  }
+}
+
+/// Project the client's raw diagnostic rows into the model's typed rows.
+fn to_diags(rows: List(#(Int, Int, String, Int))) -> List(model.Diag) {
+  list.map(rows, fn(row) {
+    let #(line, end_line, text, severity) = row
+    model.Diag(line, end_line, text, severity)
+  })
+}
+
+/// Consume a language-server message. Every branch returns to the loop;
+/// state-changing branches re-render the view first.
+fn handle_lsp(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+  message: LspMessage,
+) -> Nil {
+  let previous = state
+  let state = case message {
+    DiagnosticsMsg(file, rows) -> {
+      let state =
+        model.update(state, model.LspDiagnostics(file, to_diags(rows)))
+      // Squiggles belong to the document the editor is showing.
+      case state.lsp.file == Some(file) {
+        True -> paint_diagnostics(shell, state)
+        False -> Nil
+      }
+      state
+    }
+    CompletionsMsg(labels) -> {
+      campy_wx.editor_completions(shell, "code", labels)
+      state
+    }
+    DefinitionMsg(file, line, column) ->
+      case state.lsp.file == Some(file) {
+        True -> {
+          campy_wx.select_page(shell, "tabs", 1)
+          campy_wx.goto_editor_position(shell, "code", line, column)
+          campy_wx.focus(shell, "code")
+          model.update(
+            state,
+            model.SetStatus("Jumped to " <> int.to_string(line + 1) <> ":"),
+          )
+        }
+        False ->
+          model.update(state, model.SetStatus("Declaration is in " <> file))
+      }
+    NoDefinitionMsg ->
+      model.update(state, model.SetStatus("No declaration found"))
+    DownMsg(reason) -> model.update(state, model.LspDown("[lsp] " <> reason))
+    // The outline is not wired to a pane yet; the request is still useful
+    // later, so the message is simply dropped.
+    SymbolsMsg(_) -> state
+  }
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  refresh(shell, Some(previous), state)
+  loop(shell, state, next, dir, drag)
 }
 
 /// Read-only construction source for the active form, regenerated from the

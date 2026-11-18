@@ -288,6 +288,36 @@ pub fn editor_set(editor: Dynamic, text: String, read_only: Bool) -> Nil
 @external(erlang, "campy_wx_native", "editor_show_end")
 pub fn editor_show_end(editor: Dynamic) -> Nil
 
+@external(erlang, "campy_wx_native", "editor_gleam")
+pub fn editor_gleam(editor: Dynamic) -> Nil
+
+@external(erlang, "campy_wx_native", "editor_get_text")
+pub fn editor_get_text(editor: Dynamic) -> String
+
+/// The caret of a text editor as a 0-based #(Line, Column) pair.
+pub type Caret {
+  Caret(line: Int, column: Int)
+}
+
+@external(erlang, "campy_wx_native", "editor_caret")
+pub fn editor_caret(editor: Dynamic) -> Caret
+
+@external(erlang, "campy_wx_native", "editor_goto")
+pub fn editor_goto(editor: Dynamic, line: Int, column: Int) -> Nil
+
+/// Language-server diagnostics for an editor: squiggle underlines under the
+/// offending lines plus margin markers. Rows are #(StartLine, EndLine,
+/// Message, Severity) with 0-based lines and LSP severities (1 error,
+/// 2 warning, 3 info).
+@external(erlang, "campy_wx_native", "editor_diagnostics")
+pub fn editor_diagnostics(
+  editor: Dynamic,
+  rows: List(#(Int, Int, String, Int)),
+) -> Nil
+
+@external(erlang, "campy_wx_native", "editor_autocomplete")
+pub fn editor_autocomplete(editor: Dynamic, labels: List(String)) -> Nil
+
 @external(erlang, "campy_wx_native", "open_dialog")
 pub fn open_dialog(frame: Dynamic, wildcard: String) -> String
 

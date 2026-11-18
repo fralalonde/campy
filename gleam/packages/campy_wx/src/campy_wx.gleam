@@ -1146,6 +1146,75 @@ pub fn scroll_editor_to_end(shell: Shell, id: String) -> Nil {
   }
 }
 
+/// Turn on Gleam syntax highlighting for a text editor. Idempotent: safe to
+/// call again after the widget is recreated by a view patch.
+pub fn highlight_gleam(shell: Shell, id: String) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_gleam(widget.ref)
+    Error(_) -> Nil
+  }
+}
+
+/// The full text currently in a text editor (Scintilla keeps its own buffer,
+/// which differs from the last `set_editor` call once the user has typed).
+pub fn editor_text(shell: Shell, id: String) -> String {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_get_text(widget.ref)
+    Error(_) -> ""
+  }
+}
+
+/// The caret of a text editor as a 0-based #(Line, Column) pair.
+pub fn editor_caret(shell: Shell, id: String) -> #(Int, Int) {
+  case get_widget(shell, id) {
+    Ok(widget) -> {
+      let native.Caret(line, column) = native.editor_caret(widget.ref)
+      #(line, column)
+    }
+    Error(_) -> #(0, 0)
+  }
+}
+
+/// Move a text editor's caret to a 0-based line/column and make it visible.
+/// Used for jump-to-declaration.
+pub fn goto_editor_position(
+  shell: Shell,
+  id: String,
+  line: Int,
+  column: Int,
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_goto(widget.ref, line, column)
+    Error(_) -> Nil
+  }
+}
+
+/// Paint language-server diagnostics on a text editor: squiggle underlines
+/// under the offending lines plus a margin marker per finding. Rows are
+/// #(StartLine, EndLine, Message, Severity), 0-based lines, LSP severities.
+pub fn editor_diagnostics(
+  shell: Shell,
+  id: String,
+  rows: List(#(Int, Int, String, Int)),
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_diagnostics(widget.ref, rows)
+    Error(_) -> Nil
+  }
+}
+
+/// Show a completion popup at a text editor's caret with the given labels.
+pub fn editor_completions(
+  shell: Shell,
+  id: String,
+  labels: List(String),
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_autocomplete(widget.ref, labels)
+    Error(_) -> Nil
+  }
+}
+
 pub fn set_status(shell: Shell, text: String) -> Nil {
   case
     list.find(dict.values(shell.widgets), fn(widget) { widget.kind == "status" })

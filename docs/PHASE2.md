@@ -101,7 +101,7 @@ runtime, appgen, Run) until G2 passes.
 ```
 gleam/packages: campy_view campy_wx campy_project campy_ide_model
                 campy_design campy_catalog campy_manifest campy_source
-                campy_app campy_appgen campy_peer campy_runner
+                campy_app campy_appgen campy_peer campy_runner campy_lsp
 gleam/apps:     campy_ide_wx
 examples/demo   canonical project (greeter, notes)
 scripts:        workspace.py (build/test runner), ui_probe.sh (X11 probe)

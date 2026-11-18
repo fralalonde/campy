@@ -83,6 +83,15 @@ click 400 800
 sleep 1
 shot t33-greet-clicked
 
+# --- Regression: page tabs must work while an app is running ----------------
+# The Code tab, then back to Form: the canvas must reappear.
+click 305 147
+sleep 1
+shot page-code-while-running
+click 240 147
+sleep 1
+shot page-form-while-running
+
 # --- T4.3/G4: node manager — start a peer, deploy, drive, upgrade, kill -----
 # The Nodes tab is the fifth notebook tab: client ≈ (520, 147).
 click 520 147

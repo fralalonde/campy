@@ -11,7 +11,8 @@ packages = [
   { name = "campy_appgen", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_source", "campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_appgen" },
   { name = "campy_catalog", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_catalog" },
   { name = "campy_design", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_catalog", "campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_design" },
-  { name = "campy_ide_model", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_app", "campy_appgen", "campy_catalog", "campy_design", "campy_peer", "campy_project", "campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_ide_model" },
+  { name = "campy_ide_model", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_app", "campy_appgen", "campy_catalog", "campy_design", "campy_lsp", "campy_peer", "campy_project", "campy_view", "gleam_erlang", "gleam_stdlib"], source = "local", path = "../../packages/campy_ide_model" },
+  { name = "campy_lsp", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_json", "gleam_stdlib"], source = "local", path = "../../packages/campy_lsp" },
   { name = "campy_peer", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_stdlib"], source = "local", path = "../../packages/campy_peer" },
   { name = "campy_project", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_project" },
   { name = "campy_runner", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_app", "campy_peer", "campy_view", "gleam_erlang", "gleam_stdlib"], source = "local", path = "../../packages/campy_runner" },
@@ -19,6 +20,7 @@ packages = [
   { name = "campy_view", version = "0.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../../packages/campy_view" },
   { name = "campy_wx", version = "0.1.0", build_tools = ["gleam"], requirements = ["campy_view", "gleam_stdlib"], source = "local", path = "../../packages/campy_wx" },
   { name = "gleam_erlang", version = "1.3.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_erlang", source = "hex", outer_checksum = "1124AD3AA21143E5AF0FC5CF3D9529F6DB8CA03E43A55711B60B6B7B3874375C" },
+  { name = "gleam_json", version = "3.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_json", source = "hex", outer_checksum = "44FDAA8847BE8FC48CA7A1C089706BD54BADCC4C45B237A992EDDF9F2CDB2836" },
   { name = "gleam_otp", version = "1.3.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_stdlib"], otp_app = "gleam_otp", source = "hex", outer_checksum = "DE4CA6850842F0266EE95317A25DD6A0A0F20CDFAB7C0ADC2E63251D7C3C72EC" },
   { name = "gleam_stdlib", version = "0.71.0", build_tools = ["gleam"], requirements = [], otp_app = "gleam_stdlib", source = "hex", outer_checksum = "702F3BC2A14793906880B1078B19A6165F87323AEE8D0C4A34085846336FCAAE" },
   { name = "gleeunit", version = "1.9.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleeunit", source = "hex", outer_checksum = "DA9553CE58B67924B3C631F96FE3370C49EB6D6DC6B384EC4862CC4AAA718F3C" },
@@ -30,6 +32,7 @@ campy_appgen = { path = "../../packages/campy_appgen" }
 campy_catalog = { path = "../../packages/campy_catalog" }
 campy_design = { path = "../../packages/campy_design" }
 campy_ide_model = { path = "../../packages/campy_ide_model" }
+campy_lsp = { path = "../../packages/campy_lsp" }
 campy_peer = { path = "../../packages/campy_peer" }
 campy_project = { path = "../../packages/campy_project" }
 campy_runner = { path = "../../packages/campy_runner" }

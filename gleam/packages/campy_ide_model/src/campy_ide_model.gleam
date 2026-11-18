@@ -13,6 +13,7 @@ import campy_app
 import campy_appgen
 import campy_catalog
 import campy_design
+import campy_lsp
 import campy_peer.{type Peer}
 import campy_project.{type Module, type Project}
 import campy_view.{type Node, type Value, VText}
@@ -39,6 +40,8 @@ pub type State {
     undo: List(Project),
     redo: List(Project),
     status: String,
+    /// The explicitly chosen notebook page.
+    page: Page,
     code_view: Bool,
     /// The generated-source page. At most one of `code_view` and
     /// `source_view` is true; both false means the design canvas (Form).
@@ -71,11 +74,52 @@ pub type State {
     tracer: Option(Dynamic),
     /// The peer the app tree selection points at, by node name.
     selected_peer: Option(String),
+    /// The Gleam language server the editor talks to. The IDE owns the
+    /// process lifecycle; this records the client, the document the server
+    /// has open, the text last pushed to it, and the latest diagnostics so
+    /// the editor can re-paint them after a document replacement.
+    lsp: Lsp,
   )
+}
+
+/// Language-server runtime state for the Code editor. `text` mirrors what the
+/// editor buffer contained at the last push; `diags` are the server's latest
+/// findings for `file` as 0-based #(StartLine, EndLine, Message, Severity)
+/// rows.
+pub type Lsp {
+  Lsp(
+    client: Option(campy_lsp.Client),
+    file: Option(String),
+    text: String,
+    version: Int,
+    diags: List(Diag),
+  )
+}
+
+/// One diagnostic row, 0-based: the line range, the message, and the LSP
+/// severity (1 error, 2 warning, 3 info).
+pub type Diag {
+  Diag(line: Int, end_line: Int, text: String, severity: Int)
+}
+
+/// An LSP with no client yet; nothing is open and no diagnostics are known.
+pub fn no_lsp() -> Lsp {
+  Lsp(client: None, file: None, text: "", version: 0, diags: [])
 }
 
 pub type ClipboardItem {
   ClipboardItem(node: Node, rect: campy_design.Rect)
+}
+
+/// The notebook page the user has chosen. Tab clicks and shortcuts set it
+/// explicitly, so the designer can always be reached while an app runs.
+pub type Page {
+  DesignPage
+  CodePage
+  SourcePage
+  RunPage
+  NodesPage
+  DebugPage
 }
 
 pub type Command {
@@ -126,6 +170,14 @@ pub type Command {
   TracingStopped
   SetHandlers(String)
   OpenHandler(control_id: String, event: String)
+  /// The language-server client the editor will use (spawned once per run).
+  LspStarted(campy_lsp.Client)
+  /// The language server went away (crashed or was stopped).
+  LspDown(String)
+  /// The editor pushed its current text to the server: file, version, text.
+  LspPushed(String, Int, String)
+  /// The server published diagnostics for a file.
+  LspDiagnostics(String, List(Diag))
 }
 
 pub fn new(project: Project) -> State {
@@ -139,6 +191,7 @@ pub fn new(project: Project) -> State {
       undo: [],
       redo: [],
       status: "",
+      page: DesignPage,
       code_view: False,
       source_view: False,
       nodes_view: False,
@@ -151,6 +204,7 @@ pub fn new(project: Project) -> State {
       nodes_name: "node1",
       tracer: None,
       selected_peer: None,
+      lsp: no_lsp(),
     )
 
   case project.modules {
@@ -284,6 +338,24 @@ pub fn show_source_page(state: State) -> State {
   show_source(state)
 }
 
+/// Page selection is an explicit user choice: picking Form/Code/Source (by
+/// tab or shortcut) must also leave the Nodes/Debug pages.
+fn clear_special_pages(state: State) -> State {
+  State(..state, nodes_view: False, debug_view: False)
+}
+
+/// The Run tab (or attaching an app) shows the Run page.
+fn show_run(state: State) -> State {
+  State(
+    ..state,
+    page: RunPage,
+    code_view: False,
+    source_view: False,
+    nodes_view: False,
+    debug_view: False,
+  )
+}
+
 /// Clear the console buffer. This is UI state, not a document edit, so it does
 /// not create an undo entry.
 pub fn clear_console(state: State) -> State {
@@ -291,15 +363,21 @@ pub fn clear_console(state: State) -> State {
 }
 
 fn show_form(state: State) -> State {
-  State(..state, code_view: False, source_view: False)
+  clear_special_pages(
+    State(..state, page: DesignPage, code_view: False, source_view: False),
+  )
 }
 
 fn show_code(state: State) -> State {
-  State(..state, code_view: True, source_view: False)
+  clear_special_pages(
+    State(..state, page: CodePage, code_view: True, source_view: False),
+  )
 }
 
 fn show_source(state: State) -> State {
-  State(..state, code_view: False, source_view: True)
+  clear_special_pages(
+    State(..state, page: SourcePage, code_view: False, source_view: True),
+  )
 }
 
 pub fn arm(state: State, kind: String) -> State {
@@ -950,7 +1028,7 @@ pub fn open_handler(state: State, control_id: String, event: String) -> State {
         }
       }
 
-      State(..state, code_view: True, source_view: False) |> set_status(status)
+      show_code(State(..state)) |> set_status(status)
     }
   }
 }
@@ -1095,6 +1173,7 @@ fn paste_rect(
 /// Record a running app actor and open its Run view.
 pub fn run_started(state: State, running: campy_app.Running) -> State {
   State(..state, running: Some(running), live_view: None)
+  |> show_run
   |> log("Running " <> running.slug)
   |> set_status("")
 }
@@ -1271,9 +1350,13 @@ pub fn update(state: State, command: Command) -> State {
     PeerSelected(node) -> peer_selected(state, node)
     PeerGone(node) -> peer_gone(state, node)
     SetNodesName(name) -> State(..state, nodes_name: name)
-    ShowNodes -> State(..state, nodes_view: True, debug_view: False)
-    ShowDebug -> State(..state, debug_view: True, nodes_view: False)
-    ShowTabs -> State(..state, nodes_view: False, debug_view: False)
+    ShowNodes ->
+      State(..state, page: NodesPage, nodes_view: True, debug_view: False)
+    ShowDebug ->
+      State(..state, page: DebugPage, debug_view: True, nodes_view: False)
+    // Form/Run tabs: the natural page — Run when an app is attached, else
+    // the Form. Every explicit flag clears.
+    ShowTabs -> show_run(state)
     TracingStarted(tracer) ->
       State(..state, tracer: Some(tracer))
       |> log("tracing send/receive on the app actor")
@@ -1282,6 +1365,19 @@ pub fn update(state: State, command: Command) -> State {
     SetControlProp(id, name, value) -> set_control_prop(state, id, name, value)
     SetHandlers(handlers) -> set_handlers(state, handlers)
     OpenHandler(control_id, event) -> open_handler(state, control_id, event)
+    LspStarted(client) ->
+      State(..state, lsp: Lsp(..state.lsp, client: Some(client)))
+    LspDown(reason) -> State(..state, lsp: no_lsp()) |> log(reason)
+    LspPushed(file, version, text) ->
+      State(
+        ..state,
+        lsp: Lsp(..state.lsp, file: Some(file), text: text, version: version),
+      )
+    LspDiagnostics(file, rows) ->
+      case state.lsp.file == Some(file) {
+        True -> State(..state, lsp: Lsp(..state.lsp, diags: rows))
+        False -> state
+      }
   }
 }
 

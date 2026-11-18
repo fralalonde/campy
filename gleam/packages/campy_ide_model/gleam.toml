@@ -8,6 +8,7 @@ gleam_stdlib = ">= 0.70.0 and < 1.0.0"
 campy_app = { path = "../campy_app" }
 campy_appgen = { path = "../campy_appgen" }
 campy_peer = { path = "../campy_peer" }
+campy_lsp = { path = "../campy_lsp" }
 gleam_erlang = ">= 1.3.0 and < 2.0.0"
 campy_catalog = { path = "../campy_catalog" }
 campy_design = { path = "../campy_design" }

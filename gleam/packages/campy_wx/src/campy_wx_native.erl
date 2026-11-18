@@ -11,7 +11,9 @@
     tree/2, tree_set/2, tree_selected_key/1,
     grid/2, grid_set/2, grid_configure/5, grid_cell/1,
     grid_number_cell/4, grid_text_cell/3, grid_read_only/4,
-    editor/2, editor_set/3, editor_show_end/1,
+    editor/2, editor_set/3, editor_show_end/1, editor_gleam/1,
+    editor_get_text/1, editor_caret/1, editor_goto/3, editor_diagnostics/2,
+    editor_autocomplete/2,
     open_dialog/2, save_dialog/3, show_message/3,
     set_tooltip/2,
     canvas/2, paint_canvas/7, connect_design/2,
@@ -483,6 +485,140 @@ editor_set(Editor, Text, ReadOnly) ->
     wxStyledTextCtrl:setReadOnly(Editor, ReadOnly),
     ok.
 
+%% ---------------------------------------------------------------------------
+%% Code editor: Gleam syntax highlighting, caret/position access, language
+%% server diagnostics (squiggles + margin markers) and completion popups.
+%% ---------------------------------------------------------------------------
+
+%% Gleam highlighting on a Scintilla editor. wx ships a Rust lexer whose
+%% surface syntax matches Gleam closely (keywords, // comments, "strings",
+%% attributes); its keyword set is filled with Gleam's own words. Styles are
+%% view properties, so they survive document replacements.
+editor_gleam(Editor) ->
+    Keywords =
+        <<"alias as assert case const echo external fn if import implement let"
+          " opaque panic pub todo type use True False Nil">>,
+    wxStyledTextCtrl:setLexer(Editor, ?wxSTC_LEX_RUST),
+    wxStyledTextCtrl:setKeywords(Editor, 0, Keywords),
+    wxStyledTextCtrl:setWrapMode(Editor, ?wxSTC_WRAP_NONE),
+    wxStyledTextCtrl:setIndentationGuides(Editor, ?wxSTC_IV_LOOKBOTH),
+    %% Keywords (rose), comments (grey-green, italic), strings (teal),
+    %% numbers (blue), operators (mid grey).
+    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_WORD,
+                                        {158, 33, 116}),
+    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_COMMENTLINE,
+                                        {104, 128, 104}),
+    wxStyledTextCtrl:styleSetItalic(Editor, ?wxSTC_RUST_COMMENTLINE, true),
+    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_COMMENTBLOCK,
+                                        {104, 128, 104}),
+    wxStyledTextCtrl:styleSetItalic(Editor, ?wxSTC_RUST_COMMENTBLOCK, true),
+    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_COMMENTLINEDOC,
+                                        {104, 128, 104}),
+    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_STRING,
+                                        {22, 120, 108}),
+    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_NUMBER,
+                                        {28, 96, 176}),
+    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_OPERATOR,
+                                        {90, 94, 104}),
+    ok.
+
+%% wxTextCtrl:getValue does not work on wxStyledTextCtrl; read the buffer
+%% directly.
+editor_get_text(Editor) ->
+    unicode:characters_to_binary(wxStyledTextCtrl:getText(Editor)).
+
+%% The caret as a 0-based {Line, Column} pair, the shape the language server
+%% client expects.
+editor_caret(Editor) ->
+    Pos = wxStyledTextCtrl:getCurrentPos(Editor),
+    Line = wxStyledTextCtrl:lineFromPosition(Editor, Pos),
+    Col = Pos - wxStyledTextCtrl:positionFromLine(Editor, Line),
+    {editor_caret, Line, Col}.
+
+editor_goto(Editor, Line, Col) ->
+    Start = wxStyledTextCtrl:positionFromLine(Editor, Line),
+    wxStyledTextCtrl:gotoPos(Editor, Start + Col),
+    wxStyledTextCtrl:ensureCaretVisible(Editor),
+    ok.
+
+%% Paint language-server diagnostics: squiggles under the offending lines and
+%% a margin marker at each one. Severity: 1 error, 2 warning, 3+ info.
+%% Rows are {StartLine, EndLine, Message, Severity} with 0-based lines.
+editor_diagnostics(Editor, Rows) ->
+    diagnostics_styles(Editor),
+    Length = wxStyledTextCtrl:getTextLength(Editor),
+    clear_indicator(Editor, 0, Length),
+    clear_indicator(Editor, 1, Length),
+    clear_indicator(Editor, 2, Length),
+    wxStyledTextCtrl:markerDeleteAll(Editor, 0),
+    wxStyledTextCtrl:markerDeleteAll(Editor, 1),
+    wxStyledTextCtrl:markerDeleteAll(Editor, 2),
+    fill_diagnostics(Editor, Rows).
+
+diagnostics_styles(Editor) ->
+    %% 0: error (red squiggle + circle), 1: warning (amber squiggle + arrow),
+    %% 2: info (blue underline + bookmark-ish dot).
+    wxStyledTextCtrl:indicatorSetStyle(Editor, 0, ?wxSTC_INDIC_SQUIGGLE),
+    wxStyledTextCtrl:indicatorSetForeground(Editor, 0, {204, 26, 79}),
+    wxStyledTextCtrl:indicatorSetUnder(Editor, 0, true),
+    wxStyledTextCtrl:indicatorSetStyle(Editor, 1, ?wxSTC_INDIC_SQUIGGLE),
+    wxStyledTextCtrl:indicatorSetForeground(Editor, 1, {216, 130, 4}),
+    wxStyledTextCtrl:indicatorSetUnder(Editor, 1, true),
+    wxStyledTextCtrl:indicatorSetStyle(Editor, 2, ?wxSTC_INDIC_STRAIGHTBOX),
+    wxStyledTextCtrl:indicatorSetForeground(Editor, 2, {86, 124, 204}),
+    wxStyledTextCtrl:indicatorSetUnder(Editor, 2, true),
+    wxStyledTextCtrl:markerDefine(Editor, 0, ?wxSTC_MARK_CIRCLE),
+    wxStyledTextCtrl:markerSetBackground(Editor, 0, {204, 26, 79}),
+    wxStyledTextCtrl:markerDefine(Editor, 1, ?wxSTC_MARK_SHORTARROW),
+    wxStyledTextCtrl:markerSetBackground(Editor, 1, {216, 130, 4}),
+    wxStyledTextCtrl:markerDefine(Editor, 2, ?wxSTC_MARK_DOTDOTDOT),
+    wxStyledTextCtrl:markerSetBackground(Editor, 2, {86, 124, 204}),
+    ok.
+
+clear_indicator(Editor, Index, Length) ->
+    wxStyledTextCtrl:setIndicatorCurrent(Editor, Index),
+    wxStyledTextCtrl:indicatorClearRange(Editor, 0, Length),
+    ok.
+
+fill_diagnostics(_Editor, []) ->
+    ok;
+fill_diagnostics(Editor, [{Line, EndLine, _Text, Severity} | Rest]) ->
+    {Index, Marker} = case Severity of
+        1 -> {0, 0};
+        2 -> {1, 1};
+        _ -> {2, 2}
+    end,
+    Start = wxStyledTextCtrl:positionFromLine(Editor, Line),
+    End = wxStyledTextCtrl:getLineEndPosition(Editor, EndLine),
+    case Start =:= -1 orelse End =:= -1 orelse End =< Start of
+        false ->
+            wxStyledTextCtrl:setIndicatorCurrent(Editor, Index),
+            wxStyledTextCtrl:indicatorFillRange(Editor, Start, End - Start),
+            catch wxStyledTextCtrl:markerAdd(Editor, Line, Marker),
+            ok;
+        true ->
+            ok
+    end,
+    fill_diagnostics(Editor, Rest).
+
+%% Show the completion popup at the caret. Labels are joined with \n (id
+%% separator 10) so labels containing spaces or punctuation stay whole.
+editor_autocomplete(_Editor, []) ->
+    ok;
+editor_autocomplete(Editor, Labels) ->
+    wxStyledTextCtrl:autoCompSetSeparator(Editor, 10),
+    wxStyledTextCtrl:autoCompSetCancelAtStart(Editor, false),
+    Joined = join_labels(Labels),
+    wxStyledTextCtrl:autoCompShow(Editor,
+                                  wxStyledTextCtrl:getCurrentPos(Editor),
+                                  Joined),
+    ok.
+
+join_labels([Label]) ->
+    Label;
+join_labels([Label | Rest]) ->
+    <<Label/binary, 10, (join_labels(Rest))/binary>>.
+
 %% Show the end of a freshly rewritten source file, so an appended ABI stub is
 %% visible immediately after the event click opens the Code page.
 %% wxTextCtrl:getValue does not work on wxStyledTextCtrl; read the buffer
@@ -689,7 +825,11 @@ accelerator_entries(_Editing) ->
         accel(?wxACCEL_CTRL, $1, 9111),
         accel(?wxACCEL_CTRL, $2, 9112),
         accel(?wxACCEL_CTRL, $3, 9113),
-        accel(0, ?WXK_ESCAPE, 9114)
+        accel(0, ?WXK_ESCAPE, 9114),
+        %% Language server helpers, active on every page: F12 jumps to the
+        %% declaration under the Code editor's caret, Ctrl+Space completes.
+        accel(?wxACCEL_NORMAL, ?WXK_F12, 9115),
+        accel(?wxACCEL_CTRL, ?WXK_SPACE, 9116)
     ].
 
 accel(Flags, KeyCode, Command) ->
@@ -713,6 +853,8 @@ shortcut_action(9111) -> <<"form">>;
 shortcut_action(9112) -> <<"code">>;
 shortcut_action(9113) -> <<"source">>;
 shortcut_action(9114) -> <<"escape">>;
+shortcut_action(9115) -> <<"definition">>;
+shortcut_action(9116) -> <<"complete">>;
 shortcut_action(_) -> false.
 
 capture(Ref) ->

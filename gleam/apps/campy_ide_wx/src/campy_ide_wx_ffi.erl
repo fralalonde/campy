@@ -1,5 +1,5 @@
 -module(campy_ide_wx_ffi).
--export([make_dir/1, write_file/2, compile_and_load/2, cwd/0, start_app_on/3, load_code_on/3, pause_on/2, resume_on/2, format_term/1, spawn_tracer/3, trace_send_receive/4, stop_tracer/2, processes_on/1, trace_log_text/1, copy_file/2]).
+-export([make_dir/1, write_file/2, compile_and_load/2, cwd/0, start_app_on/3, load_code_on/3, pause_on/2, resume_on/2, format_term/1, spawn_tracer/3, trace_send_receive/4, stop_tracer/2, processes_on/1, trace_log_text/1, copy_file/2, lsp_message/1]).
 
 make_dir(Dir) ->
     case filelib:ensure_path(Dir) of
@@ -88,6 +88,26 @@ processes_on(_) ->
 %% Decode a trace_log message forwarded by the tracer process.
 trace_log_text({trace_log, Text}) -> {ok, Text};
 trace_log_text(_) -> {error, nil}.
+
+%% Decode an lsp_* message projected by the campy_lsp client into a Gleam
+%% LspMessage constructor (tagged tuple) for the IDE loop, wrapped in
+%% {ok, _}; {error, nil} for anything that is not a language-server message.
+%% Rows keep the client's #(StartLine, EndLine, Message, Severity) projection
+%% (0-based lines).
+lsp_message({lsp_diagnostics, File, Rows}) ->
+    {ok, {diagnostics_msg, File, Rows}};
+lsp_message({lsp_completions, Labels}) ->
+    {ok, {completions_msg, Labels}};
+lsp_message({lsp_symbols, _File, Items}) ->
+    {ok, {symbols_msg, Items}};
+lsp_message({lsp_definition, File, Line, Char}) ->
+    {ok, {definition_msg, File, Line, Char}};
+lsp_message({lsp_no_definition}) ->
+    {ok, no_definition_msg};
+lsp_message({lsp_down, Reason}) ->
+    {ok, {down_msg, Reason}};
+lsp_message(_) ->
+    {error, nil}.
 
 %% Keep a copy of a built beam under the versions directory for rollback.
 copy_file(From, To) ->
