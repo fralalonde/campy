@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "view": {
+    "kind": "form",
+    "id": "cafe",
+    "props": {
+      "title": "Cat Café",
+      "w": 640,
+      "h": 420,
+      "layout": "free"
+    },
+    "children": [
+      {
+        "kind": "panel",
+        "id": "counter",
+        "props": {
+          "x": 16,
+          "y": 16,
+          "w": 608,
+          "h": 388,
+          "text": "Cat Café",
+          "layout": "free"
+        },
+        "children": [
+          {
+            "kind": "picture",
+            "id": "cat",
+            "props": {
+              "x": 24,
+              "y": 32,
+              "w": 200,
+              "h": 200,
+              "picture": "assets/cat.png"
+            }
+          },
+          {
+            "kind": "label",
+            "id": "status",
+            "props": {
+              "x": 244,
+              "y": 36,
+              "w": 300,
+              "h": 24,
+              "text": "Mochi is waiting."
+            }
+          },
+          {
+            "kind": "label",
+            "id": "visits",
+            "props": {
+              "x": 244,
+              "y": 64,
+              "w": 300,
+              "h": 24,
+              "text": "Served 0 snacks"
+            }
+          },
+          {
+            "kind": "text",
+            "id": "name",
+            "props": {
+              "x": 244,
+              "y": 96,
+              "w": 220,
+              "h": 28,
+              "text": "Mochi"
+            },
+            "events": [
+              "change"
+            ]
+          },
+          {
+            "kind": "button",
+            "id": "feed",
+            "props": {
+              "x": 244,
+              "y": 140,
+              "w": 100,
+              "h": 30,
+              "text": "Feed"
+            },
+            "events": [
+              "click"
+            ]
+          },
+          {
+            "kind": "button",
+            "id": "pet",
+            "props": {
+              "x": 356,
+              "y": 140,
+              "w": 100,
+              "h": 30,
+              "text": "Pet"
+            },
+            "events": [
+              "click"
+            ]
+          },
+          {
+            "kind": "progress",
+            "id": "happiness",
+            "props": {
+              "x": 24,
+              "y": 260,
+              "w": 200,
+              "h": 20,
+              "value": 20,
+              "min": 0,
+              "max": 100
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

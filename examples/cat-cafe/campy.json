@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "title": "Cat Café",
+  "modules": [
+    "cat_cafe"
+  ]
+}
