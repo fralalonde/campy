@@ -51,6 +51,9 @@ project directory to open another project.
 - **Peers** (`campy_peer`): local BEAM nodes via OTP's `peer` module —
   boot, health round trips, calls over distribution, teardown, and runtime
   distribution for the IDE node.
+- **Runner** (`campy_runner`): the control surface on a peer node — install
+  compiled beams, start/stop app actors, status; the IDE drives it over
+  Erlang distribution and receives reports on its own subjects.
 - **Run** (in `campy_ide_wx`): deploys the active form in-VM — scratch
   package, `gleam build`, code load — and starts the ABI v2 actor; a live
   **Run** page grafts the published view, canvas events route to the actor,

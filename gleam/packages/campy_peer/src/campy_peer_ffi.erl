@@ -1,5 +1,5 @@
 -module(campy_peer_ffi).
--export([start/1, stop/1, call/4, ping/1, start_distribution/1, this_node/0]).
+-export([start/1, stop/1, call/4, ping/1, start_distribution/1, this_node/0, deploy_dir/2]).
 
 %% peer:start(#{name => Name@Host}) -> {ok, Pid, Node}.
 %% The peer option `name` is the full node name; build it from the local
@@ -97,6 +97,31 @@ funname(Name) when is_atom(Name) -> Name.
 
 node_name(Node) when is_binary(Node) -> binary_to_atom(Node, utf8);
 node_name(Node) when is_atom(Node) -> Node.
+
+%% IDE-side deploy: read every beam under a local directory and load it on
+%% the remote node with code:load_binary (the bootstrap transport before the
+%% runner itself is installed). Returns the number of modules loaded.
+deploy_dir(Node, Dir) ->
+    Files = filelib:wildcard(unicode:characters_to_list(Dir) ++ "/*.beam"),
+    deploy_files(node_name(Node), lists:sort(Files), 0).
+
+deploy_files(_Node, [], Count) ->
+    {ok, Count};
+deploy_files(Node, [Path | Rest], Count) ->
+    Module = list_to_atom(filename:basename(Path, ".beam")),
+    case file:read_file(Path) of
+        {ok, Binary} ->
+            case rpc:call(Node, code, load_binary, [Module, Path, Binary], 10000) of
+                {module, _} ->
+                    deploy_files(Node, Rest, Count + 1);
+                {badrpc, Reason} ->
+                    {error, format("~s: badrpc ~p", [Path, Reason])};
+                {error, Reason} ->
+                    {error, format("~s: ~p", [Path, Reason])}
+            end;
+        {error, Reason} ->
+            {error, format("read ~s: ~p", [Path, Reason])}
+    end.
 
 format(Template, Arguments) ->
     unicode:characters_to_binary(io_lib:format(Template, Arguments)).

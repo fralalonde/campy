@@ -101,7 +101,7 @@ runtime, appgen, Run) until G2 passes.
 ```
 gleam/packages: campy_view campy_wx campy_project campy_ide_model
                 campy_design campy_catalog campy_manifest campy_source
-                campy_app campy_appgen campy_peer
+                campy_app campy_appgen campy_peer campy_runner
 gleam/apps:     campy_ide_wx
 examples/demo   canonical project (greeter, notes)
 scripts:        workspace.py (build/test runner), ui_probe.sh (X11 probe)
@@ -746,8 +746,7 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   bullet above.
 - **T3.4** Code update — done (2026-11-18). See the T3.4 status bullet above.
 - **T4.1** `campy_peer` — done (2026-11-18). See the T4.1 status bullet above.
-- **T4.2** `campy_runner`: `campy_control` on the node; deploy from binaries,
-  start/stop/status/state, forward reports.
+- **T4.2** `campy_runner` — done (2026-11-18). See the T4.2 status bullet above.
 - **T4.3** Node manager UI: nodes → apps tree, deploy, version, restart,
   rollback, console lines.
 - **T4.4** Debug v1: supervisor tree, process list, app state viewer

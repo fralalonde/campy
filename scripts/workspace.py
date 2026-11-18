@@ -27,6 +27,7 @@ PACKAGES = [
         "campy_app",
         "campy_appgen",
         "campy_peer",
+        "campy_runner",
         "campy_source",
     )
 ] + [IDE]

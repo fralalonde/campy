@@ -45,6 +45,26 @@ pub fn start_distribution(name: String) -> Result(Nil, String)
 @external(erlang, "campy_peer_ffi", "this_node")
 pub fn this_node() -> String
 
+/// Bootstrap deploy: read every beam under a local directory and load it on
+/// the peer with `code:load_binary`. This is the transport that installs the
+/// runner itself before any runner call is possible. Returns the count.
+@external(erlang, "campy_peer_ffi", "deploy_dir")
+pub fn deploy_dir(node: String, dir: String) -> Result(Int, String)
+
+/// Deploy every beam directory in order.
+pub fn deploy_dirs(node: String, dirs: List(String)) -> Result(Int, String) {
+  list.fold(dirs, Ok(0), fn(acc, dir) {
+    case acc {
+      Error(reason) -> Error(reason)
+      Ok(total) ->
+        case deploy_dir(node, dir) {
+          Ok(count) -> Ok(total + count)
+          Error(reason) -> Error(reason)
+        }
+    }
+  })
+}
+
 /// Start a peer node named `name`. The name is the short (host-less) part;
 /// the full node is `name@<local host>`. Fails when the name is empty or the
 /// node cannot boot.
