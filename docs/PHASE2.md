@@ -50,7 +50,18 @@ it. Option 2 (native children + selection chrome) is implemented on wx.
   version differs and republishes; `SnapshotRequest` returns the raw state for
   the T4.4 viewer. 11 headless tests cover dispatch, no-ops, contained errors,
   Stop effects/messages, upgrade/no-op, snapshot, and the naming rule.
-  264 tests total.
+- **T3.2** `campy_appgen` — done (2026-11-18). `generate(slug, document,
+  handlers)` emits one dispatch module per form (`campy_app_<slug>`):
+  `view/1` embeds the designed document through `campy_source`'s public
+  emitters, the user's `handlers.gleam` is appended verbatim with its own
+  leading imports hoisted (dropping the runtime modules the generated section
+  imports), and declared events without handlers get ABI v2 no-op stubs.
+  Validation rejects an empty source, missing `pub type State`/`init/0`, a
+  user-defined `view/1`, and an invalid slug with precise messages.
+  Compile proof: both demo modules were generated into a throwaway package
+  with only `campy_view` + `campy_app` path deps; `gleam build` succeeded and
+  calling the generated `view/1`/`init/0` from Erlang returned the embedded
+  tree and `{state, 0}`. 10 headless tests. 274 tests total.
 
 **Next step.** **Gate G2**: design the demo form from scratch in the shell,
 save it, inspect/diff the canonical JSON, and reopen it. Do not start M3 (ABI v2
@@ -60,7 +71,7 @@ runtime, appgen, Run) until G2 passes.
 ```
 gleam/packages: campy_view campy_wx campy_project campy_ide_model
                 campy_design campy_catalog campy_manifest campy_source
-                campy_app
+                campy_app campy_appgen
 gleam/apps:     campy_ide_wx
 examples/demo   canonical project (greeter, notes)
 scripts:        workspace.py (build/test runner), ui_probe.sh (X11 probe)
@@ -699,8 +710,8 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
 
 - **T3.1** `campy_app` ABI v2 actor — done (2026-11-18). See the T3.1 status
   bullet above.
-- **T3.2** `campy_appgen` v2 (embedded form, generated `init`/`view`, dispatch
-  module name, ABI v2 stubs).
+- **T3.2** `campy_appgen` v2 — done (2026-11-18). See the T3.2 status bullet
+  above.
 - **T3.3** Attach client in the IDE: deploy in-VM first, send `View`, apply diffs,
   route `Event`s, render console reports.
 - **T3.4** Code update: build → send artifact to runner → `campy_control.deploy`

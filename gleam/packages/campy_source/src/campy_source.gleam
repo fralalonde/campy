@@ -45,7 +45,9 @@ pub fn generate(slug: String, document: Document) -> String {
   ])
 }
 
-fn node_lines(node: Node, indent: Int) -> List(String) {
+/// Render a `campy_view.Node` as DSL lines at the given indentation. Public so
+/// `campy_appgen` can embed the same construction in generated app modules.
+pub fn node_lines(node: Node, indent: Int) -> List(String) {
   let pad = spaces(indent)
   let inner = indent + 2
 
@@ -123,7 +125,8 @@ fn comma_last(lines: List(String)) -> List(String) {
   }
 }
 
-fn value_source(value: Value) -> String {
+/// Render a `campy_view.Value` as a Gleam literal. Public for appgen.
+pub fn value_source(value: Value) -> String {
   case value {
     VText(text) -> "VText(" <> quote(text) <> ")"
     VBool(True) -> "VBool(True)"

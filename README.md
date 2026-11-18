@@ -45,6 +45,9 @@ project directory to open another project.
 - **App runtime** (`campy_app`): the ABI v2 actor — state, `view`, dispatch by
   handler name, contained handler errors, `Log`/`Notify`/`Stop` effects,
   generation-stamped views, `state_version`, and `migrate`.
+- **App generator** (`campy_appgen`): emits the per-form dispatch module
+  (`campy_app_<slug>`) with the designed form embedded as `view/1` and the
+  user's handlers verbatim.
 - **IDE model** (`campy_ide_model`): tabs, active module, selection, console,
   undo/redo, palette placement, clipboard, duplicate/delete, z-order, inspector
   geometry/text edits, ABI v2 handler stubs, and Form/Code/Source page state.
