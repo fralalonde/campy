@@ -9,6 +9,8 @@
 //// `commit`, so the shell only has to re-render the result and undo works for
 //// each user gesture.
 
+import campy_app
+import campy_appgen
 import campy_catalog
 import campy_design
 import campy_project.{type Module, type Project}
@@ -45,6 +47,12 @@ pub type State {
     /// Palette kind armed for placement, if any. UI intent, not a document
     /// field; placing a control disarms it.
     armed: Option(String),
+    /// The running app: its dispatch subject and the module slug. Owned by
+    /// the shell; the model only records and routes.
+    running: Option(campy_app.Running),
+    /// The latest published view document from the running app, with the
+    /// generation it was derived from.
+    live_view: Option(campy_view.Document),
   )
 }
 
@@ -83,6 +91,10 @@ pub type Command {
   )
   SetControlRect(id: String, rect: campy_design.Rect)
   SetControlProp(id: String, name: String, value: Value)
+  RunStarted(campy_app.Running)
+  RunView(campy_view.Document, Int)
+  RunReport(String)
+  RunStopped
   SetHandlers(String)
   OpenHandler(control_id: String, event: String)
 }
@@ -102,6 +114,8 @@ pub fn new(project: Project) -> State {
       source_view: False,
       clipboard: [],
       armed: None,
+      running: None,
+      live_view: None,
     )
 
   case project.modules {
@@ -1043,6 +1057,42 @@ fn paste_rect(
   )
 }
 
+/// Record a running app actor and open its Run view.
+pub fn run_started(state: State, running: campy_app.Running) -> State {
+  State(..state, running: Some(running), live_view: None)
+  |> log("Running " <> running.slug)
+  |> set_status("")
+}
+
+/// Store the latest published view from the running app.
+pub fn run_view(
+  state: State,
+  document: campy_view.Document,
+  gen: Int,
+) -> State {
+  State(..state, live_view: Some(document))
+  |> log("view generation " <> int.to_string(gen))
+}
+
+/// A running-app console line.
+pub fn run_report(state: State, text: String) -> State {
+  log(state, text)
+}
+
+/// The running app stopped (or was never started).
+pub fn run_stopped(state: State) -> State {
+  State(..state, running: None, live_view: None)
+  |> log("App stopped")
+}
+
+/// The generated module name for the active form, per ABI v2 dispatch.
+pub fn run_module(state: State) -> Result(String, String) {
+  case active_module(state) {
+    Error(error) -> Error(error)
+    Ok(module) -> Ok(campy_appgen.module_name(module.slug))
+  }
+}
+
 pub fn update(state: State, command: Command) -> State {
   case command {
     OpenModule(slug) ->
@@ -1074,6 +1124,10 @@ pub fn update(state: State, command: Command) -> State {
     BringToFront -> bring_to_front(state)
     SendToBack -> send_to_back(state)
     CommitGeometry(items, reparent) -> commit_geometry(state, items, reparent)
+    RunStarted(running) -> run_started(state, running)
+    RunView(document, gen) -> run_view(state, document, gen)
+    RunReport(text) -> run_report(state, text)
+    RunStopped -> run_stopped(state)
     SetControlRect(id, rect) -> set_control_rect(state, id, rect)
     SetControlProp(id, name, value) -> set_control_prop(state, id, name, value)
     SetHandlers(handlers) -> set_handlers(state, handlers)

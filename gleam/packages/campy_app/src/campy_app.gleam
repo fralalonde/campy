@@ -47,6 +47,18 @@ pub type Snapshot {
   Snapshot(state: Dynamic, version: Int)
 }
 
+/// A running app instance, recorded by the IDE model: the app's dispatch
+/// subject plus the reply channel the shell polls.
+pub type Running {
+  Running(
+    name: String,
+    slug: String,
+    module: String,
+    dispatch: Subject(Msg),
+    reply: Subject(Reply),
+  )
+}
+
 /// The runtime's view of an installed app. `module` implements `init/0`,
 /// `view/1`, and the `<control>_<event>` handlers; `document` is the form used
 /// to resolve handler names. `migrate` runs on upgrade (T3.4) when the carried

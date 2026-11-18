@@ -5,6 +5,8 @@ gleam = ">= 1.16.0 and < 2.0.0"
 
 [dependencies]
 gleam_stdlib = ">= 0.70.0 and < 1.0.0"
+campy_app = { path = "../campy_app" }
+campy_appgen = { path = "../campy_appgen" }
 campy_catalog = { path = "../campy_catalog" }
 campy_design = { path = "../campy_design" }
 campy_project = { path = "../campy_project" }

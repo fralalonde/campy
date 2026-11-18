@@ -7,6 +7,8 @@
 //// Run: `CAMPY_PROJECT=examples/demo gleam run` from this directory.
 //// Smoke: `CAMPY_WX_SMOKE=1` runs mount/switch/select/close without a loop.
 
+import campy_app
+import campy_appgen
 import campy_catalog
 import campy_design
 import campy_ide_model as model
@@ -16,10 +18,12 @@ import campy_view.{type Node, VBool, VInt, VList, VMap, VText}
 import campy_view/diff
 import campy_wx
 import gleam/dict
+import gleam/erlang/process
 import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 
 pub fn main() {
@@ -113,6 +117,8 @@ fn loop(
   dir: String,
   drag: Drag,
 ) {
+  // Drain the running app's replies before the next wx event.
+  let state = poll_app(shell, state, current)
   case campy_wx.next(shell, 100) {
     campy_wx.Closed -> {
       campy_wx.close(shell)
@@ -141,6 +147,8 @@ fn loop(
           campy_wx.close(shell)
           io.println("[ide] quit")
         }
+        "tool-run" -> toggle_run(shell, state, current, dir)
+        "tool-stop" -> toggle_run(shell, state, current, dir)
         "menu-help-keys" -> {
           campy_wx.show_message(shell, "Keyboard shortcuts", help_text())
           loop(shell, state, current, dir, drag)
@@ -182,6 +190,87 @@ fn loop(
     }
     campy_wx.Message(_message) -> loop(shell, state, current, dir, drag)
     campy_wx.Idle -> loop(shell, state, current, dir, drag)
+  }
+}
+
+/// Forward a shell event to the running app when the event's control is part
+/// of the published view and declared the key. Returns True when routed.
+fn route_live_event(
+  state: model.State,
+  id: String,
+  key: String,
+  value: campy_view.Value,
+) -> Bool {
+  case state.running, state.live_view {
+    Some(running), Some(document) ->
+      case campy_design.find_node(document.view, id) {
+        Some(node) ->
+          case list.contains(node.events, key) {
+            True -> {
+              process.send(
+                running.dispatch,
+                campy_app.EventReceived(campy_app.Event(
+                  control: id,
+                  key: key,
+                  value: value,
+                  generation: 0,
+                )),
+              )
+              True
+            }
+            False -> False
+          }
+        None -> False
+      }
+    _, _ -> False
+  }
+}
+
+/// Drain the running app's replies into model commands. A `View` reply
+/// re-renders the live preview; reports go to the console. The wx loop calls
+/// this once per pass, so replies queue while wx events are processed.
+fn poll_app(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+) -> model.State {
+  case state.running {
+    None -> state
+    Some(running) ->
+      case process.receive(running.reply, 0) {
+        Error(_) -> state
+        Ok(campy_app.View(document, gen)) -> {
+          let state = model.update(state, model.RunView(document, gen))
+          let next = view(state)
+          let shell = rebind(shell, current, next)
+          refresh(shell, Some(state), state)
+          poll_app(shell, state, next)
+        }
+        Ok(campy_app.Report(text)) ->
+          poll_app(shell, model.update(state, model.RunReport(text)), current)
+        Ok(campy_app.Notified(text)) ->
+          poll_app(
+            shell,
+            model.update(state, model.RunReport("notify: " <> text)),
+            current,
+          )
+        Ok(campy_app.Version(version)) ->
+          poll_app(
+            shell,
+            model.update(
+              state,
+              model.RunReport("app state version " <> int.to_string(version)),
+            ),
+            current,
+          )
+        Ok(campy_app.Stopped) -> {
+          let state = model.update(state, model.RunStopped)
+          let next = view(state)
+          let shell = rebind(shell, current, next)
+          refresh(shell, Some(state), state)
+          state
+        }
+      }
   }
 }
 
@@ -408,6 +497,128 @@ pub fn shortcut(state: model.State, key: campy_wx.Key) -> Shortcut {
       }
     False, False, _, "escape" -> Cancel
     _, _, _, _ -> NoShortcut
+  }
+}
+
+@external(erlang, "campy_ide_wx_ffi", "make_dir")
+fn make_dir(path: String) -> Result(Nil, String)
+
+@external(erlang, "campy_ide_wx_ffi", "write_file")
+fn write_file(path: String, contents: String) -> Result(Nil, String)
+
+@external(erlang, "campy_ide_wx_ffi", "compile_and_load")
+fn compile_and_load(dir: String, module: String) -> Result(Nil, String)
+
+/// The repo root for the scratch app package; `workspace.py` exports it.
+fn root() -> String {
+  case campy_wx.getenv("CAMPY_ROOT") {
+    "" -> "."
+    root -> root
+  }
+}
+
+fn scratch_dir() -> String {
+  root() <> "/generated/apps"
+}
+
+/// Compile and load the generated module for one form: write the scratch
+/// package (once), the module source, `gleam build`, and load the beam.
+fn deploy(state: model.State) -> Result(campy_app.Running, String) {
+  case model.active_module(state) {
+    Error(error) -> Error(error)
+    Ok(module) -> {
+      use source <- result.try(campy_appgen.generate(
+        module.slug,
+        module.form,
+        module.handlers,
+      ))
+      let dir = scratch_dir()
+      let module_name = campy_appgen.module_name(module.slug)
+      use _ <- result.try(write_file(
+        dir <> "/src/" <> module_name <> ".gleam",
+        source,
+      ))
+      use _ <- result.try(write_scratch_package(dir))
+      use _ <- result.try(compile_and_load(dir, module_name))
+
+      let reply = process.new_subject()
+      let dispatch = process.new_subject()
+      let running =
+        campy_app.Running(
+          name: module.slug,
+          slug: module.slug,
+          module: module_name,
+          dispatch: dispatch,
+          reply: reply,
+        )
+      case campy_app.start(deploy_spec(module, module_name), reply) {
+        Ok(_subject) -> Ok(running)
+        Error(error) -> Error(error)
+      }
+    }
+  }
+}
+
+fn deploy_spec(module: campy_project.Module, module_name: String) {
+  campy_app.Spec(
+    name: module.slug,
+    module: module_name,
+    document: module.form,
+    state_version: 1,
+    migrate: None,
+  )
+}
+
+fn write_scratch_package(dir: String) -> Result(Nil, String) {
+  use _ <- result.try(make_dir(dir <> "/src"))
+  write_file(
+    dir <> "/gleam.toml",
+    "name = \"campy_apps\"\n"
+      <> "version = \"0.1.0\"\n"
+      <> "target = \"erlang\"\n"
+      <> "gleam = \">= 1.16.0 and < 2.0.0\"\n"
+      <> "\n"
+      <> "[dependencies]\n"
+      <> "gleam_stdlib = \">= 0.70.0 and < 1.0.0\"\n"
+      <> "campy_view = { path = \""
+      <> root()
+      <> "/gleam/packages/campy_view\" }\n"
+      <> "campy_app = { path = \""
+      <> root()
+      <> "/gleam/packages/campy_app\" }\n",
+  )
+}
+
+/// Start or stop the running app for the active module.
+fn toggle_run(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+) {
+  case state.running {
+    Some(running) -> {
+      process.send(running.dispatch, campy_app.StopRequest)
+      loop(shell, state, current, dir, NoDrag)
+    }
+    None ->
+      case deploy(state) {
+        Error(error) -> {
+          let state = model.update(state, model.Log("Run failed: " <> error))
+          let next = view(state)
+          let shell = rebind(shell, current, next)
+          refresh(shell, Some(state), state)
+          loop(shell, state, next, dir, NoDrag)
+        }
+        Ok(running) -> {
+          let state = model.update(state, model.RunStarted(running))
+          let next = view(state)
+          let shell = rebind(shell, current, next)
+          refresh(shell, Some(state), state)
+          campy_wx.select_page(shell, "tabs", page_index(state))
+          loop(shell, state, next, dir, NoDrag)
+        }
+      }
   }
 }
 
@@ -1121,8 +1332,6 @@ fn handle(
     "menu-front" -> model.update(state, model.BringToFront)
     "menu-back" -> model.update(state, model.SendToBack)
     "menu-cancel-place" -> model.update(state, model.Disarm)
-    "tool-run" -> model.update(state, model.Log("Run arrives with M3"))
-    "tool-stop" -> model.update(state, model.Log("Nothing is running yet"))
     "console-clear" -> model.update(state, model.ClearConsole)
     "tabs" -> page_selected(state, value)
     "inspector-tabs" -> state
@@ -1133,7 +1342,11 @@ fn handle(
       let kind = string.drop_start(id, string.length("palette-"))
       case string.starts_with(id, "palette-") {
         True -> model.update(state, model.Arm(kind))
-        False -> select_or_log(state, id, key)
+        False ->
+          case route_live_event(state, id, key, value) {
+            True -> state
+            False -> select_or_log(state, id, key)
+          }
       }
     }
   }
@@ -1455,10 +1668,14 @@ fn sync_shortcuts(
 }
 
 pub fn page_index(state: model.State) -> Int {
-  case state.source_view, state.code_view {
-    True, _ -> 2
-    False, True -> 1
-    False, False -> 0
+  case state.running {
+    Some(_) -> 3
+    None ->
+      case state.source_view, state.code_view {
+        True, _ -> 2
+        False, True -> 1
+        False, False -> 0
+      }
   }
 }
 
@@ -1978,7 +2195,12 @@ fn centre(state: model.State) -> Node {
     campy_view.node("notebook", "tabs")
       |> campy_view.with_props([#("grow", VBool(True))])
       |> campy_view.with_events(["change"])
-      |> campy_view.with_children([form_page(state), code_page(), source_page()]),
+      |> campy_view.with_children([
+        form_page(state),
+        code_page(),
+        source_page(),
+        run_page(state),
+      ]),
     campy_view.node("panel", "console-header")
       |> campy_view.with_props([
         #("layout", VText("row")),
@@ -2043,6 +2265,44 @@ fn source_page() -> Node {
     |> campy_view.with_props([#("grow", VBool(True))])
     |> campy_view.with_events([]),
   ])
+}
+
+/// The Run page grafts the running app's published view into the IDE: the
+/// form root becomes a panel (nested windows are not supported) with the
+/// same children and props; its controls connect with normal (non-design)
+/// events, which the shell routes to the running actor.
+fn run_page(state: model.State) -> Node {
+  campy_view.node("page", "page-run")
+  |> campy_view.with_props([
+    #("text", VText("Run")),
+    #("layout", VText("free")),
+  ])
+  |> campy_view.with_children([preview_node(state)])
+}
+
+fn preview_node(state: model.State) -> Node {
+  case state.live_view {
+    Some(document) -> {
+      let root = document.view
+      campy_view.Node(
+        kind: case root.kind {
+          "form" | "window" -> "panel"
+          kind -> kind
+        },
+        id: "preview-root",
+        key: root.key,
+        props: root.props,
+        events: root.events,
+        children: root.children,
+        extra: root.extra,
+      )
+    }
+    None ->
+      campy_view.node("label", "preview-hint")
+      |> campy_view.with_props([
+        #("text", VText("Press Run to start the active form's app")),
+      ])
+  }
 }
 
 /// Right dock: selection header with Delete, then a native Properties/Events
