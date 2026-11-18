@@ -536,6 +536,22 @@ pub fn commit(state: State, project: Project) -> State {
   }
 }
 
+/// Selection ids that still exist in the restored project's active module.
+/// A failed lookup (no active module, or the module is gone) clears it.
+fn retained_selection(state: State, project: Project) -> List(String) {
+  case state.active {
+    None -> []
+    Some(slug) ->
+      case campy_project.module(project, slug) {
+        Ok(module) -> {
+          let ids = campy_view.ids(module.form.view)
+          list.filter(state.selection, fn(id) { list.contains(ids, id) })
+        }
+        Error(_) -> []
+      }
+  }
+}
+
 pub fn undo(state: State) -> State {
   case state.undo {
     [] -> state
@@ -543,6 +559,7 @@ pub fn undo(state: State) -> State {
       State(
         ..state,
         project: previous,
+        selection: retained_selection(state, previous),
         undo: rest,
         redo: list.take([state.project, ..state.redo], undo_limit),
       )
@@ -556,6 +573,7 @@ pub fn redo(state: State) -> State {
       State(
         ..state,
         project: next,
+        selection: retained_selection(state, next),
         redo: rest,
         undo: list.take([state.project, ..state.undo], undo_limit),
       )
@@ -1620,11 +1638,23 @@ pub fn update(state: State, command: Command) -> State {
     LspStarted(client) ->
       State(..state, lsp: Lsp(..state.lsp, client: Some(client)))
     LspDown(reason) -> State(..state, lsp: no_lsp()) |> log(reason)
-    LspPushed(file, version, text) ->
+    LspPushed(file, version, text) -> {
+      let diags = case state.lsp.file == Some(file) {
+        True -> state.lsp.diags
+        False -> []
+      }
+
       State(
         ..state,
-        lsp: Lsp(..state.lsp, file: Some(file), text: text, version: version),
+        lsp: Lsp(
+          ..state.lsp,
+          file: Some(file),
+          text: text,
+          version: version,
+          diags: diags,
+        ),
       )
+    }
     LspDiagnostics(file, rows) ->
       case state.lsp.file == Some(file) {
         True -> State(..state, lsp: Lsp(..state.lsp, diags: rows))

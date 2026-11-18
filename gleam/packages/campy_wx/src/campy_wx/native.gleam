@@ -10,7 +10,9 @@ import gleam/option.{type Option}
 
 pub type NativeMessage {
   WxEvent(wx_id: Int, event_type: String)
-  StcJump(wx_id: Int)
+  /// A picked entry from the editor's jump-to-symbol list: its wx id and the
+  /// entry text ("name:line").
+  StcJump(wx_id: Int, text: String)
   MouseEvent(wx_id: Int, event_type: String, x: Int, y: Int, control: Bool)
   /// A grid edit carries the edited cell explicitly. Reading the grid cursor
   /// after the event can point at the next cell: Enter moves the cursor before
@@ -96,6 +98,11 @@ pub fn form_plate_set(
 @external(erlang, "campy_wx_native", "form_plate_get")
 pub fn form_plate_get(view_id: String) -> Result(Dynamic, Nil)
 
+/// Destroy every form plate except the one for this form view id: switching
+/// modules must not stack plates on the canvas.
+@external(erlang, "campy_wx_native", "form_plate_retain")
+pub fn form_plate_retain(view_id: String) -> Nil
+
 @external(erlang, "campy_wx_native", "form_plate_rect")
 pub fn form_plate_rect(view_id: String) -> Result(#(Int, Int, Int, Int), Nil)
 
@@ -154,6 +161,10 @@ pub fn debug_str(term: a) -> String
 
 @external(erlang, "campy_wx_native", "enum_popup_anchored")
 pub fn enum_popup_anchored() -> Result(Bool, Nil)
+
+/// Dev instrumentation (CAMPY_DUMP=1): print one line per registered widget.
+@external(erlang, "campy_wx_native", "widget_report")
+pub fn widget_report(shell: a) -> Nil
 
 @external(erlang, "campy_wx_native", "enum_popup_select")
 pub fn enum_popup_select(index: Int) -> Nil

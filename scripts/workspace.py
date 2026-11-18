@@ -37,6 +37,9 @@ PACKAGES = [
 def environment() -> dict[str, str]:
     env = {**os.environ, "CAMPY_ROOT": str(ROOT)}
     env.setdefault("CAMPY_PROJECT", str(DEMO))
+    # Keep the IDE on XWayland so X tools (xdotool, x11grab screenshots)
+    # can see and drive it; harmless on pure-X sessions.
+    env.setdefault("GDK_BACKEND", "x11")
     return env
 
 

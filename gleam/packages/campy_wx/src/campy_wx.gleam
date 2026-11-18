@@ -700,10 +700,21 @@ fn apply_prop(shell: Shell, id: String, name: String) -> Shell {
                 True -> native.set_background(widget.ref, 199, 220, 250)
                 False -> native.set_background(widget.ref, 240, 240, 240)
               }
-            "canvas_bg" -> {
-              let hex =
-                plan.text_of(widget.props, "canvas_bg") |> plan.unwrap_or("")
-              native.set_background_hex(widget.ref, hex)
+            "canvas_bg" | "canvas_grid" -> {
+              // Keep the widget's own GTK background in the same color (it
+              // shows through before the callback paints) ...
+              case widget.kind {
+                "canvas" ->
+                  native.set_background_hex(
+                    widget.ref,
+                    plan.text_of(widget.props, "canvas_bg")
+                      |> plan.unwrap_or(""),
+                  )
+                _ -> Nil
+              }
+              // ... and push the new spec through paint_canvas_widget: the
+              // repaint itself runs synchronously in the paint callback.
+              paint_canvas_widget(shell, widget)
             }
             "x" | "y" | "w" | "h" -> apply_geometry(shell, widget)
             _ -> Nil
@@ -1056,17 +1067,23 @@ fn remove_subtree_registry(shell: Shell, id: String) -> Shell {
 /// The single receive point: wx events are normalised and mapped to declared
 /// view events; every other message is handed back untouched.
 /// The editor's jump list picked an entry: report the chosen "name:line".
-pub fn stc_jump(shell: Shell, wx_id: Int) -> Incoming {
+/// The adapter decodes the event's text; when it is empty (older wx builds),
+/// read the popup selection from the editor itself.
+pub fn stc_jump(shell: Shell, wx_id: Int, text: String) -> Incoming {
   case dict.get(shell.by_wx, wx_id) {
     Error(Nil) -> Idle
     Ok(view_id) ->
-      case get_widget(shell, view_id) {
-        Ok(widget) ->
-          case native.editor_jumped(widget.ref) {
-            Ok(text) -> Jumped(view_id, text)
-            Error(Nil) -> Idle
+      case text {
+        "" ->
+          case get_widget(shell, view_id) {
+            Ok(widget) ->
+              case native.editor_jumped(widget.ref) {
+                Ok(picked) -> Jumped(view_id, picked)
+                Error(Nil) -> Idle
+              }
+            Error(_) -> Idle
           }
-        Error(_) -> Idle
+        _ -> Jumped(view_id, text)
       }
   }
 }
@@ -1089,7 +1106,7 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
     native.WxEvent(_wx_id, "move") -> FrameMoved
     native.WxEvent(_wx_id, "size") -> FrameMoved
     native.WxEvent(_wx_id, _event_type) -> Idle
-    native.StcJump(wx_id) -> stc_jump(shell, wx_id)
+    native.StcJump(wx_id, text) -> stc_jump(shell, wx_id, text)
     native.Other(message) -> Message(message)
     native.Idle -> Idle
   }
@@ -1384,10 +1401,15 @@ fn grab_target(
   }
 }
 
-/// Marquee outline while a placement/selection drag is active.
-/// Marquee outline while a placement/selection drag is active.
+/// Marquee outline while a placement/selection drag is active. The rect is
+/// recorded in the canvas paint spec (read synchronously by the paint
+/// callback) and the canvas is queued for repaint.
 pub fn show_marquee(shell: Shell, rect: Option(#(Int, Int, Int, Int))) -> Nil {
   let shell = Shell(..shell, chrome: Chrome(marquee: rect))
+  case get_widget(shell, "canvas") {
+    Ok(widget) -> paint_canvas_widget(shell, widget)
+    Error(_) -> Nil
+  }
   invalidate_canvas(shell)
 }
 
@@ -1428,6 +1450,14 @@ pub fn relayout_free_children(shell: Shell) -> Nil {
   dict.values(shell.widgets)
   |> list.filter(fn(widget) { widget.parent == None })
   |> list.each(fn(root) { layout_free_tree(shell, root.view_id, None) })
+
+  // Notebook pages are layout roots of their own: the notebook sizes the
+  // page, and the page docks its children (the design canvas fills its
+  // page this way). is_container does not count "notebook", so the walk
+  // above stops at the tabs — give each page its own pass.
+  dict.values(shell.widgets)
+  |> list.filter(fn(widget) { widget.kind == "page" })
+  |> list.each(fn(page) { layout_free_tree(shell, page.view_id, None) })
 
   case shell.run {
     Some(run) ->
@@ -1902,6 +1932,12 @@ pub fn form_plate_show(
   }
 }
 
+/// Destroy every form plate except the one for this form view id: switching
+/// modules must not stack plates on the canvas.
+pub fn form_plate_retain(view_id: String) -> Nil {
+  native.form_plate_retain(view_id)
+}
+
 /// The pointer position in the design canvas' coordinates: drags read the
 /// true pointer so a moving widget cannot shift the coordinate base.
 pub fn canvas_pointer(shell: Shell) -> #(Int, Int) {
@@ -1966,6 +2002,12 @@ pub fn probe_enum_list() -> Result(Dynamic, Nil) {
 /// Preselect an option in the open enum dropdown (as a user click would).
 pub fn probe_enum_select(index: Int) -> Nil {
   native.enum_popup_select(index)
+}
+
+/// Dev instrumentation (CAMPY_DUMP=1): one line per registered widget,
+/// printed to the IDE's stdout for live geometry debugging.
+pub fn dump_widgets(shell: Shell) -> Nil {
+  native.widget_report(shell)
 }
 
 /// Is the open dropdown anchored at its cell? (probe assertion)

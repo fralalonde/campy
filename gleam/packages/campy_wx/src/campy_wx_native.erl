@@ -20,7 +20,9 @@
     settings_dialog/7, agent_dialog/5,
     grab_show/6, grab_move/5, grab_hide/1, grab_owner/1, grab_list/0,
     grab_next_id/0, form_plate_set/6, form_plate_get/1, form_plate_rect/1,
+    form_plate_retain/1,
     plate_owner/1, pointer_in/1, enum_popup_wx_id/0, enum_popup_anchored/0,
+    widget_report/1,
     view_wx_id/2, view_ref/2, pointer_override/2, pointer_clear/0,
     grab_strip_wx_id/1, grab_strip_info/2, palette_tool/1, widget_icon/1,
     plate_wx_id/1, enum_popup_list/0, enum_popup_select/1, inspector_cell/3,
@@ -126,8 +128,14 @@ grab_move(ViewId, X, Y, W, H) ->
     case maps:find(ViewId, grab_map()) of
         {ok, Strips} ->
             Updated = lists:map(
-                fun({{SX, SY, _SW, _SH, DX, DY}, {Ref, WxId, _, _}}) ->
+                fun({{SX, SY, SW, SH, DX, DY}, {Ref, WxId, _, _}}) ->
                     wxWindow:move(Ref, {SX, SY}),
+                    case is_integer(SW) andalso SW > 0 andalso
+                         is_integer(SH) andalso SH > 0
+                    of
+                        true -> wxWindow:setSize(Ref, {SW, SH});
+                        false -> ok
+                    end,
                     {Ref, WxId, DX, DY}
                 end,
                 lists:zip(strip_layouts(X, Y, W, H), Strips)
@@ -224,11 +232,31 @@ form_plate_set(ViewId, Parent, X, Y, W, H) ->
             wxWindow:move(R, {X, Y}),
             wxWindow:setSize(R, {W, H}),
             wxWindow:lower(R),
+            case os:getenv("CAMPY_DUMP") of
+                "1" ->
+                    io:format("[dump] plate ~s at ~p,~p ~px~p; siblings from "
+                              "bottom: ~p~n",
+                              [ViewId, X, Y, W, H,
+                               [wxWindow:getLabel(C)
+                                || C <- wxWindow:getChildren(Parent)]]);
+                _ -> ok
+            end,
             wxPanel:connect(R, left_down, []),
             wxPanel:connect(R, motion, []),
             wxPanel:connect(R, left_up, []),
             {R, Id}
     end,
+    %% The plate must stay BELOW every control (they are created before it,
+    %% but lower/raise are unreliable across GTK restacks): re-raise each
+    %% sibling in the current bottom->top order, which preserves their
+    %% relative order and sinks the plate.
+    Kids = wxWindow:getChildren(Parent),
+    lists:foreach(fun(K) ->
+                          case K =:= Ref of
+                              true -> ok;
+                              false -> wxWindow:raise(K)
+                          end
+                  end, Kids),
     put(campy_plates, maps:put(ViewId, {Ref, WxId}, plate_map())),
     put(campy_plate_ids, maps:put(WxId, ViewId, plate_ids_map())),
     ok.
@@ -238,6 +266,22 @@ form_plate_get(ViewId) ->
         {ok, {Ref, _}} -> {ok, Ref};
         error -> {error, nil}
     end.
+
+%% Destroy every plate except the one for ViewId. Switching modules otherwise
+%% stacks white plates on the canvas forever.
+form_plate_retain(ViewId) ->
+    Plates = plate_map(),
+    lists:foreach(
+        fun({Key, {Ref, WxId}}) when Key =/= ViewId ->
+                catch wxWindow:destroy(Ref),
+                put(campy_plate_ids, maps:remove(WxId, plate_ids_map()));
+           (_) ->
+                ok
+        end,
+        maps:to_list(Plates)
+    ),
+    put(campy_plates, maps:filter(fun(Key, _) -> Key =:= ViewId end, Plates)),
+    ok.
 
 form_plate_rect(ViewId) ->
     case maps:find(ViewId, plate_map()) of
@@ -359,13 +403,10 @@ debug_str(Term) ->
 enum_popup_anchored() ->
     case get(campy_enum_popup) of
         {Popup, _, _, _, _, SX, SY} ->
-            erlang:display({anchored_check, SX, SY, wxWindow:getScreenPosition(Popup), wxWindow:getSize(Popup)}),
-            R = case wxWindow:getScreenPosition(Popup) of
+            case wxWindow:getScreenPosition(Popup) of
                 {SX, SY} -> {ok, true};
                 {X, Y} -> {ok, {X, Y}}
-            end,
-            erlang:display({anchored_result, R}),
-            R;
+            end;
         undefined ->
             {error, nil}
     end.
@@ -953,7 +994,21 @@ grid_configure(Grid, ShowLabels, ShowLines, RowHeight, LabelWidth) ->
     catch wxGrid:setColMinimalWidth(Grid, 0, 40),
     catch wxGrid:setColSize(Grid, 0, LabelWidth),
     catch wxGrid:setColSize(Grid, 1, max(80, LabelWidth)),
+    put(campy_grid_label_widths,
+        maps:put(Grid, LabelWidth, grid_label_widths_map())),
     ok.
+
+grid_label_widths_map() ->
+    case get(campy_grid_label_widths) of
+        undefined -> #{};
+        M -> M
+    end.
+
+grid_label_width(Grid) ->
+    case maps:find(Grid, grid_label_widths_map()) of
+        {ok, Width} when is_integer(Width) -> Width;
+        _ -> 110
+    end.
 
 grid_fit_value_column(Grid, LabelWidth) ->
     try
@@ -984,7 +1039,7 @@ grid_set(Grid, Rows) ->
             wxGrid:beginBatch(Grid),
             set_grid_rows(Grid, Rows, 0),
             wxGrid:endBatch(Grid),
-            grid_fit_value_column(Grid, 110)
+            grid_fit_value_column(Grid, grid_label_width(Grid))
     end,
     ok.
 
@@ -1113,16 +1168,28 @@ enum_popup(Grid, Row, Col, Options) ->
     Height = 6 + 22 * erlang:min(length(Options), 8),
     Width = erlang:max(CW, 120),
     wxWindow:setClientSize(Popup, Width, Height),
-    {FX0, FY0} = wxWindow:clientToScreen(Frame, {0, 0}),
-    TargetX = SX - FX0,
-    %% wx anchors this popup by its BOTTOM edge on this build: requesting
-    %% y' = cell bottom + height - 1 lands the top exactly at the cell.
-    TargetY = SY + CH + Height - 1 - FY0,
-    wxWindow:move(Popup, {TargetX, TargetY}),
+    %% The popup is an override-redirect GTK window, so move() takes SCREEN
+    %% coordinates directly — not frame-relative ones. Drop it just below
+    %% the cell; flip it above the cell and clamp it inside the display's
+    %% client area when it would overflow the bottom edge.
+    {DA, DB, DW, DH} = display_client_area(Frame),
+    PY = case SY + CH + Height =< DB + DH of
+             true -> SY + CH;
+             false -> erlang:max(SY - Height, DB)
+         end,
+    PX = erlang:min(erlang:max(SX, DA), DA + DW - Width),
+    wxWindow:move(Popup, {PX, PY}),
     wxPopupTransientWindow:popup(Popup),
     put(campy_enum_popup,
         {Popup, List, wxWindow:getId(Grid), Row, Col, SX, SY + CH}),
     ok.
+
+%% The work area of the display the window is on.
+display_client_area(Frame) ->
+    Display = wxDisplay:new(Frame),
+    try wxDisplay:getClientArea(Display)
+        after wxDisplay:destroy(Display)
+    end.
 
 %% Walk up to the owning top-level window.
 toplevel(Win) ->
@@ -1151,7 +1218,7 @@ enum_popup_pick(ListId, _CmdInt) ->
     case get(campy_enum_popup) of
         undefined ->
             idle;
-        {Popup, List, GridId, Row, Col, _SX, _SY} ->
+        {_Popup, List, GridId, Row, Col, _SX, _SY} ->
             case wxWindow:getId(List) =:= ListId of
                 true ->
                     Label =
@@ -1363,16 +1430,98 @@ editor_replace_line(Editor, Line, NewText) ->
 %% editor_jumped/1 reads the picked text.
 editor_jump_list(Editor, Entries) ->
     wxStyledTextCtrl:connect(Editor, stc_autocomp_selection, []),
-    %% OTP 27 removed string:join; interleave with lists:join.
+    put(campy_jump_entries, {Editor, Entries}),
+    %% Jump entries are "name:line"; they never contain spaces, so the list can
+    %% be joined with spaces once the separator is a space (autocomplete sets
+    %% the separator to \n globally).
+    wxStyledTextCtrl:autoCompSetSeparator(Editor, $\s),
     Spaced = lists:join(<<" ">>, Entries),
     Options = unicode:characters_to_binary(erlang:iolist_to_binary(Spaced)),
     wxStyledTextCtrl:autoCompShow(Editor, 0, Options),
     ok.
 
+%% The picked entry, by the completion popup's current selection. wxErlang has
+%% no autoCompGetCurrentText, so the entry list is read from the process
+%% dictionary copy written by editor_jump_list/2.
 editor_jumped(Editor) ->
-    Text = unicode:characters_to_binary(
-             wxStyledTextCtrl:autoCompGetCurrentText(Editor)),
-    {ok, Text}.
+    Index = case catch wxStyledTextCtrl:autoCompGetCurrent(Editor) of
+        N when is_integer(N), N >= 0 -> N;
+        _ -> 0
+    end,
+    {ok, jump_entry(Editor, Index)}.
+
+jump_entry(Editor, Index) ->
+    case get(campy_jump_entries) of
+        {Editor, Entries} when is_list(Entries) ->
+            case Entries of
+                [] -> <<>>;
+                _ ->
+                    N = Index + 1,
+                    case N >= 1 andalso N =< length(Entries) of
+                        true -> lists:nth(N, Entries);
+                        false -> hd(Entries)
+                    end
+            end;
+        _ ->
+            <<>>
+    end.
+
+%% Jump entries may belong to a different editor; fall back to whatever was
+%% stored last so a pick never goes missing.
+jump_entry_any(Index) ->
+    case get(campy_jump_entries) of
+        {_Editor, Entries} when is_list(Entries) ->
+            case Entries of
+                [] -> <<>>;
+                _ ->
+                    N = Index + 1,
+                    case N >= 1 andalso N =< length(Entries) of
+                        true -> lists:nth(N, Entries);
+                        false -> hd(Entries)
+                    end
+            end;
+        _ ->
+            <<>>
+    end.
+
+%% The text of the picked jump entry: the event carries it; if wx left it
+%% empty, ask the popup for its current index and read the stored entry;
+%% finally treat the event position as a (possibly stale) index.
+jump_pick(Editor, Event) ->
+    case jump_event_text(Event) of
+        <<>> ->
+            Index = case catch wxStyledTextCtrl:autoCompGetCurrent(Editor) of
+                N when is_integer(N), N >= 0 -> N;
+                _ -> jump_event_position(Event)
+            end,
+            case jump_entry_any(Index) of
+                <<>> -> jump_entry_any(0);
+                Text -> Text
+            end;
+        Text ->
+            Text
+    end.
+
+jump_event_text(Event) ->
+    try
+        case element(7, Event) of
+            Value when is_binary(Value) -> unicode:characters_to_binary(Value);
+            Value when is_list(Value) -> unicode:characters_to_binary(Value);
+            _ -> <<>>
+        end
+    catch
+        _:_ -> <<>>
+    end.
+
+jump_event_position(Event) ->
+    try
+        case element(3, Event) of
+            N when is_integer(N), N >= 0 -> N;
+            _ -> 0
+        end
+    catch
+        _:_ -> 0
+    end.
 
 %% (The selection event is connected by editor_jump_list/2; kept for clarity.)
 editor_connect_jump(_Editor) ->
@@ -1416,6 +1565,12 @@ editor_goto(Editor, Line, Col) ->
 %% marker by the margin. Rows are {StartLine, EndLine, Message, Severity}
 %% with 0-based lines.
 editor_diagnostics(Editor, Rows) ->
+    %% Drop the markers left by the previous run before adding this set;
+    %% otherwise stale findings accumulate in the margin.
+    lists:foreach(
+        fun(Handle) -> catch wxStyledTextCtrl:markerDeleteAll(Editor, Handle) end,
+        [0, 1, 2]
+    ),
     underline_diagnostics(Editor, Rows).
 
 underline_diagnostics(_Editor, []) ->
@@ -1449,7 +1604,7 @@ editor_autocomplete(_Editor, []) ->
 editor_autocomplete(Editor, Labels) ->
     Pos = wxStyledTextCtrl:getCurrentPos(Editor),
     Start = wxStyledTextCtrl:wordStartPosition(Editor, Pos, true),
-    wxStyledTextCtrl:autoCompSetSeparator(Editor, 10),
+    wxStyledTextCtrl:autoCompSetSeparator(Editor, $\n),
     wxStyledTextCtrl:autoCompSetCancelAtStart(Editor, false),
     wxStyledTextCtrl:autoCompShow(Editor, Pos - Start, join_labels(Labels)),
     ok.
@@ -1624,20 +1779,69 @@ hex_rgb(Hex, Default) ->
 canvas(Parent, Id) ->
     Panel = wxPanel:new(Parent, [{winid, Id}, {style, ?wxFULL_REPAINT_ON_RESIZE}]),
     wxPanel:setBackgroundColour(Panel, {245, 246, 248}),
-    wxPanel:connect(Panel, paint, []),
+    %% Canvas painting is SYNCHRONOUS: a wxPaintDC must be created while the
+    %% GTK expose dispatch is still active. Events delivered to the owner's
+    %% mailbox arrive too late and draw nothing, so the paint runs in a
+    %% connect callback (executed inside the wx event thread) and reads its
+    %% spec from persistent_term, which the owner updates via paint_canvas/7.
+    persistent_term:put(canvas_spec_key(Id), default_canvas_spec()),
+    wxPanel:connect(Panel, paint,
+                    [{callback, fun(_Ev, _Obj) -> canvas_paint_cb(Panel) end}]),
     Panel.
+
+canvas_spec_key(Id) ->
+    {campy_canvas_spec, Id}.
+
+default_canvas_spec() ->
+    {24, none, <<"#f5f6f8">>, <<"#e2e4e8">>}.
+
+%% The synchronous painter: spec from persistent_term, size from the widget.
+canvas_paint_cb(Panel) ->
+    Id = wxWindow:getId(Panel),
+    {Step, Marquee, Bg, Grid} =
+        persistent_term:get(canvas_spec_key(Id), default_canvas_spec()),
+    {CW, CH} = wxWindow:getClientSize(Panel),
+    Width = erlang:max(CW, 1),
+    Height = erlang:max(CH, 1),
+    case os:getenv("CAMPY_DUMP") of
+        "1" ->
+            io:format("[dump] canvas paint ~p ~px~p step=~p bg=~s grid=~s "
+                     "marquee=~p~n",
+                      [Id, Width, Height, Step, Bg, Grid, Marquee]);
+        _ -> ok
+    end,
+    DC = wxPaintDC:new(Panel),
+    %% Fill with a clip-limited rectangle, NOT wxDC:clear(): clear ignores
+    %% the damage region, so every partial repaint (a moved child window)
+    %% would wipe the grid everywhere and redraw it only in the small
+    %% damaged strip. A rectangle obeys the clip, so partial paints stay
+    %% consistent with what is already on screen.
+    Brush = wxBrush:new(hex_rgb(Bg, {245, 246, 248})),
+    wxDC:setBrush(DC, Brush),
+    wxDC:setPen(DC, wxPen:new(hex_rgb(Bg, {245, 246, 248}))),
+    wxDC:drawRectangle(DC, {0, 0, Width, Height}),
+    Pen = wxPen:new(hex_rgb(Grid, {226, 228, 232})),
+    wxDC:setPen(DC, Pen),
+    draw_grid(DC, Width, Height, Step),
+    draw_marquee(DC, Marquee),
+    wxPen:destroy(Pen),
+    wxBrush:destroy(Brush),
+    wxPaintDC:destroy(DC),
+    ok.
+
+%% Record the canvas paint spec and queue a repaint. The actual drawing
+%% happens synchronously in the paint callback (see canvas/2).
 
 %% Paint the design canvas: background and light grid. The form is a real
 %% widget (the white plate below the controls), not painted chrome, and
 %% selection chrome is native grab strips - so this paint is pure backdrop.
 paint_canvas(Canvas, Width, Height, GridStep, Marquee, Bg, Grid) ->
-    DC = wxBufferedPaintDC:new(Canvas),
-    wxDC:setBackground(DC, wxBrush:new(hex_rgb(Bg, {245, 246, 248}))),
-    wxDC:clear(DC),
-    wxDC:setPen(DC, wxPen:new(hex_rgb(Grid, {226, 228, 232}))),
-    draw_grid(DC, Width, Height, GridStep),
-    draw_marquee(DC, Marquee),
-    wxBufferedPaintDC:destroy(DC),
+    %% Store the spec; the synchronous paint callback does the drawing.
+    %% Width/Height are advisory only (the callback reads the live size).
+    Id = wxWindow:getId(Canvas),
+    persistent_term:put(canvas_spec_key(Id), {GridStep, Marquee, Bg, Grid}),
+    wxWindow:refresh(Canvas),
+    _ = {Width, Height},
     ok.
 
 draw_marquee(_DC, none) ->
@@ -1663,6 +1867,66 @@ draw_grid(DC, Width, Height, Step) ->
         fun(Y) -> wxDC:drawLine(DC, {0, Y}, {Width, Y}) end,
         lists:seq(0, Height, Step)
     ),
+    ok.
+
+%% Dev instrumentation (CAMPY_DUMP=1): one line per registered widget so the
+%% live wx geometry can be read from the log without screenshots.
+widget_report(Shell) ->
+    {shell, _, _, Widgets, _, _, _, _} = Shell,
+    Entries = lists:keysort(1,
+                maps:fold(fun(_Id, W, Acc) ->
+                              [{element(5, W), W} | Acc]
+                          end, [], Widgets)),
+    lists:foreach(
+      fun({_ViewId, W}) ->
+              {widget, Ref, Kind, _WxId, ViewId, Parent, _Props, _Events,
+               _Children, _Sizer, Layout, _Border, _Grow} = W,
+              case Kind of
+                  <<"canvas">> ->
+                      Kids = wxWindow:getChildren(Ref),
+                      Info = [begin
+                                   KId = wxWindow:getId(K),
+                                   try
+                                       {KX, KY, KW, KH} = wxWindow:getRect(K),
+                                       io_lib:format("#~p ~p,~p ~px~p",
+                                                     [KId, KX, KY, KW, KH])
+                                   catch _:_ ->
+                                       io_lib:format("#~p ?", [KId])
+                                   end
+                               end || K <- Kids],
+                      io:format("[dump] canvas ~s children bottom->top: ~s~n",
+                                [ViewId, lists:join($\s, Info)]);
+                  <<"label">> ->
+                      io:format("[dump] label ~s text=~p~n",
+                                [ViewId, wxWindow:getLabel(Ref)]);
+                  <<"button">> ->
+                      io:format("[dump] button ~s text=~p~n",
+                                [ViewId, wxWindow:getLabel(Ref)]);
+                  <<"text">> ->
+                      io:format("[dump] text ~s value=~p~n",
+                                [ViewId, wxTextCtrl:getValue(Ref)]);
+                  _ -> ok
+              end,
+              ParentTxt = case Parent of {some, P} -> P; none -> <<"root">> end,
+              Rect = case catch wxWindow:getRect(Ref) of
+                         {X, Y, W2, H2} ->
+                             unicode:characters_to_binary(
+                               io_lib:format("~p,~p ~px~p", [X, Y, W2, H2]));
+                         _ -> <<"?">>
+                     end,
+              Shown = case catch wxWindow:isShown(Ref) of
+                          true -> <<"shown">>;
+                          false -> <<"HIDDEN">>;
+                          _ -> <<"?">>
+                      end,
+              io:format("[dump] ~s ~s parent=~s layout=~s rect=~s ~s~n",
+                        [Kind, ViewId, ParentTxt, Layout, Rect, Shown])
+      end, Entries),
+    PlateInfo = case get(campy_plates) of
+                    undefined -> <<"no plate">>;
+                    M -> io_lib:format("~b plate(s)", [maps:size(M)])
+                end,
+    io:format("[dump] plates: ~s~n", [PlateInfo]),
     ok.
 
 %% Design-mode input: every widget reports selection through left_down. Command
@@ -1712,6 +1976,11 @@ connect_mouse(Module, Ref) ->
 set_shortcuts(Frame, Editing) ->
     Entries = accelerator_entries(Editing),
     Table = wxAcceleratorTable:new(length(Entries), Entries),
+    %% Drop the previous table: it is replaced on every page switch.
+    case get(campy_accel_table) of
+        {OldTable, _OldEntries} -> catch wxAcceleratorTable:destroy(OldTable), ok;
+        _ -> ok
+    end,
     catch wxWindow:setAcceleratorTable(Frame, Table),
     %% Keep both the table and its entries alive for the window's lifetime.
     put(campy_accel_table, {Table, Entries}),
@@ -1781,11 +2050,28 @@ set_cursor(Ref, Role) when Role >= 0, Role =< 8 ->
     wxWindow:setCursor(Ref, cursor_for(Role)),
     ok;
 set_cursor(Ref, _Role) ->
-    wxWindow:setCursor(Ref, wxCursor:new(?wxCURSOR_ARROW)),
+    wxWindow:setCursor(Ref, cursor_for(arrow)),
     ok.
 
-cursor_for(8) -> wxCursor:new(?wxCURSOR_SIZING);
-cursor_for(Role) -> wxCursor:new(handle_cursor(Role)).
+%% Cursors are created once and cached: set_cursor runs on every motion event
+%% while dragging a handle, and each wxCursor is a GDI/GTK object.
+cursor_for(Kind) ->
+    Cursors = case get(campy_cursors) of
+        undefined -> #{};
+        M -> M
+    end,
+    case maps:find(Kind, Cursors) of
+        {ok, Cursor} ->
+            Cursor;
+        error ->
+            Cursor = new_cursor(Kind),
+            put(campy_cursors, maps:put(Kind, Cursor, Cursors)),
+            Cursor
+    end.
+
+new_cursor(8) -> wxCursor:new(?wxCURSOR_SIZING);
+new_cursor(arrow) -> wxCursor:new(?wxCURSOR_ARROW);
+new_cursor(Role) -> wxCursor:new(handle_cursor(Role)).
 
 handle_cursor(Role) when Role =:= 0; Role =:= 4 -> ?wxCURSOR_SIZENWSE;
 handle_cursor(Role) when Role =:= 2; Role =:= 6 -> ?wxCURSOR_SIZENESW;
@@ -1893,6 +2179,17 @@ next_message(Timeout) ->
                             Text = unicode:characters_to_binary(
                                 wxGrid:getCellValue(Obj, Row, Col)),
                             {grid_event, Id, Row, Col, Text}
+                    end;
+                wxStyledText ->
+                    case element(2, Event) of
+                        stc_autocomp_selection ->
+                            %% The picked jump entry. The event's text field
+                            %% carries it; fall back to the popup's selection
+                            %% index, then to the stored entries.
+                            Text = jump_pick(Obj, Event),
+                            {stc_jump, Id, Text};
+                        _ ->
+                            {wx_event, Id, event_type(Event)}
                     end;
                 wxCommand ->
                     case element(2, Event) of
