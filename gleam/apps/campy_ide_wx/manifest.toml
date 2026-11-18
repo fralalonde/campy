@@ -33,5 +33,6 @@ campy_source = { path = "../../packages/campy_source" }
 campy_view = { path = "../../packages/campy_view" }
 campy_wx = { path = "../../packages/campy_wx" }
 gleam_erlang = { version = ">= 1.3.0 and < 2.0.0" }
+gleam_otp = { version = ">= 1.3.0 and < 2.0.0" }
 gleam_stdlib = { version = ">= 0.70.0 and < 1.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }

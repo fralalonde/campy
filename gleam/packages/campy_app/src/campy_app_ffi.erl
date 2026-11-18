@@ -1,7 +1,25 @@
 -module(campy_app_ffi).
 -export([
-    init_of/1, view_of/2, dispatch/4, exported/3, migrate_of/3
+    init_of/1, view_of/2, dispatch/4, exported/3, migrate_of/3, load_code/2
 ]).
+
+%% Load a compiled beam in place; the next dispatch call in the app module
+%% runs the new code. Path is the beam file, Module the module name.
+load_code(Module, Path) ->
+    try
+        AbsPath = filename:absname(unicode:characters_to_list(Path)),
+        Bin = unwrap(file:read_file(AbsPath)),
+        case code:load_binary(mod(Module), AbsPath, Bin) of
+            {module, _} -> {ok, nil};
+            {error, Reason} -> {error, reason(Reason)}
+        end
+    catch
+        Class:Fail:Stack ->
+            {error, reason(Class, Fail, Stack)}
+    end.
+
+unwrap({ok, Bin}) -> Bin;
+unwrap({error, Reason}) -> erlang:error(Reason).
 
 %% init/0 -> State
 init_of(Module) ->
@@ -48,6 +66,9 @@ mod(Name) when is_atom(Name) -> Name.
 
 funname(Name) when is_binary(Name) -> binary_to_atom(Name, utf8);
 funname(Name) when is_atom(Name) -> Name.
+
+reason(Reason) ->
+    unicode:characters_to_binary(io_lib:format("~p", [Reason])).
 
 reason(Class, Reason, Stack) ->
     unicode:characters_to_binary(

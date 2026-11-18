@@ -23,6 +23,7 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/otp/system
 import gleam/result
 import gleam/string
 
@@ -565,6 +566,7 @@ fn deploy(state: model.State) -> Result(campy_app.Running, String) {
             name: module.slug,
             slug: module.slug,
             module: module_name,
+            version: 1,
             dispatch: subject,
             reply: reply,
           ))
@@ -1595,9 +1597,82 @@ fn tree_selected(state: model.State, id: String) -> model.State {
 }
 
 fn save(state: model.State, dir: String) -> model.State {
-  case campy_project.save(state.project, dir) {
+  let state = case campy_project.save(state.project, dir) {
     Ok(Nil) -> model.update(state, model.Log("Saved " <> dir))
     Error(error) -> model.update(state, model.Log("Save failed: " <> error))
+  }
+  // A running app picks the new handlers up immediately (T3.4 code update).
+  case state.running {
+    None -> state
+    Some(running) -> update_code(state, running)
+  }
+}
+
+/// Hot-update a running app: regenerate and build the module, pause the
+/// actor, load the new beam in place, resume, then send Upgrade so the actor
+/// runs its `migrate/2` and republishes. A failed step is a no-op that
+/// leaves the running version untouched.
+fn update_code(state: model.State, running: campy_app.Running) -> model.State {
+  let next_version = running.version + 1
+  case model.active_module(state) {
+    Error(_) -> state
+    Ok(module) ->
+      case campy_appgen.generate(module.slug, module.form, module.handlers) {
+        Error(error) ->
+          model.update(state, model.Log("Update failed: " <> error))
+        Ok(source) -> {
+          let dir = scratch_dir()
+          let module_name = campy_appgen.module_name(module.slug)
+          let beam =
+            dir
+            <> "/build/dev/erlang/campy_apps/ebin/"
+            <> module_name
+            <> ".beam"
+          let written =
+            write_file(dir <> "/src/" <> module_name <> ".gleam", source)
+          let state = case written {
+            Ok(_) -> state
+            Error(error) ->
+              model.update(state, model.Log("Update failed: " <> error))
+          }
+          case written {
+            Error(_) -> state
+            Ok(_) -> {
+              // Recompile; the load below swaps the beam in place.
+              let _ = compile_and_load(dir, module_name)
+              case campy_app.load_code(module_name, beam) {
+                Ok(_) -> {
+                  campy_app.pause(running)
+                  let state =
+                    model.update(state, model.RunCodeUpdated(next_version))
+                  let updated = case state.running {
+                    Some(now) -> now
+                    None -> running
+                  }
+                  campy_app.resume(updated)
+                  process.send(
+                    updated.dispatch,
+                    campy_app.Upgrade(
+                      module_name,
+                      running.version,
+                      next_version,
+                    ),
+                  )
+                  io.println(
+                    "[ide] updated "
+                    <> running.slug
+                    <> " to version "
+                    <> int.to_string(next_version),
+                  )
+                  state
+                }
+                Error(error) ->
+                  model.update(state, model.Log("Update failed: " <> error))
+              }
+            }
+          }
+        }
+      }
   }
 }
 

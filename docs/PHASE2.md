@@ -79,6 +79,19 @@ it. Option 2 (native children + selection chrome) is implemented on wx.
   the headless probe (the widget buffer is correct; later GUI activity
   repaints it) — stdout `[app]` lines and later shots show the reports.
   275 tests total.
+- **T3.4** Code update — done (2026-11-18). `campy_app.load_code(module,
+  beam_path)` loads a compiled beam in place via `code:load_binary`
+  (charlist path required), and `pause`/`resume` suspend/resume the app actor
+  around the load (`gleam/otp/system`). In the IDE, **Save while running**
+  hot-updates: regenerate via appgen → write → `gleam build` → pause →
+  load_code → resume → `Upgrade(module, old, new)`; the actor runs the new
+  module's `migrate/2` and republishes `Version` + `View`. A failed step is a
+  no-op log and leaves the running version untouched. Verified headlessly
+  (deploy proof: v1 greet → v2 with `migrate/2` → the next event logs
+  "v2 greeted 2" on migrated state) and in the IDE probe (Save while running
+  → "updated greeter to version 2", "app state version 2", view generation
+  3). The in-VM part of `campy_control.deploy` from the ADR is this flow; the
+  remote-node part lands with M4. 278 tests total.
 
 **Next step.** **Gate G2**: design the demo form from scratch in the shell,
 save it, inspect/diff the canonical JSON, and reopen it. Do not start M3 (ABI v2
@@ -731,8 +744,7 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   above.
 - **T3.3** Attach client in the IDE — done (2026-11-18). See the T3.3 status
   bullet above.
-- **T3.4** Code update: build → send artifact to runner → `campy_control.deploy`
-  → `code:load_binary` → pause/apply/migrate/resume, failed update is a no-op.
+- **T3.4** Code update — done (2026-11-18). See the T3.4 status bullet above.
 - **T4.1** `campy_peer`: start/stop `:peer` nodes, hidden IDE node, cookie, name,
   health, teardown.
 - **T4.2** `campy_runner`: `campy_control` on the node; deploy from binaries,

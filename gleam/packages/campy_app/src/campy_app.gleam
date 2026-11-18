@@ -18,6 +18,7 @@ import gleam/erlang/process.{type Subject}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
+import gleam/otp/system
 import gleam/result
 
 pub type Event {
@@ -48,15 +49,39 @@ pub type Snapshot {
 }
 
 /// A running app instance, recorded by the IDE model: the app's dispatch
-/// subject plus the reply channel the shell polls.
+/// subject plus the reply channel the shell polls. `version` is the code
+/// version the actor currently runs; code updates bump it.
 pub type Running {
   Running(
     name: String,
     slug: String,
     module: String,
+    version: Int,
     dispatch: Subject(Msg),
     reply: Subject(Reply),
   )
+}
+
+/// Load new code for `module` from a compiled beam file, replacing the
+/// running version in place (`code:load_binary`).
+@external(erlang, "campy_app_ffi", "load_code")
+pub fn load_code(module: String, beam_path: String) -> Result(Nil, String)
+
+/// Suspend the app actor before a code load and resume it after, so no
+/// dispatch runs against a half-updated module pair. Both are system
+/// messages; a suspended actor still answers Upgrade once resumed.
+pub fn pause(running: Running) -> Nil {
+  case process.subject_owner(running.dispatch) {
+    Ok(pid) -> system.suspend(pid)
+    Error(Nil) -> Nil
+  }
+}
+
+pub fn resume(running: Running) -> Nil {
+  case process.subject_owner(running.dispatch) {
+    Ok(pid) -> system.resume(pid)
+    Error(Nil) -> Nil
+  }
 }
 
 /// The runtime's view of an installed app. `module` implements `init/0`,

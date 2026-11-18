@@ -51,7 +51,8 @@ project directory to open another project.
 - **Run** (in `campy_ide_wx`): deploys the active form in-VM — scratch
   package, `gleam build`, code load — and starts the ABI v2 actor; a live
   **Run** page grafts the published view, canvas events route to the actor,
-  and reports land in the console.
+  and reports land in the console. Saving while running hot-updates the code
+  (pause → `code:load_binary` → resume → `Upgrade` → `migrate/2`).
 - **IDE model** (`campy_ide_model`): tabs, active module, selection, console,
   undo/redo, palette placement, clipboard, duplicate/delete, z-order, inspector
   geometry/text edits, ABI v2 handler stubs, and Form/Code/Source page state.

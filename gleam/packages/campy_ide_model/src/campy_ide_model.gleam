@@ -94,6 +94,7 @@ pub type Command {
   RunStarted(campy_app.Running)
   RunView(campy_view.Document, Int)
   RunReport(String)
+  RunCodeUpdated(Int)
   RunStopped
   SetHandlers(String)
   OpenHandler(control_id: String, event: String)
@@ -1079,6 +1080,19 @@ pub fn run_report(state: State, text: String) -> State {
   log(state, text)
 }
 
+/// The running app's code was updated to `version`; the actor will migrate
+/// and republish.
+pub fn run_code_updated(state: State, version: Int) -> State {
+  case state.running {
+    None -> state
+    Some(running) -> {
+      let running = campy_app.Running(..running, version: version)
+      State(..state, running: Some(running))
+      |> log("code updated to version " <> int.to_string(version))
+    }
+  }
+}
+
 /// The running app stopped (or was never started).
 pub fn run_stopped(state: State) -> State {
   State(..state, running: None, live_view: None)
@@ -1127,6 +1141,7 @@ pub fn update(state: State, command: Command) -> State {
     RunStarted(running) -> run_started(state, running)
     RunView(document, gen) -> run_view(state, document, gen)
     RunReport(text) -> run_report(state, text)
+    RunCodeUpdated(version) -> run_code_updated(state, version)
     RunStopped -> run_stopped(state)
     SetControlRect(id, rect) -> set_control_rect(state, id, rect)
     SetControlProp(id, name, value) -> set_control_prop(state, id, name, value)

@@ -213,6 +213,42 @@ pub fn snapshot_reports_state_and_version_test() {
   let assert campy_app.Snapshot(_, 1) = snapshot(h)
 }
 
+pub fn beam_path_resolves_test() {
+  let path = beam_path("campy_app_test")
+  string.ends_with(path, ".beam") |> should.be_true
+}
+
+pub fn load_code_reloads_in_place_test() {
+  // The test module and its ffi live in the same ebin directory; loading the
+  // module's own beam in place must succeed and leave both resolvable.
+  string.contains(code_which("campy_app_ffi"), "campy_app/ebin")
+  |> should.be_true
+
+  campy_app.load_code("campy_app_test", beam_path("campy_app_test"))
+  |> should.equal(Ok(Nil))
+
+  string.contains(code_which("campy_app_ffi"), "campy_app/ebin")
+  |> should.be_true
+}
+
+pub fn load_code_and_upgrade_runs_the_new_module_test() {
+  let h = start()
+  drain_initial(h)
+
+  // Reload the module's own beam in place (code:load_binary), then upgrade:
+  // the version bump runs migrate/2 (count + 100).
+  campy_app.load_code("campy_app_test", beam_path("campy_app_test"))
+  |> should.equal(Ok(Nil))
+
+  process.send(h.subject, Upgrade("campy_app_test", 1, 2))
+  let assert Ok(campy_app.Version(2)) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.View(_, 2)) = process.receive(h.reply, 1000)
+
+  let assert campy_app.Snapshot(state, 2) = snapshot(h)
+  let assert Ok(count) = decode_count(state)
+  count |> should.equal(100)
+}
+
 pub fn handler_name_matches_the_authoring_rule_test() {
   campy_app.handler_name("ok", "click") |> should.equal("ok_click")
 }
@@ -230,6 +266,12 @@ fn snapshot(h: Harness) -> campy_app.Snapshot {
 
 @external(erlang, "campy_app_test_ffi", "decode_count")
 fn decode_count(state: Dynamic) -> Result(Int, Nil)
+
+@external(erlang, "campy_app_test_ffi", "beam_path")
+fn beam_path(module: String) -> String
+
+@external(erlang, "campy_app_test_ffi", "code_which")
+fn code_which(module: String) -> String
 
 fn string_contains(haystack: String, needle: String) -> Bool {
   case list.contains(string.split(haystack, " "), needle) {
