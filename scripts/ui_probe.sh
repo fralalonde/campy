@@ -64,6 +64,25 @@ type_text() { xdotool type --delay 80 "$1"; }
 # navigator, centre Form/Code/Source + console, right Properties/Events dock.
 shot t25-full-shell
 
+# --- T3.3: Run the active form in-VM ----------------------------------------
+# Run deploys the appgen module, opens the Run page with the live preview,
+# and prints console reports. Clicking the preview's Greet button routes a
+# click event to the actor; the console logs the handler's Log effect.
+# The Run tool is the 9th toolbar button: client (723, 47).
+click 723 47
+# First Run pays the scratch package build; later runs are incremental.
+sleep 40
+shot t33-run-page
+# The preview stacks label, text field, and the Greet button; the button is
+# the third column row, client ≈ (505, 235).
+click 505 235
+sleep 1
+# A click in the console (caret move only) is the real wx event that flushes
+# the drain-time console update to the screen.
+click 400 800
+sleep 1
+shot t33-greet-clicked
+
 # --- T2.1/T2.5: selection chrome and body drag ------------------------------
 # The text control is at canvas (0,24), 600x28; canvas origin is client (202,194).
 click 499 205
@@ -201,7 +220,7 @@ xdotool mousemove --window "$win" 145 76
 sleep 2.5
 shot t25-tooltip
 
-# Optional end-to-end persistence check: save the edited project. Run with a
+# Optional end-to-end persistence check# Optional end-to-end persistence check: save the edited project. Run with a
 # throwaway CAMPY_PROJECT so the demo fixture stays clean:
 #   CAMPY_PROJECT=/tmp/opencode/g2-demo CAMPY_PROBE_SAVE=1 scripts/ui_probe.sh xvfb
 if [ "${CAMPY_PROBE_SAVE:-0}" = "1" ]; then

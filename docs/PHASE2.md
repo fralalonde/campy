@@ -61,7 +61,24 @@ it. Option 2 (native children + selection chrome) is implemented on wx.
   Compile proof: both demo modules were generated into a throwaway package
   with only `campy_view` + `campy_app` path deps; `gleam build` succeeded and
   calling the generated `view/1`/`init/0` from Erlang returned the embedded
-  tree and `{state, 0}`. 10 headless tests. 274 tests total.
+  tree and `{state, 0}`. 10 headless tests.
+- **T3.3** Attach client — done (2026-11-18). Run/Stop tools deploy the
+  active form in-VM: `campy_appgen.generate` writes the scratch package under
+  `<root>/generated/apps` (CAMPY_ROOT or the cwd-derived repo root),
+  `campy_ide_wx_ffi:compile_and_load/2` runs `gleam build`, adds the ebin to
+  the code path and loads the module; the IDE then starts the `campy_app`
+  actor with the module's own subject as the dispatch channel. Replies are
+  drained every loop pass: `View` grafts the published document into a live
+  **Run** page (the form root becomes a panel; free-layout sizers now lay out
+  via `relayout_free_children` — a panel under a free-layout parent is never
+  reached by the frame layout pass), `Report`/`Notified`/`Version` go to the
+  console. Shell events whose control is in the published view and declared
+  the key are routed to the actor as `EventReceived`; the demo greeter's Run
+  click produces "greeted 1 times", "notify: Hello from Campy!" and view
+  generation 2. Note: the Scintilla console flushes its pixels lazily under
+  the headless probe (the widget buffer is correct; later GUI activity
+  repaints it) — stdout `[app]` lines and later shots show the reports.
+  275 tests total.
 
 **Next step.** **Gate G2**: design the demo form from scratch in the shell,
 save it, inspect/diff the canonical JSON, and reopen it. Do not start M3 (ABI v2
@@ -712,8 +729,8 @@ Read before starting: `docs/adr/0003-wx-ui-toolkit.md`,
   bullet above.
 - **T3.2** `campy_appgen` v2 — done (2026-11-18). See the T3.2 status bullet
   above.
-- **T3.3** Attach client in the IDE: deploy in-VM first, send `View`, apply diffs,
-  route `Event`s, render console reports.
+- **T3.3** Attach client in the IDE — done (2026-11-18). See the T3.3 status
+  bullet above.
 - **T3.4** Code update: build → send artifact to runner → `campy_control.deploy`
   → `code:load_binary` → pause/apply/migrate/resume, failed update is a no-op.
 - **T4.1** `campy_peer`: start/stop `:peer` nodes, hidden IDE node, cookie, name,

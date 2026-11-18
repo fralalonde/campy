@@ -137,6 +137,7 @@ pub fn mount(shell: Shell, root: Node) -> Result(Shell, String) {
   case result {
     Ok(shell) -> {
       native.layout(shell.frame)
+      relayout_free_children(shell)
       native.show(shell.frame)
       Ok(shell)
     }
@@ -620,7 +621,13 @@ pub fn apply(shell: Shell, patches: List(Patch)) -> Result(Shell, String) {
     })
   native.thaw(shell.frame)
   native.layout(shell.frame)
-  result
+  case result {
+    Ok(shell) -> {
+      relayout_free_children(shell)
+      Ok(shell)
+    }
+    Error(error) -> Error(error)
+  }
 }
 
 fn apply_patch(shell: Shell, patch: Patch) -> Result(Shell, String) {
@@ -983,6 +990,28 @@ pub fn show_marquee(shell: Shell, rect: Option(#(Int, Int, Int, Int))) -> Nil {
   invalidate_canvas(shell)
 }
 
+/// Lay out the sizers of widgets whose parent positions children freely.
+/// Free-layout parents are not managed by any sizer, so the frame-level
+/// layout pass never recalculates their children; everything else is laid
+/// out correctly by the frame pass and must not be touched with stale sizes.
+pub fn relayout_free_children(shell: Shell) -> Nil {
+  dict.values(shell.widgets)
+  |> list.each(fn(widget) {
+    case widget.sizer, widget.parent {
+      Some(sizer), Some(parent_id) ->
+        case get_widget(shell, parent_id) {
+          Ok(parent) ->
+            case parent.sizer {
+              None -> native.layout_sizer(widget.ref, sizer)
+              Some(_) -> Nil
+            }
+          Error(_) -> Nil
+        }
+      _, _ -> Nil
+    }
+  })
+}
+
 /// A canvas repaint draws background, grid, and the current chrome.
 pub fn invalidate_canvas(shell: Shell) -> Nil {
   let #(canvas, _, _) = canvas_widget(shell)
@@ -1092,7 +1121,10 @@ pub fn set_editor(
   read_only: Bool,
 ) -> Nil {
   case get_widget(shell, id) {
-    Ok(widget) -> native.editor_set(widget.ref, text, read_only)
+    Ok(widget) -> {
+      native.editor_set(widget.ref, text, read_only)
+      native.refresh(widget.ref)
+    }
     Error(_) -> Nil
   }
 }

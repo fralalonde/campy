@@ -204,15 +204,6 @@ fn handle_event(data: Data, event: Event) -> actor.Next(Data, Msg) {
   }
 }
 
-fn msg_tag(msg: Msg) -> String {
-  case msg {
-    EventReceived(_) -> "event"
-    Upgrade(_, _, _) -> "upgrade"
-    SnapshotRequest(_) -> "snapshot"
-    StopRequest -> "stop-request"
-  }
-}
-
 type Effects {
   EffectsDone(data: Data)
   EffectsStop(data: Data)

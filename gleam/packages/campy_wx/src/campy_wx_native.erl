@@ -3,7 +3,7 @@
     new_app/0, destroy_app/0, frame/4, show/1, connect/2, next_message/1,
     panel/2, label/3, button/3, checkbox/3, radio/3, choice/2, listbox/2,
     textctrl/3, memo/3, slider/5, gauge/3, picture/3,
-    box_sizer/1, add/5, insert/6, detach/2, set_sizer/2,
+    box_sizer/1, add/5, insert/6, detach/2, set_sizer/2, layout_sizer/2,
     menubar/0, menu/0, menuitem/3, append_menu/3, set_menubar/2,
     toolbar/1, tool/3, tool_separator/1, realize_toolbar/1,
     statusbar/1, set_status/2,
@@ -130,6 +130,14 @@ layout(Ref) ->
     wxWindow:layout(Ref),
     ok.
 
+%% wxWindow:layout/1 recurses through children windows but a panel that was
+%% absolutely positioned under a free-layout parent never gets its own sizer
+%% recalculated; wxSizer:layout/1 sizes the children directly.
+layout_sizer(Window, Sizer) ->
+    wxSizer:layout(Sizer),
+    wxWindow:layout(Window),
+    ok.
+
 move(Ref, X, Y) ->
     wxWindow:move(Ref, {X, Y}),
     ok.
@@ -214,6 +222,8 @@ refresh_window(Ref) ->
     wxWindow:refresh(Ref),
     ok.
 
+%% Refresh queues an expose; update flushes the pending paint immediately,
+%% which is what text changed outside a wx event needs.
 set_background(Ref, R, G, B) ->
     wxWindow:setBackgroundColour(Ref, {R, G, B}),
     wxWindow:refresh(Ref),
@@ -470,6 +480,9 @@ editor_set(Editor, Text, ReadOnly) ->
 
 %% Show the end of a freshly rewritten source file, so an appended ABI stub is
 %% visible immediately after the event click opens the Code page.
+%% wxTextCtrl:getValue does not work on wxStyledTextCtrl; read the buffer
+%% directly.
+%% Debug: the wx object id inside a ref.
 editor_show_end(Editor) ->
     Pos = wxStyledTextCtrl:getTextLength(Editor),
     wxStyledTextCtrl:gotoPos(Editor, Pos),

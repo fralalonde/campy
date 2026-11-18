@@ -122,6 +122,9 @@ pub fn thaw(ref: Dynamic) -> Nil
 @external(erlang, "campy_wx_native", "layout")
 pub fn layout(ref: Dynamic) -> Nil
 
+@external(erlang, "campy_wx_native", "layout_sizer")
+pub fn layout_sizer(window: Dynamic, sizer: Dynamic) -> Nil
+
 @external(erlang, "campy_wx_native", "move")
 pub fn move(ref: Dynamic, x: Int, y: Int) -> Nil
 

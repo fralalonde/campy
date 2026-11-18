@@ -14,7 +14,7 @@
 //// stub so the skeleton runs before the user writes handlers.
 
 import campy_source
-import campy_view.{type Document, type Node, type Value}
+import campy_view.{type Document, type Node}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}

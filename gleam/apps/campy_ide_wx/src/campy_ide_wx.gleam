@@ -240,34 +240,43 @@ fn poll_app(
       case process.receive(running.reply, 0) {
         Error(_) -> state
         Ok(campy_app.View(document, gen)) -> {
+          io.println("[app] view generation " <> int.to_string(gen))
+          let previous = state
           let state = model.update(state, model.RunView(document, gen))
           let next = view(state)
           let shell = rebind(shell, current, next)
-          refresh(shell, Some(state), state)
+          refresh(shell, Some(previous), state)
           poll_app(shell, state, next)
         }
-        Ok(campy_app.Report(text)) ->
-          poll_app(shell, model.update(state, model.RunReport(text)), current)
-        Ok(campy_app.Notified(text)) ->
-          poll_app(
-            shell,
-            model.update(state, model.RunReport("notify: " <> text)),
-            current,
-          )
-        Ok(campy_app.Version(version)) ->
-          poll_app(
-            shell,
+        Ok(campy_app.Report(text)) -> {
+          io.println("[app] " <> text)
+          let state = model.update(state, model.RunReport(text))
+          set_console(shell, state)
+          poll_app(shell, state, current)
+        }
+        Ok(campy_app.Notified(text)) -> {
+          io.println("[app] notify: " <> text)
+          let state = model.update(state, model.RunReport("notify: " <> text))
+          set_console(shell, state)
+          poll_app(shell, state, current)
+        }
+        Ok(campy_app.Version(version)) -> {
+          io.println("[app] state version " <> int.to_string(version))
+          let state =
             model.update(
               state,
               model.RunReport("app state version " <> int.to_string(version)),
-            ),
-            current,
-          )
+            )
+          set_console(shell, state)
+          poll_app(shell, state, current)
+        }
         Ok(campy_app.Stopped) -> {
+          io.println("[ide] app stopped")
+          let previous = state
           let state = model.update(state, model.RunStopped)
           let next = view(state)
           let shell = rebind(shell, current, next)
-          refresh(shell, Some(state), state)
+          refresh(shell, Some(previous), state)
           state
         }
       }
@@ -509,10 +518,15 @@ fn write_file(path: String, contents: String) -> Result(Nil, String)
 @external(erlang, "campy_ide_wx_ffi", "compile_and_load")
 fn compile_and_load(dir: String, module: String) -> Result(Nil, String)
 
-/// The repo root for the scratch app package; `workspace.py` exports it.
+/// The repo root for the scratch app package. `CAMPY_ROOT` wins when set
+/// (workspace.py exports it); otherwise it is derived from the process cwd,
+/// which is the app package three levels under the repo root.
+@external(erlang, "campy_ide_wx_ffi", "cwd")
+fn cwd() -> String
+
 fn root() -> String {
   case campy_wx.getenv("CAMPY_ROOT") {
-    "" -> "."
+    "" -> cwd() <> "/../../.."
     root -> root
   }
 }
@@ -534,6 +548,7 @@ fn deploy(state: model.State) -> Result(campy_app.Running, String) {
       ))
       let dir = scratch_dir()
       let module_name = campy_appgen.module_name(module.slug)
+      use _ <- result.try(make_dir(dir <> "/src"))
       use _ <- result.try(write_file(
         dir <> "/src/" <> module_name <> ".gleam",
         source,
@@ -542,17 +557,17 @@ fn deploy(state: model.State) -> Result(campy_app.Running, String) {
       use _ <- result.try(compile_and_load(dir, module_name))
 
       let reply = process.new_subject()
-      let dispatch = process.new_subject()
-      let running =
-        campy_app.Running(
-          name: module.slug,
-          slug: module.slug,
-          module: module_name,
-          dispatch: dispatch,
-          reply: reply,
-        )
       case campy_app.start(deploy_spec(module, module_name), reply) {
-        Ok(_subject) -> Ok(running)
+        // The subject returned by start is the actor's own mailbox; it is the
+        // dispatch channel for events and StopRequest.
+        Ok(subject) ->
+          Ok(campy_app.Running(
+            name: module.slug,
+            slug: module.slug,
+            module: module_name,
+            dispatch: subject,
+            reply: reply,
+          ))
         Error(error) -> Error(error)
       }
     }
@@ -598,23 +613,28 @@ fn toggle_run(
 ) {
   case state.running {
     Some(running) -> {
+      io.println("[ide] stopping " <> running.slug)
       process.send(running.dispatch, campy_app.StopRequest)
       loop(shell, state, current, dir, NoDrag)
     }
     None ->
       case deploy(state) {
         Error(error) -> {
+          io.println("[ide] run failed: " <> error)
+          let previous = state
           let state = model.update(state, model.Log("Run failed: " <> error))
           let next = view(state)
           let shell = rebind(shell, current, next)
-          refresh(shell, Some(state), state)
+          refresh(shell, Some(previous), state)
           loop(shell, state, next, dir, NoDrag)
         }
         Ok(running) -> {
+          io.println("[ide] running " <> running.slug)
+          let previous = state
           let state = model.update(state, model.RunStarted(running))
           let next = view(state)
           let shell = rebind(shell, current, next)
-          refresh(shell, Some(state), state)
+          refresh(shell, Some(previous), state)
           campy_wx.select_page(shell, "tabs", page_index(state))
           loop(shell, state, next, dir, NoDrag)
         }
@@ -1754,6 +1774,8 @@ fn typed_grid_editors(
 
 fn set_console(shell: campy_wx.Shell, state: model.State) {
   campy_wx.set_editor(shell, "console", model.console_text(state), True)
+  // Keep the newest lines in view.
+  campy_wx.scroll_editor_to_end(shell, "console")
 }
 
 fn selection_rect(state: model.State) -> Option(#(Int, Int, Int, Int)) {

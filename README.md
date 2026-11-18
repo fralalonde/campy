@@ -48,6 +48,10 @@ project directory to open another project.
 - **App generator** (`campy_appgen`): emits the per-form dispatch module
   (`campy_app_<slug>`) with the designed form embedded as `view/1` and the
   user's handlers verbatim.
+- **Run** (in `campy_ide_wx`): deploys the active form in-VM — scratch
+  package, `gleam build`, code load — and starts the ABI v2 actor; a live
+  **Run** page grafts the published view, canvas events route to the actor,
+  and reports land in the console.
 - **IDE model** (`campy_ide_model`): tabs, active module, selection, console,
   undo/redo, palette placement, clipboard, duplicate/delete, z-order, inspector
   geometry/text edits, ABI v2 handler stubs, and Form/Code/Source page state.
