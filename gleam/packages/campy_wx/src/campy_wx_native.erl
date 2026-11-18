@@ -216,50 +216,68 @@ plate_ids_map() ->
     end.
 
 %% Create or move the plate for a form root; its wx id routes presses to the
-%% form's id with plate-relative coordinates.
+%% form's id with plate-relative coordinates. The plate panel itself is
+%% pre-created with the canvas (see canvas/2): GTK stacks child windows by
+%% CREATION order and Raise/Lower are no-ops for children on this build, so
+%% a plate created after the controls would sit on top of them forever.
 form_plate_set(ViewId, Parent, X, Y, W, H) ->
-    {Ref, WxId} = case maps:find(ViewId, plate_map()) of
+    CanvasPlates = canvas_plate_map(),
+    {Ref, WxId, Rekey} = case maps:find(ViewId, plate_map()) of
         {ok, {R, Id}} ->
-            wxWindow:move(R, {X, Y}),
-            wxWindow:setSize(R, {W, H}),
-            {R, Id};
+            {R, Id, none};
         error ->
-            Id = grab_next_id(),
-            R = wxPanel:new(Parent,
-                            [{winid, Id}, {style, ?wxBORDER_SIMPLE bor
-                                              ?wxFULL_REPAINT_ON_RESIZE}]),
-            wxPanel:setBackgroundColour(R, {255, 255, 255}),
-            wxWindow:move(R, {X, Y}),
-            wxWindow:setSize(R, {W, H}),
-            wxWindow:lower(R),
+            case maps:find(Parent, CanvasPlates) of
+                {ok, {PR, PId, OldView}} ->
+                    %% Re-key the canvas's pre-made plate to this form.
+                    case OldView of
+                        undefined -> ok;
+                        _ ->
+                            put(campy_plates,
+                                maps:remove(OldView, plate_map())),
+                            put(campy_plate_ids,
+                                maps:remove(PId, plate_ids_map()))
+                    end,
+                    {PR, PId, {some, OldView}};
+                error ->
+                    %% No pre-made plate (foreign parent): last resort,
+                    %% created last — above the controls.
+                    Id = grab_next_id(),
+                    R0 = wxPanel:new(Parent,
+                                    [{winid, Id},
+                                     {style, ?wxBORDER_SIMPLE bor
+                                             ?wxFULL_REPAINT_ON_RESIZE}]),
+                    wxPanel:setBackgroundColour(R0, {255, 255, 255}),
+                    wxPanel:connect(R0, left_down, []),
+                    wxPanel:connect(R0, motion, []),
+                    wxPanel:connect(R0, left_up, []),
+                    {R0, Id, none}
+            end
+    end,
+    case Rekey of
+        {some, Old} when Old =/= undefined, Old =/= ViewId ->
             case os:getenv("CAMPY_DUMP") of
                 "1" ->
-                    io:format("[dump] plate ~s at ~p,~p ~px~p; siblings from "
-                              "bottom: ~p~n",
-                              [ViewId, X, Y, W, H,
-                               [wxWindow:getLabel(C)
-                                || C <- wxWindow:getChildren(Parent)]]);
+                    io:format("[dump] plate re-keyed ~s -> ~s at ~p,~p ~px~p~n",
+                              [Old, ViewId, X, Y, W, H]);
                 _ -> ok
-            end,
-            wxPanel:connect(R, left_down, []),
-            wxPanel:connect(R, motion, []),
-            wxPanel:connect(R, left_up, []),
-            {R, Id}
+            end;
+        _ -> ok
     end,
-    %% The plate must stay BELOW every control (they are created before it,
-    %% but lower/raise are unreliable across GTK restacks): re-raise each
-    %% sibling in the current bottom->top order, which preserves their
-    %% relative order and sinks the plate.
-    Kids = wxWindow:getChildren(Parent),
-    lists:foreach(fun(K) ->
-                          case K =:= Ref of
-                              true -> ok;
-                              false -> wxWindow:raise(K)
-                          end
-                  end, Kids),
+    wxWindow:move(Ref, {X, Y}),
+    wxWindow:setSize(Ref, {W, H}),
+    %% No show here: the pre-made plate is shown at canvas creation so the
+    %% design controls (shown after it) stay above it in GTK's stack.
     put(campy_plates, maps:put(ViewId, {Ref, WxId}, plate_map())),
     put(campy_plate_ids, maps:put(WxId, ViewId, plate_ids_map())),
+    put(campy_canvas_plates,
+        maps:put(Parent, {Ref, WxId, ViewId}, CanvasPlates)),
     ok.
+
+canvas_plate_map() ->
+    case get(campy_canvas_plates) of
+        undefined -> #{};
+        M -> M
+    end.
 
 form_plate_get(ViewId) ->
     case maps:find(ViewId, plate_map()) of
@@ -473,8 +491,11 @@ snapshot(Ref, Path) ->
     Bmp = wxBitmap:new(W, H),
     Mem = wxMemoryDC:new(),
     wxMemoryDC:selectObject(Mem, Bmp),
-    catch wxScreenDC:blitTo(Mem, 0, 0, X, Y, W, H),
-    wxMemoryDC:selectObject(Mem, wxBitmap:new(0, 0)),
+    %% blit(DEST_DC, {Xdest,Ydest}, {W,H}, SOURCE_DC, {Xsrc,Ysrc}): copy the
+    %% window's screen rectangle into the memory bitmap.
+    catch wxDC:blit(Mem, {0, 0}, {W, H}, Screen, {X, Y}),
+    Null = wxBitmap:new(1, 1),
+    wxMemoryDC:selectObject(Mem, Null),
     Image = wxBitmap:convertToImage(Bmp),
     case wxImage:saveFile(Image, unicode:characters_to_list(Path),
                           <<"image/png">>)
@@ -484,6 +505,7 @@ snapshot(Ref, Path) ->
     end,
     wxImage:destroy(Image),
     wxMemoryDC:destroy(Mem),
+    wxBitmap:destroy(Null),
     wxBitmap:destroy(Bmp),
     wxScreenDC:destroy(Screen),
     ok.
@@ -530,11 +552,33 @@ gauge(Parent, Id, Range) ->
 
 picture(Parent, Id, Path) ->
     try
-        Image = wxImage:new(Path),
+        Resolved = resolve_picture(Path),
+        Image = wxImage:new(Resolved),
         Bitmap = wxBitmap:new(Image),
+        wxImage:destroy(Image),
         wxStaticBitmap:new(Parent, Id, Bitmap, [])
     catch
         _:_ -> wxStaticText:new(Parent, Id, <<"[missing image]">>, [])
+    end.
+
+%% Form assets live next to the project: a bare relative picture path
+%% resolves against CAMPY_PROJECT (set by scripts/workspace.py) before the
+%% IDE's own working directory.
+resolve_picture(Path) ->
+    Native = unicode:characters_to_list(Path),
+    case filelib:is_regular(Native) of
+        true ->
+            Native;
+        false ->
+            Project = case os:getenv("CAMPY_PROJECT") of
+                          false -> ".";
+                          Value -> Value
+                      end,
+            ProjectPath = filename:join(Project, Native),
+            case filelib:is_regular(ProjectPath) of
+                true -> ProjectPath;
+                false -> Native
+            end
     end.
 
 %% Layout
@@ -1779,6 +1823,26 @@ hex_rgb(Hex, Default) ->
 canvas(Parent, Id) ->
     Panel = wxPanel:new(Parent, [{winid, Id}, {style, ?wxFULL_REPAINT_ON_RESIZE}]),
     wxPanel:setBackgroundColour(Panel, {245, 246, 248}),
+    %% The form plate is pre-created as the canvas's FIRST child: GTK stacks
+    %% children by creation order (Raise/Lower are no-ops for children on
+    %% this build), so design controls created after it always paint above
+    %% the plate. It stays hidden at 1x1 until form_plate_set positions it.
+    PlateId = grab_next_id(),
+    Plate = wxPanel:new(Panel,
+                        [{winid, PlateId},
+                         {style, ?wxBORDER_SIMPLE bor ?wxFULL_REPAINT_ON_RESIZE}]),
+    wxPanel:setBackgroundColour(Plate, {255, 255, 255}),
+    wxWindow:move(Plate, {0, 0}),
+    wxWindow:setSize(Plate, {1, 1}),
+    %% Shown NOW, never hidden again: GTK3 stacks siblings by show order,
+    %% and a plate shown later than the controls would cover them. It stays
+    %% visually inert at 1x1 until form_plate_set positions it.
+    wxWindow:show(Plate),
+    wxPanel:connect(Plate, left_down, []),
+    wxPanel:connect(Plate, motion, []),
+    wxPanel:connect(Plate, left_up, []),
+    put(campy_canvas_plates,
+        maps:put(Panel, {Plate, PlateId, undefined}, canvas_plate_map())),
     %% Canvas painting is SYNCHRONOUS: a wxPaintDC must be created while the
     %% GTK expose dispatch is still active. Events delivered to the owner's
     %% mailbox arrive too late and draw nothing, so the paint runs in a
@@ -1886,16 +1950,22 @@ widget_report(Shell) ->
                       Kids = wxWindow:getChildren(Ref),
                       Info = [begin
                                    KId = wxWindow:getId(K),
+                                   KParent = try wxWindow:getId(
+                                                   wxWindow:getParent(K))
+                                               catch _:_ -> -1 end,
                                    try
                                        {KX, KY, KW, KH} = wxWindow:getRect(K),
-                                       io_lib:format("#~p ~p,~p ~px~p",
-                                                     [KId, KX, KY, KW, KH])
+                                       io_lib:format("#~p(p~p) ~p,~p ~px~p",
+                                                     [KId, KParent, KX, KY,
+                                                      KW, KH])
                                    catch _:_ ->
-                                       io_lib:format("#~p ?", [KId])
+                                       io_lib:format("#~p(p~p) ?",
+                                                     [KId, KParent])
                                    end
                                end || K <- Kids],
-                      io:format("[dump] canvas ~s children bottom->top: ~s~n",
-                                [ViewId, lists:join($\s, Info)]);
+                      io:format("[dump] canvas ~s(#~p) children: ~s~n",
+                                [ViewId, wxWindow:getId(Ref),
+                                 lists:join($\s, Info)]);
                   <<"label">> ->
                       io:format("[dump] label ~s text=~p~n",
                                 [ViewId, wxWindow:getLabel(Ref)]);

@@ -9,8 +9,8 @@
 //// from the form document, and publishes the whole form document with a
 //// generation after every applied event so clients can diff. A missing
 //// handler is a no-op; a raising handler becomes a contained report. Effects
-//// are `Log`, `Notify`, and `Stop`. There is no polling and no bridge: the
-//// owner sends `Msg`s and receives `Reply`s on a subject.
+//// are `Log`, `Notify`, `SetProp`, and `Stop`. There is no polling and no
+//// bridge: the owner sends `Msg`s and receives `Reply`s on a subject.
 
 import campy_view.{type Document, type Node, type Value}
 import gleam/dynamic.{type Dynamic}
@@ -28,6 +28,12 @@ pub type Event {
 pub type Effect {
   Log(text: String)
   Notify(text: String)
+  /// Override one property on the node with `id` in the published view. The
+  /// override outlives the handler that set it and is re-applied to every
+  /// later publish, so a handler can change what the running app shows even
+  /// though `view/1` is static. The latest value for a given `(id, prop)`
+  /// wins; a missing `id` leaves the document unchanged.
+  SetProp(id: String, prop: String, value: Value)
   Stop
 }
 
@@ -111,7 +117,15 @@ pub type Msg {
 }
 
 type Data {
-  Data(spec: Spec, state: Dynamic, generation: Int, reply: Subject(Reply))
+  Data(
+    spec: Spec,
+    state: Dynamic,
+    generation: Int,
+    reply: Subject(Reply),
+    /// Live view overrides from `SetProp` effects, in first-set order:
+    /// `#(node id, prop name, value)`. Applied to every published document.
+    overrides: List(#(String, String, Value)),
+  )
 }
 
 @external(erlang, "campy_app_ffi", "init_of")
@@ -163,7 +177,7 @@ pub fn start(
           Ok(document) -> {
             process.send(reply, Version(spec.state_version))
             process.send(reply, View(document, 1))
-            actor.initialised(Data(spec, state, 1, reply))
+            actor.initialised(Data(spec, state, 1, reply, []))
             |> actor.returning(subject)
             |> Ok
           }
@@ -248,6 +262,14 @@ fn run_effects(data: Data, effects: List(Effect)) -> Effects {
       process.send(data.reply, Notified(text))
       run_effects(data, rest)
     }
+    [SetProp(id, prop, value), ..rest] -> {
+      let data =
+        Data(
+          ..data,
+          overrides: upsert_override(data.overrides, id, prop, value),
+        )
+      run_effects(data, rest)
+    }
     [Stop, ..] -> {
       process.send(data.reply, Stopped)
       EffectsStop(data)
@@ -256,6 +278,8 @@ fn run_effects(data: Data, effects: List(Effect)) -> Effects {
 }
 
 /// Publish the view derived from the current state with the next generation.
+/// Accumulated `SetProp` overrides are applied to that view first, so handlers
+/// can keep changing the running UI while `view/1` stays static.
 fn publish(data: Data) -> actor.Next(Data, Msg) {
   case view_of(data.spec.module, data.state) {
     Error(reason) -> {
@@ -264,9 +288,84 @@ fn publish(data: Data) -> actor.Next(Data, Msg) {
     }
     Ok(document) -> {
       let generation = data.generation + 1
+      let document = apply_overrides(document, data.overrides)
       process.send(data.reply, View(document, generation))
       actor.continue(Data(..data, generation: generation))
     }
+  }
+}
+
+/// Upsert an override: replace the entry for this `(id, prop)` in place so the
+/// first-set order survives, or append when it is new.
+fn upsert_override(
+  overrides: List(#(String, String, Value)),
+  id: String,
+  prop: String,
+  value: Value,
+) -> List(#(String, String, Value)) {
+  case list.any(overrides, fn(entry) { entry.0 == id && entry.1 == prop }) {
+    False -> list.append(overrides, [#(id, prop, value)])
+    True ->
+      list.map(overrides, fn(entry) {
+        case entry {
+          #(existing_id, existing_prop, _)
+            if existing_id == id && existing_prop == prop
+          -> #(id, prop, value)
+          _ -> entry
+        }
+      })
+  }
+}
+
+/// Apply every override to the view tree: upsert the named prop on the node
+/// with the matching id, recursing into children. Props keep their order and
+/// every other node field is left untouched. No overrides means no change.
+fn apply_overrides(
+  document: Document,
+  overrides: List(#(String, String, Value)),
+) -> Document {
+  case overrides {
+    [] -> document
+    _ ->
+      campy_view.Document(
+        ..document,
+        view: apply_node_overrides(document.view, overrides),
+      )
+  }
+}
+
+fn apply_node_overrides(
+  node: Node,
+  overrides: List(#(String, String, Value)),
+) -> Node {
+  let children =
+    list.map(node.children, fn(child) { apply_node_overrides(child, overrides) })
+
+  let props =
+    list.fold(overrides, node.props, fn(props, override) {
+      case override {
+        #(id, prop, value) if id == node.id -> upsert_prop(props, prop, value)
+        _ -> props
+      }
+    })
+
+  campy_view.Node(..node, props: props, children: children)
+}
+
+fn upsert_prop(
+  props: List(#(String, Value)),
+  name: String,
+  value: Value,
+) -> List(#(String, Value)) {
+  case list.any(props, fn(prop) { prop.0 == name }) {
+    True ->
+      list.map(props, fn(prop) {
+        case prop.0 == name {
+          True -> #(name, value)
+          False -> prop
+        }
+      })
+    False -> list.append(props, [#(name, value)])
   }
 }
 

@@ -66,6 +66,12 @@ fn interactive(project: campy_project.Project, dir: String) {
   let assert Ok(shell) = campy_wx.mount(shell, current_view)
   refresh(shell, None, state)
   apply_appearance(shell, state)
+  // Dev instrumentation: CAMPY_DUMP=1 prints every widget's live geometry
+  // once after mount, so the rendered tree can be checked from the log.
+  case campy_wx.getenv("CAMPY_DUMP") {
+    "1" -> campy_wx.dump_widgets(shell)
+    _ -> Nil
+  }
   loop(shell, state, current_view, dir, NoDrag)
 }
 
@@ -530,6 +536,10 @@ fn loop(
         "menu-settings-agent" ->
           agent_settings(shell, state, current, dir, drag)
         _ -> {
+          // Any other widget event ends a gesture: a frozen canvas must be
+          // thawed and its previews restored before the drag is dropped, or
+          // the surface stays dead until a later gesture.
+          drop_drag(shell, state, drag)
           let previous = state
           let state = handle(shell, state, dir, id, key, value)
           let next = view(state)
@@ -567,15 +577,20 @@ fn loop(
     }
     campy_wx.Jumped(_view_id, text) -> {
       // Jump-to-symbol: the picked "name:line" moves the caret to the line.
+      // A malformed reply (no line, or a non-numeric one) is ignored rather
+      // than crashing the whole shell on a `let assert`.
       let previous = state
       let state = case string.split_once(text, ":") {
-        Ok(#(name, line)) -> {
-          let assert Ok(line) = int.parse(line)
-          campy_wx.select_page(shell, "tabs", 1)
-          campy_wx.goto_editor_position(shell, "code", line, 0)
-          campy_wx.focus(shell, "code")
-          model.update(state, model.SetStatus("Jumped to " <> name))
-        }
+        Ok(#(name, line)) ->
+          case int.parse(line) {
+            Ok(line) -> {
+              campy_wx.select_page(shell, "tabs", 1)
+              campy_wx.goto_editor_position(shell, "code", line, 0)
+              campy_wx.focus(shell, "code")
+              model.update(state, model.SetStatus("Jumped to " <> name))
+            }
+            Error(_) -> state
+          }
         Error(_) -> state
       }
       let next = view(state)
@@ -634,10 +649,13 @@ fn run_window_closed(
     None -> state
   }
   let shell = campy_wx.close_run(shell)
+  // Capture the pre-stop state: refresh must diff against it, not against
+  // itself, or console/source guards never see the change.
+  let previous = state
   let state = model.update(state, model.RunStopped)
   let next = view(state)
   let shell = rebind(shell, current, next)
-  refresh(shell, Some(state), state)
+  refresh(shell, Some(previous), state)
   loop(shell, state, next, dir, NoDrag)
 }
 
@@ -874,6 +892,8 @@ pub fn accelerator_shortcut(action: String) -> Shortcut {
     "source" -> ShowSourcePage
     "complete" -> Complete
     "definition" -> JumpToDefinition
+    "outline" -> ShowOutline
+    "help" -> ShowHelp
     _ -> NoShortcut
   }
 }
@@ -892,6 +912,11 @@ fn dispatch_shortcut(
       io.println("[ide] quit")
     }
     NoShortcut -> loop(shell, state, current, dir, drag)
+    ShowHelp -> {
+      // F1, as advertised by the Help menu.
+      campy_wx.show_message(shell, "Keyboard shortcuts", help_text())
+      loop(shell, state, current, dir, drag)
+    }
     Cancel -> {
       let previous = state
       let state = cancel_drag(shell, state, drag) |> model.update(model.Disarm)
@@ -901,6 +926,9 @@ fn dispatch_shortcut(
       loop(shell, state, next, dir, NoDrag)
     }
     action -> {
+      // The loop drops the gesture below; restore its previews and thaw the
+      // canvas first so a shortcut pressed mid-drag does not leave it frozen.
+      drop_drag(shell, state, drag)
       let previous = state
       let state = apply_shortcut(shell, state, dir, action)
       let next = view(state)
@@ -943,6 +971,10 @@ fn apply_shortcut(
     ShowFormPage -> model.update(state, model.ShowForm)
     ShowCodePage -> model.update(state, model.ShowCode)
     ShowSourcePage -> model.update(state, model.ShowSource)
+    ShowOutline -> outline(state)
+    // ShowHelp needs the shell to open the message box; dispatch_shortcut
+    // handles it before calling here.
+    ShowHelp -> state
     Cancel | Quit | NoShortcut -> state
   }
 }
@@ -983,6 +1015,19 @@ fn cancel_drag(
   }
 }
 
+/// Abandon a live gesture at a point where the loop returns to NoDrag. The
+/// canvas was frozen by freeze_canvas, so previews must be restored and the
+/// surface thawed or it stays frozen until some later gesture.
+fn drop_drag(shell: campy_wx.Shell, state: model.State, drag: Drag) -> Nil {
+  case drag {
+    NoDrag -> Nil
+    _ -> {
+      let _ = cancel_drag(shell, state, drag)
+      Nil
+    }
+  }
+}
+
 pub type Shortcut {
   Save
   Quit
@@ -1000,6 +1045,10 @@ pub type Shortcut {
   Complete
   /// Language server: jump to the declaration under the caret (F12).
   JumpToDefinition
+  /// View menu: fetch the document outline (Ctrl+F12).
+  ShowOutline
+  /// Help menu: the keyboard shortcut cheat sheet (F1).
+  ShowHelp
   Cancel
   NoShortcut
 }
@@ -1048,6 +1097,12 @@ pub fn shortcut(state: model.State, key: campy_wx.Key) -> Shortcut {
         _ -> DeleteControl
       }
     False, False, _, "escape" -> Cancel
+    // F1 and Ctrl+F12 are advertised by the Help/View menus. wx reports them
+    // as raw key codes; accept both the documented and the classic wx values.
+    False, False, _, "592" -> ShowHelp
+    False, False, _, "340" -> ShowHelp
+    True, False, _, "599" -> ShowOutline
+    True, False, _, "351" -> ShowOutline
     // F12 and Ctrl+Space live in the accelerator table too; this mapping
     // makes handle_key ignore them so they are never applied twice.
     False, False, _, "351" -> JumpToDefinition
@@ -1850,10 +1905,13 @@ fn toggle_run(
       // Run/F5 while an app is attached updates it in place (hot code
       // update) instead of stopping it.
       io.println("[ide] updating " <> running.slug)
+      // Diff against the state before the update: a self-diff would hide the
+      // console output the update logs.
+      let previous = state
       let state = update_code(state, running)
       let next = view(state)
       let shell = rebind(shell, current, next)
-      refresh(shell, Some(state), state)
+      refresh(shell, Some(previous), state)
       loop(shell, state, next, dir, NoDrag)
     }
     None ->
@@ -2064,10 +2122,10 @@ fn handle_design_mouse(
                         }
                       }
                     None -> {
+                      let previous = state
                       let state = model.select_controls(state, [])
                       campy_wx.show_selection(shell, [])
                       campy_wx.capture_canvas(shell)
-                      let previous = state
                       refresh(shell, Some(previous), state)
                       loop(shell, state, current, dir, MarqueeDrag(ax, ay))
                     }
@@ -2606,7 +2664,12 @@ fn handle(
     "tabs" -> page_selected(state, value)
     "inspector-tabs" -> state
     "inspector" -> inspector_changed(state, value)
-    "events" -> event_selected(state, value)
+    "events" -> {
+      // Adopt the Code buffer first: clicking an event must not silently
+      // discard edits typed but not yet saved.
+      let state = adopt_editor_text(shell, state)
+      event_selected(state, value)
+    }
     "modules" -> module_selected(state, value)
     "nodes-name" ->
       case value {
@@ -2896,21 +2959,29 @@ fn tree_selected(state: model.State, id: String) -> model.State {
   }
 }
 
-fn save(shell: campy_wx.Shell, state: model.State, dir: String) -> model.State {
-  // Adopt the Code editor's current text first: the buffer is what the user
-  // sees, and typed-but-unsaved edits must survive the save. Other pages
-  // commit the model as-is.
-  let state = case state.page {
+/// Adopt the Code editor's buffer as the model's handlers when the Code page
+/// is the source of truth. Shared by save and by any action that leaves the
+/// page (opening a handler) so unsaved typing is never silently dropped.
+fn adopt_editor_text(shell: campy_wx.Shell, state: model.State) -> model.State {
+  case state.page {
     model.CodePage ->
       case model.active_module(state) {
-        Ok(_module) -> {
-          let text = campy_wx.editor_text(shell, "code")
-          model.update(state, model.SetHandlers(text))
-        }
+        Ok(_module) ->
+          model.update(
+            state,
+            model.SetHandlers(campy_wx.editor_text(shell, "code")),
+          )
         Error(_) -> state
       }
     _ -> state
   }
+}
+
+fn save(shell: campy_wx.Shell, state: model.State, dir: String) -> model.State {
+  // Adopt the Code editor's current text first: the buffer is what the user
+  // sees, and typed-but-unsaved edits must survive the save. Other pages
+  // commit the model as-is.
+  let state = adopt_editor_text(shell, state)
   let state = case campy_project.save(state.project, dir) {
     Ok(Nil) -> model.update(state, model.Log("Saved " <> dir))
     Error(error) -> model.update(state, model.Log("Save failed: " <> error))
@@ -3007,8 +3078,13 @@ fn refresh(
     Some(previous) -> {
       // Handler edits and module changes must both refresh the Scintilla page;
       // otherwise a stub is committed but the old source stays visible.
+      // Replacing the text resets Scintilla's undo history and scrolls to the
+      // end, so skip the rewrite when the editor already shows the new
+      // handlers (Ctrl+S and OpenHandler adopt the buffer itself).
       let handlers_changed = handlers_of(previous) != handlers_of(state)
-      case previous.active == state.active && !handlers_changed {
+      let editor_matches =
+        campy_wx.editor_text(shell, "code") == handlers_of(state)
+      case previous.active == state.active && editor_matches {
         False -> {
           set_code(shell, state)
           case handlers_changed {
@@ -3052,9 +3128,20 @@ fn refresh(
     _ -> Nil
   }
 
+  // Rebuilding the grid on every event (console logs included) resets the
+  // user's cell selection, so only push rows that actually changed.
   let rows = inspector_rows(state)
-  campy_wx.set_grid(shell, "inspector", rows)
-  typed_grid_editors(shell, rows, list.length(state.selection) != 1)
+  let push_rows = case previous {
+    None -> True
+    Some(previous) -> inspector_rows(previous) != rows
+  }
+  case push_rows {
+    True -> {
+      campy_wx.set_grid(shell, "inspector", rows)
+      typed_grid_editors(shell, rows, list.length(state.selection) != 1)
+    }
+    False -> Nil
+  }
   case page_index(state) == 0 {
     True -> {
       // The form plate: the form itself as a selectable, draggable surface
@@ -3076,6 +3163,10 @@ fn refresh(
               )
             None -> Nil
           }
+          // Destroy plates of forms that are no longer open: each plate is a
+          // native window, so switching modules would otherwise leak one per
+          // form visited.
+          campy_wx.form_plate_retain(module.form.view.id)
         }
         Error(_) -> Nil
       }
@@ -4394,6 +4485,8 @@ fn palette_label(kind: String) -> String {
     "radio" -> "Radio"
     "list" -> "List"
     "progress" -> "Progress"
+    "notebook" -> "Tabs"
+    "page" -> "Page"
     _ -> campy_catalog.label_of(kind)
   }
 }

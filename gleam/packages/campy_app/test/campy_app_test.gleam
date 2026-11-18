@@ -7,7 +7,7 @@ import campy_app.{
   SnapshotRequest, Stop, StopRequest, Upgrade,
 }
 
-import campy_view.{type Document, VInt, VText}
+import campy_view.{type Document, type Node, VInt, VText}
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Subject}
 import gleam/list
@@ -43,6 +43,9 @@ pub fn view(_state: State) -> Document {
         campy_view.node("button", "halt")
           |> campy_view.with_props([#("text", VText("Halt"))])
           |> campy_view.with_events(["click"]),
+        campy_view.node("button", "paint")
+          |> campy_view.with_props([#("text", VText("Paint"))])
+          |> campy_view.with_events(["click", "twice", "ghost"]),
       ]),
     extra: [],
   )
@@ -58,6 +61,28 @@ pub fn boom_click(_state: State, _event: Event) -> #(State, List(Effect)) {
 
 pub fn halt_click(state: State, _event: Event) -> #(State, List(Effect)) {
   #(state, [Stop])
+}
+
+/// One live prop override: the published document must show the new text on
+/// `ok` even though `view/1` is static.
+pub fn paint_click(state: State, event: Event) -> #(State, List(Effect)) {
+  #(state, [campy_app.SetProp("ok", "text", event.value)])
+}
+
+/// Two overrides of the same `(id, prop)` in one handler, separated by a
+/// `Log` so the data threading through `run_effects` is exercised: only the
+/// latest value may survive.
+pub fn paint_twice(state: State, _event: Event) -> #(State, List(Effect)) {
+  #(state, [
+    campy_app.SetProp("ok", "text", VText("first")),
+    Log("painted"),
+    campy_app.SetProp("ok", "text", VText("last")),
+  ])
+}
+
+/// An override naming an id the view does not contain is inert.
+pub fn paint_ghost(state: State, _event: Event) -> #(State, List(Effect)) {
+  #(state, [campy_app.SetProp("missing", "text", VText("ghost"))])
 }
 
 pub fn migrate(state: State, _from: Int) -> State {
@@ -118,6 +143,45 @@ pub fn event_dispatches_and_publishes_the_next_generation_test() {
   let assert Ok(campy_app.Report("ok")) = process.receive(h.reply, 1000)
   let assert Ok(campy_app.Notified("hello")) = process.receive(h.reply, 1000)
   let assert Ok(campy_app.View(_, 2)) = process.receive(h.reply, 1000)
+}
+
+pub fn set_prop_updates_the_published_document_test() {
+  let h = start()
+  drain_initial(h)
+  process.send(
+    h.subject,
+    EventReceived(Event("paint", "click", VText("Done"), 1)),
+  )
+
+  let assert Ok(campy_app.View(document, 2)) = process.receive(h.reply, 1000)
+  document |> prop_of("ok", "text") |> should.equal(Ok(VText("Done")))
+
+  // The override outlives its handler: a later, unrelated event still
+  // publishes the painted document.
+  process.send(h.subject, click("ok", "click"))
+  let assert Ok(campy_app.Report("ok")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.Notified("hello")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.View(document, 3)) = process.receive(h.reply, 1000)
+  document |> prop_of("ok", "text") |> should.equal(Ok(VText("Done")))
+}
+
+pub fn repeated_set_prop_on_the_same_id_keeps_the_latest_test() {
+  let h = start()
+  drain_initial(h)
+  process.send(h.subject, click("paint", "twice"))
+
+  let assert Ok(campy_app.Report("painted")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.View(document, 2)) = process.receive(h.reply, 1000)
+  document |> prop_of("ok", "text") |> should.equal(Ok(VText("last")))
+}
+
+pub fn set_prop_on_a_missing_id_leaves_the_document_unchanged_test() {
+  let h = start()
+  drain_initial(h)
+  process.send(h.subject, click("paint", "ghost"))
+
+  let assert Ok(campy_app.View(published, 2)) = process.receive(h.reply, 1000)
+  published |> should.equal(document())
 }
 
 pub fn missing_handler_is_a_no_op_test() {
@@ -254,6 +318,33 @@ pub fn handler_name_matches_the_authoring_rule_test() {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+/// The value of `name` on the node with `id`, if both are present.
+fn prop_of(
+  document: Document,
+  id: String,
+  name: String,
+) -> Result(campy_view.Value, Nil) {
+  case find_node(document.view, id) {
+    Ok(node) -> campy_view.prop(node, name)
+    Error(Nil) -> Error(Nil)
+  }
+}
+
+fn find_node(node: Node, id: String) -> Result(Node, Nil) {
+  case node.id == id {
+    True -> Ok(node)
+    False ->
+      case
+        list.find(node.children, fn(child) {
+          find_node(child, id) != Error(Nil)
+        })
+      {
+        Ok(child) -> find_node(child, id)
+        Error(Nil) -> Error(Nil)
+      }
+  }
+}
 
 fn snapshot(h: Harness) -> campy_app.Snapshot {
   // The actor answers on the subject carried by the request, not the app's

@@ -96,7 +96,7 @@ pub fn document_title_is_available_test() {
 
 pub fn palette_lists_every_catalog_widget_test() {
   let labels = campy_ide_wx.palette_labels()
-  labels |> list.length |> should.equal(16)
+  labels |> list.length |> should.equal(18)
   labels |> list.first |> should.equal(Ok("Panel"))
   labels |> list.contains("Panel") |> should.equal(True)
 }
@@ -354,11 +354,12 @@ pub fn source_text_changes_when_the_form_changes_test() {
 
 pub fn palette_uses_short_labels_test() {
   let labels = campy_ide_wx.palette_labels()
-  labels |> list.length |> should.equal(16)
+  labels |> list.length |> should.equal(18)
   labels
   |> should.equal([
-    "Panel", "Group", "Label", "Button", "Text", "Memo", "Check", "Radio",
-    "Choice", "List", "Slider", "Progress", "Picture", "Tree", "Grid", "Editor",
+    "Panel", "Group", "Tabs", "Page", "Label", "Button", "Text", "Memo", "Check",
+    "Radio", "Choice", "List", "Slider", "Progress", "Picture", "Tree", "Grid",
+    "Editor",
   ])
 }
 

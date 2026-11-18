@@ -23,6 +23,8 @@ pub fn all() -> List(Widget) {
   [
     Widget("panel", "Panel", "Layout", []),
     Widget("group", "Group", "Layout", []),
+    Widget("notebook", "Notebook", "Layout", []),
+    Widget("page", "Notebook page", "Layout", []),
     Widget("label", "Label", "Display", []),
     Widget("button", "Button", "Input", ["click"]),
     Widget("text", "Text field", "Input", ["change"]),
@@ -55,10 +57,12 @@ pub fn label_of(kind: String) -> String {
 }
 
 /// Whether the designer may drop children into this kind. The form/window root
-/// is a container too, but it is never offered as a palette item.
+/// is a container too, but it is never offered as a palette item. A notebook
+/// itself does not accept drops: new controls belong on one of its pages, so
+/// dropping aims at the page under the cursor.
 pub fn accepts_children(kind: String) -> Bool {
   case kind {
-    "form" | "window" | "panel" | "group" -> True
+    "form" | "window" | "panel" | "group" | "page" -> True
     _ -> False
   }
 }
@@ -86,7 +90,9 @@ pub fn default_w(kind: String) -> Int {
     "picture" -> 120
     "tree" -> 200
     "grid" -> 200
-    "editor" | "notebook" | "page" -> 320
+    "notebook" -> 320
+    "page" -> 300
+    "editor" -> 320
     "form" | "window" -> 640
     _ -> 100
   }
@@ -107,7 +113,9 @@ pub fn default_h(kind: String) -> Int {
     "picture" -> 120
     "tree" -> 160
     "grid" -> 120
-    "editor" | "notebook" | "page" -> 200
+    "notebook" -> 200
+    "page" -> 160
+    "editor" -> 200
     "form" | "window" -> 480
     _ -> 28
   }
@@ -121,11 +129,29 @@ pub fn make(kind: String, id: String) -> Result(Node, String) {
     [#("w", VInt(default_w(kind))), #("h", VInt(default_h(kind)))]
     |> list.append(default_props(kind))
 
-  Ok(
+  let node =
     campy_view.node(kind, id)
     |> campy_view.with_props(props)
-    |> campy_view.with_events(widget.events),
-  )
+    |> campy_view.with_events(widget.events)
+
+  // A notebook is useless without a page: give a fresh one its first page.
+  case kind {
+    "notebook" ->
+      Ok(
+        campy_view.with_children(node, [
+          campy_view.node("page", id <> "-p1")
+          |> campy_view.with_props([
+            #("x", VInt(0)),
+            #("y", VInt(0)),
+            #("w", VInt(default_w("notebook") - 8)),
+            #("h", VInt(default_h("notebook") - 32)),
+            #("text", VText("Page")),
+            #("layout", VText("column")),
+          ]),
+        ]),
+      )
+    _ -> Ok(node)
+  }
 }
 
 /// A fresh control with explicit geometry. Coordinates are relative to the
@@ -166,6 +192,8 @@ pub fn default_props(kind: String) -> List(#(String, Value)) {
       #("max", VInt(100)),
     ]
     "panel" | "group" -> [#("layout", VText("free"))]
+    "notebook" -> [#("layout", VText("free"))]
+    "page" -> [#("text", VText("Page")), #("layout", VText("column"))]
     _ -> []
   }
 }
