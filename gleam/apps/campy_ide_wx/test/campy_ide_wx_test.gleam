@@ -474,3 +474,55 @@ pub fn handle_role_tolerates_the_9px_handle_size_test() {
   campy_ide_wx.handle_role_at(rect, 93, 74) |> should.equal(None)
   campy_ide_wx.handle_role_at(rect, 200, 130) |> should.equal(None)
 }
+
+/// The language server analysis copy rewrites the handlers dialect's dotted
+/// member imports into braced ones, one-for-one, so line numbers still map.
+pub fn analysis_text_rewrites_dotted_imports_test() {
+  let handlers =
+    "//// Greeter handlers.\n"
+    <> "\n"
+    <> "import campy_app.{type Effect, type Event, Log}\n"
+    <> "import campy_view.VText\n"
+    <> "import gleam/int\n"
+    <> "\n"
+    <> "pub fn main() {\n"
+    <> "  Nil\n"
+    <> "}\n"
+
+  campy_ide_wx.analysis_text(handlers)
+  |> should.equal(
+    "//// Greeter handlers.\n"
+    <> "\n"
+    <> "import campy_app.{type Effect, type Event, Log}\n"
+    <> "import campy_view.{VText}\n"
+    <> "import gleam/int\n"
+    <> "\n"
+    <> "pub fn main() {\n"
+    <> "  Nil\n"
+    <> "}\n",
+  )
+}
+
+/// Module-path imports (gleam/int) and braced imports pass through; the line
+/// count never changes, keeping diagnostics and the editor aligned.
+pub fn analysis_text_preserves_lines_and_module_paths_test() {
+  let handlers =
+    "import campy_view.VText\nimport gleam/int\nimport campy_app.{Log}\n"
+
+  let analysed = campy_ide_wx.analysis_text(handlers)
+
+  string.split(analysed, "\n") |> list.length |> should.equal(4)
+  should.equal(
+    analysed,
+    "import campy_view.{VText}\nimport gleam/int\nimport campy_app.{Log}\n",
+  )
+}
+
+/// The Code editor's handlers document lives in the generated analysis
+/// workspace as one file per module.
+pub fn handlers_path_points_at_the_analysis_workspace_test() {
+  let path = campy_ide_wx.handlers_path("greeter")
+
+  should.be_true(string.ends_with(path, "/src/greeter_handlers.gleam"))
+  should.be_true(string.contains(path, "generated/lsp"))
+}

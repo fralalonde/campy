@@ -1155,6 +1155,15 @@ pub fn highlight_gleam(shell: Shell, id: String) -> Nil {
   }
 }
 
+/// Token-color a highlighted editor's current buffer. Call after every
+/// `set_editor` (a document replacement resets the styling bytes).
+pub fn style_gleam(shell: Shell, id: String) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_style_gleam(widget.ref)
+    Error(_) -> Nil
+  }
+}
+
 /// The full text currently in a text editor (Scintilla keeps its own buffer,
 /// which differs from the last `set_editor` call once the user has typed).
 pub fn editor_text(shell: Shell, id: String) -> String {

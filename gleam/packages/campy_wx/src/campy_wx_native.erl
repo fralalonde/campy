@@ -12,8 +12,8 @@
     grid/2, grid_set/2, grid_configure/5, grid_cell/1,
     grid_number_cell/4, grid_text_cell/3, grid_read_only/4,
     editor/2, editor_set/3, editor_show_end/1, editor_gleam/1,
-    editor_get_text/1, editor_caret/1, editor_goto/3, editor_diagnostics/2,
-    editor_autocomplete/2,
+    editor_style_gleam/1, editor_get_text/1, editor_caret/1, editor_goto/3,
+    editor_diagnostics/2, editor_autocomplete/2,
     open_dialog/2, save_dialog/3, show_message/3,
     set_tooltip/2,
     canvas/2, paint_canvas/7, connect_design/2,
@@ -23,7 +23,7 @@
     set_items/3, set_enabled/2, set_visible/2, set_background/4, refresh_window/1, update_window/1, focus/1,
     focus_ignoring_children/1, set_editable/2, raise/1, destroy/1, apply_shortcuts/1,
     get_text/1, get_int/2, get_bool/2, get_selection/2,
-    now_ms/0, getenv/1
+    now_ms/0, getenv/1, editor_word_at/1, editor_replace_line/3
 ]).
 
 -include_lib("wx/include/wx.hrl").
@@ -490,38 +490,170 @@ editor_set(Editor, Text, ReadOnly) ->
 %% server diagnostics (squiggles + margin markers) and completion popups.
 %% ---------------------------------------------------------------------------
 
-%% Gleam highlighting on a Scintilla editor. wx ships a Rust lexer whose
-%% surface syntax matches Gleam closely (keywords, // comments, "strings",
-%% attributes); its keyword set is filled with Gleam's own words. Styles are
-%% view properties, so they survive document replacements.
+%% Gleam highlighting on a Scintilla editor. wxErlang exposes no indicators
+%% and no automatic Gleam lexer, so the editor uses the container lexer: the
+%% styles below are defined once here, and `editor_style_gleam` tokenizes the
+%% buffer eagerly (it is re-run after every document replacement). Diagnostics
+%% underline whole lines by restyling them with one of the underline styles.
 editor_gleam(Editor) ->
-    Keywords =
-        <<"alias as assert case const echo external fn if import implement let"
-          " opaque panic pub todo type use True False Nil">>,
-    wxStyledTextCtrl:setLexer(Editor, ?wxSTC_LEX_RUST),
-    wxStyledTextCtrl:setKeywords(Editor, 0, Keywords),
+    wxStyledTextCtrl:setLexer(Editor, ?wxSTC_LEX_CONTAINER),
     wxStyledTextCtrl:setWrapMode(Editor, ?wxSTC_WRAP_NONE),
     wxStyledTextCtrl:setIndentationGuides(Editor, ?wxSTC_IV_LOOKBOTH),
-    %% Keywords (rose), comments (grey-green, italic), strings (teal),
-    %% numbers (blue), operators (mid grey).
-    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_WORD,
-                                        {158, 33, 116}),
-    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_COMMENTLINE,
-                                        {104, 128, 104}),
-    wxStyledTextCtrl:styleSetItalic(Editor, ?wxSTC_RUST_COMMENTLINE, true),
-    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_COMMENTBLOCK,
-                                        {104, 128, 104}),
-    wxStyledTextCtrl:styleSetItalic(Editor, ?wxSTC_RUST_COMMENTBLOCK, true),
-    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_COMMENTLINEDOC,
-                                        {104, 128, 104}),
-    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_STRING,
-                                        {22, 120, 108}),
-    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_NUMBER,
-                                        {28, 96, 176}),
-    wxStyledTextCtrl:styleSetForeground(Editor, ?wxSTC_RUST_OPERATOR,
-                                        {90, 94, 104}),
+    wxStyledTextCtrl:setTabWidth(Editor, 2),
+    wxStyledTextCtrl:setUseTabs(Editor, false),
+    %% 1 keyword (rose), 2 comment (grey-green italic), 3 string (teal),
+    %% 4 number (blue), 5 operator (mid grey), 6 type-ish (brown).
+    wxStyledTextCtrl:styleSetForeground(Editor, 1, {158, 33, 116}),
+    wxStyledTextCtrl:styleSetForeground(Editor, 2, {104, 128, 104}),
+    wxStyledTextCtrl:styleSetItalic(Editor, 2, true),
+    wxStyledTextCtrl:styleSetForeground(Editor, 3, {22, 120, 108}),
+    wxStyledTextCtrl:styleSetForeground(Editor, 4, {28, 96, 176}),
+    wxStyledTextCtrl:styleSetForeground(Editor, 5, {90, 94, 104}),
+    wxStyledTextCtrl:styleSetForeground(Editor, 6, {140, 76, 24}),
+    %% Diagnostic underline styles: 21 error, 22 warning, 23 info.
+    wxStyledTextCtrl:styleSetForeground(Editor, 21, {204, 26, 79}),
+    wxStyledTextCtrl:styleSetUnderline(Editor, 21, true),
+    wxStyledTextCtrl:styleSetForeground(Editor, 22, {216, 130, 4}),
+    wxStyledTextCtrl:styleSetUnderline(Editor, 22, true),
+    wxStyledTextCtrl:styleSetForeground(Editor, 23, {86, 124, 204}),
+    wxStyledTextCtrl:styleSetUnderline(Editor, 23, true),
+    %% Margin markers per severity (Scintilla marks: circle, arrow, dots).
+    wxStyledTextCtrl:markerDefine(Editor, 0, ?wxSTC_MARK_CIRCLE),
+    wxStyledTextCtrl:markerSetBackground(Editor, 0, {204, 26, 79}),
+    wxStyledTextCtrl:markerDefine(Editor, 1, ?wxSTC_MARK_SHORTARROW),
+    wxStyledTextCtrl:markerSetBackground(Editor, 1, {216, 130, 4}),
+    wxStyledTextCtrl:markerDefine(Editor, 2, ?wxSTC_MARK_DOTDOTDOT),
+    wxStyledTextCtrl:markerSetBackground(Editor, 2, {86, 124, 204}),
     ok.
 
+%% Token-color the whole buffer. Runs after every document replacement (the
+%% styling bytes live in the document, so a replacement resets them).
+editor_style_gleam(Editor) ->
+    Runs = gleam_runs(wxStyledTextCtrl:getTextRaw(Editor)),
+    wxStyledTextCtrl:startStyling(Editor, 0),
+    apply_runs(Editor, Runs).
+
+apply_runs(_Editor, []) ->
+    ok;
+apply_runs(Editor, [{Length, Style} | Rest]) ->
+    wxStyledTextCtrl:setStyling(Editor, Length, Style),
+    apply_runs(Editor, Rest).
+
+%% ---------------------------------------------------------------------------
+%% A small Gleam tokenizer over the raw UTF-8 document. Positions in Scintilla
+%% are byte offsets, so runs are counted in bytes. Tokens per line:
+%% // comments, "strings", keywords, numbers, UpperCase identifiers (types and
+%% record constructors), operators. Multi-byte characters count as word parts.
+%% ---------------------------------------------------------------------------
+
+-define(GLEAM_KEYWORDS,
+    [<<"alias">>, <<"as">>, <<"assert">>, <<"case">>, <<"const">>, <<"echo">>,
+     <<"external">>, <<"fn">>, <<"if">>, <<"import">>, <<"implement">>,
+     <<"let">>, <<"opaque">>, <<"panic">>, <<"pub">>, <<"todo">>, <<"type">>,
+     <<"use">>, <<"True">>, <<"False">>, <<"Nil">>]).
+
+gleam_runs(Bin) ->
+    lists:flatten(gleam_lines(Bin, [])).
+
+gleam_lines(<<>>, Acc) ->
+    lists:reverse(Acc);
+gleam_lines(Bin, Acc) ->
+    case binary:split(Bin, <<"\n">>) of
+        [Line, Rest] ->
+            gleam_lines(Rest, [line_runs(Line) ++ [{1, 0}] | Acc]);
+        [Line] ->
+            %% The final chunk has no trailing newline.
+            gleam_lines(<<>>, [line_runs(Line) | Acc])
+    end.
+
+line_runs(Line) ->
+    lists:reverse(line_scan(Line, [])).
+
+line_scan(<<>>, Acc) ->
+    Acc;
+line_scan(<<"//", _/binary>> = Bin, Acc) ->
+    [{byte_size(Bin), 2} | Acc];
+line_scan(<<"\"", Rest/binary>>, Acc) ->
+    {Length, Rest2} = string_span(Rest),
+    line_scan(Rest2, [{Length + 1, 3} | Acc]);
+line_scan(Bin, Acc) ->
+    case word_len(Bin) of
+        {Length, Rest} when Length > 0 ->
+            Word = binary_part(Bin, 0, Length),
+            line_scan(Rest, [{Length, word_style(Word)} | Acc]);
+        _ ->
+            <<Char, Rest/binary>> = Bin,
+            Style = case Char of
+                C when C =:= $\s; C =:= $\t -> 0;
+                _ -> 5
+            end,
+            line_scan(Rest, [{1, Style} | Acc])
+    end.
+
+word_style(Word) ->
+    case lists:member(Word, ?GLEAM_KEYWORDS) of
+        true -> 1;
+        false ->
+            <<First, _/binary>> = Word,
+            case First of
+                C when C >= $0, C =< $9 -> 4;
+                C when C >= $A, C =< $Z -> 6;
+                _ -> 0
+            end
+    end.
+
+%% Word characters: ASCII letters, digits, underscore, and anything multi-byte.
+word_len(Bin) ->
+    word_len(Bin, 0, Bin).
+
+word_len(<<Char, Rest/binary>>, N, Whole) when
+        (Char >= $a andalso Char =< $z);
+        (Char >= $A andalso Char =< $Z);
+        (Char >= $0 andalso Char =< $9);
+        Char =:= $_;
+        Char >= 16#80 ->
+    word_len(Rest, N + 1, Whole);
+word_len(_Rest, N, Whole) ->
+    {N, binary_part(Whole, N, byte_size(Whole) - N)}.
+
+string_span(Bin) ->
+    string_span(Bin, 0).
+
+string_span(<<>>, N) ->
+    {N, <<>>};
+string_span(<<"\"", Rest/binary>>, N) ->
+    {N + 1, Rest};
+string_span(<<"\\", _Escaped, Rest/binary>>, N) ->
+    string_span(Rest, N + 2);
+string_span(<<_, Rest/binary>>, N) ->
+    string_span(Rest, N + 1).
+
+%% The word under the caret: its start and end offsets plus the text, or
+%% {error, none} when the caret is not on a word.
+editor_word_at(Editor) ->
+    Pos = wxStyledTextCtrl:getCurrentPos(Editor),
+    Start = wxStyledTextCtrl:wordStartPosition(Editor, Pos, true),
+    End = wxStyledTextCtrl:wordEndPosition(Editor, Pos, true),
+    case End > Start of
+        true ->
+            Text = unicode:characters_to_binary(
+                     wxStyledTextCtrl:getTextRange(Editor, Start, End)),
+            {ok, {Start, End, Text}};
+        false ->
+            {error, none}
+    end.
+
+%% Replace the text of a 0-based line (used by the LSP formatter).
+editor_replace_line(Editor, Line, NewText) ->
+    LineStart = wxStyledTextCtrl:positionFromLine(Editor, Line),
+    LineEnd = wxStyledTextCtrl:getLineEndPosition(Editor, Line),
+    wxStyledTextCtrl:setTargetStart(Editor, LineStart),
+    wxStyledTextCtrl:setTargetEnd(Editor, LineEnd),
+    wxStyledTextCtrl:replaceTarget(Editor, NewText),
+    ok.
+
+%% Show the end of a freshly rewritten source file, so an appended ABI stub is
+%% visible immediately after the event click opens the Code page.
 %% wxTextCtrl:getValue does not work on wxStyledTextCtrl; read the buffer
 %% directly.
 editor_get_text(Editor) ->
@@ -541,77 +673,45 @@ editor_goto(Editor, Line, Col) ->
     wxStyledTextCtrl:ensureCaretVisible(Editor),
     ok.
 
-%% Paint language-server diagnostics: squiggles under the offending lines and
-%% a margin marker at each one. Severity: 1 error, 2 warning, 3+ info.
-%% Rows are {StartLine, EndLine, Message, Severity} with 0-based lines.
+%% Paint language-server diagnostics: restyle the offending lines with an
+%% underline style (error/warning/info) and add a margin marker. wxErlang has
+%% no indicator API, so the underline is carried by styles 21/22/23 and the
+%% marker by the margin. Rows are {StartLine, EndLine, Message, Severity}
+%% with 0-based lines.
 editor_diagnostics(Editor, Rows) ->
-    diagnostics_styles(Editor),
-    Length = wxStyledTextCtrl:getTextLength(Editor),
-    clear_indicator(Editor, 0, Length),
-    clear_indicator(Editor, 1, Length),
-    clear_indicator(Editor, 2, Length),
-    wxStyledTextCtrl:markerDeleteAll(Editor, 0),
-    wxStyledTextCtrl:markerDeleteAll(Editor, 1),
-    wxStyledTextCtrl:markerDeleteAll(Editor, 2),
-    fill_diagnostics(Editor, Rows).
+    underline_diagnostics(Editor, Rows).
 
-diagnostics_styles(Editor) ->
-    %% 0: error (red squiggle + circle), 1: warning (amber squiggle + arrow),
-    %% 2: info (blue underline + bookmark-ish dot).
-    wxStyledTextCtrl:indicatorSetStyle(Editor, 0, ?wxSTC_INDIC_SQUIGGLE),
-    wxStyledTextCtrl:indicatorSetForeground(Editor, 0, {204, 26, 79}),
-    wxStyledTextCtrl:indicatorSetUnder(Editor, 0, true),
-    wxStyledTextCtrl:indicatorSetStyle(Editor, 1, ?wxSTC_INDIC_SQUIGGLE),
-    wxStyledTextCtrl:indicatorSetForeground(Editor, 1, {216, 130, 4}),
-    wxStyledTextCtrl:indicatorSetUnder(Editor, 1, true),
-    wxStyledTextCtrl:indicatorSetStyle(Editor, 2, ?wxSTC_INDIC_STRAIGHTBOX),
-    wxStyledTextCtrl:indicatorSetForeground(Editor, 2, {86, 124, 204}),
-    wxStyledTextCtrl:indicatorSetUnder(Editor, 2, true),
-    wxStyledTextCtrl:markerDefine(Editor, 0, ?wxSTC_MARK_CIRCLE),
-    wxStyledTextCtrl:markerSetBackground(Editor, 0, {204, 26, 79}),
-    wxStyledTextCtrl:markerDefine(Editor, 1, ?wxSTC_MARK_SHORTARROW),
-    wxStyledTextCtrl:markerSetBackground(Editor, 1, {216, 130, 4}),
-    wxStyledTextCtrl:markerDefine(Editor, 2, ?wxSTC_MARK_DOTDOTDOT),
-    wxStyledTextCtrl:markerSetBackground(Editor, 2, {86, 124, 204}),
-    ok.
-
-clear_indicator(Editor, Index, Length) ->
-    wxStyledTextCtrl:setIndicatorCurrent(Editor, Index),
-    wxStyledTextCtrl:indicatorClearRange(Editor, 0, Length),
-    ok.
-
-fill_diagnostics(_Editor, []) ->
+underline_diagnostics(_Editor, []) ->
     ok;
-fill_diagnostics(Editor, [{Line, EndLine, _Text, Severity} | Rest]) ->
-    {Index, Marker} = case Severity of
-        1 -> {0, 0};
-        2 -> {1, 1};
-        _ -> {2, 2}
+underline_diagnostics(Editor, [{Line, _EndLine, _Text, Severity} | Rest]) ->
+    {Style, Marker} = case Severity of
+        1 -> {21, 0};
+        2 -> {22, 1};
+        _ -> {23, 2}
     end,
     Start = wxStyledTextCtrl:positionFromLine(Editor, Line),
-    End = wxStyledTextCtrl:getLineEndPosition(Editor, EndLine),
+    End = wxStyledTextCtrl:getLineEndPosition(Editor, Line),
     case Start =:= -1 orelse End =:= -1 orelse End =< Start of
         false ->
-            wxStyledTextCtrl:setIndicatorCurrent(Editor, Index),
-            wxStyledTextCtrl:indicatorFillRange(Editor, Start, End - Start),
+            wxStyledTextCtrl:startStyling(Editor, Start),
+            wxStyledTextCtrl:setStyling(Editor, End - Start, Style),
             catch wxStyledTextCtrl:markerAdd(Editor, Line, Marker),
             ok;
         true ->
             ok
     end,
-    fill_diagnostics(Editor, Rest).
+    underline_diagnostics(Editor, Rest).
 
-%% Show the completion popup at the caret. Labels are joined with \n (id
+%% Show the completion popup at the caret. Labels are joined with \n (index
 %% separator 10) so labels containing spaces or punctuation stay whole.
 editor_autocomplete(_Editor, []) ->
     ok;
 editor_autocomplete(Editor, Labels) ->
     wxStyledTextCtrl:autoCompSetSeparator(Editor, 10),
     wxStyledTextCtrl:autoCompSetCancelAtStart(Editor, false),
-    Joined = join_labels(Labels),
     wxStyledTextCtrl:autoCompShow(Editor,
                                   wxStyledTextCtrl:getCurrentPos(Editor),
-                                  Joined),
+                                  join_labels(Labels)),
     ok.
 
 join_labels([Label]) ->
@@ -619,8 +719,6 @@ join_labels([Label]) ->
 join_labels([Label | Rest]) ->
     <<Label/binary, 10, (join_labels(Rest))/binary>>.
 
-%% Show the end of a freshly rewritten source file, so an appended ABI stub is
-%% visible immediately after the event click opens the Code page.
 %% wxTextCtrl:getValue does not work on wxStyledTextCtrl; read the buffer
 %% directly.
 %% Debug: the wx object id inside a ref.

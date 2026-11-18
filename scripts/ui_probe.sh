@@ -92,6 +92,25 @@ click 240 147
 sleep 1
 shot page-form-while-running
 
+# --- T5.2: language server in the Code editor -------------------------------
+# The Code tab, then type an unknown variable at the end of a line: the LS
+# publishes diagnostics within ~1s, painting a squiggle + margin marker.
+click 305 147
+sleep 2
+# Click at the end of the first handler body line (the editor keeps the
+# caret where clicked), then type an invalid reference.
+xdotool mousemove --window "$win" 700 340 click 1
+sleep 1
+xdotool key ctrl+End
+sleep 1
+xdotool type --delay 40 " boom"
+sleep 10
+shot t55-diagnostics
+# Undo the typed text and save (the LS sees the fix; the squiggle clears).
+xdotool key ctrl+z
+sleep 2
+shot t55-diagnostics-cleared
+
 # --- T4.3/G4: node manager — start a peer, deploy, drive, upgrade, kill -----
 # The Nodes tab is the fifth notebook tab: client ≈ (520, 147).
 click 520 147

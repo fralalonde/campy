@@ -96,7 +96,7 @@ trace_log_text(_) -> {error, nil}.
 %% (0-based lines).
 lsp_message({lsp_diagnostics, File, Rows}) ->
     {ok, {diagnostics_msg, File, Rows}};
-lsp_message({lsp_completions, Labels}) ->
+lsp_message({lsp_completions, _File, Labels}) ->
     {ok, {completions_msg, Labels}};
 lsp_message({lsp_symbols, _File, Items}) ->
     {ok, {symbols_msg, Items}};

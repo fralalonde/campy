@@ -285,11 +285,41 @@ pub fn editor(parent: Dynamic, id: Int) -> Dynamic
 @external(erlang, "campy_wx_native", "editor_set")
 pub fn editor_set(editor: Dynamic, text: String, read_only: Bool) -> Nil
 
+@external(erlang, "campy_wx_native", "editor_configure")
+pub fn editor_configure(editor: Dynamic) -> Nil
+
+@external(erlang, "campy_wx_native", "editor_autocomp")
+pub fn editor_autocomp(
+  editor: Dynamic,
+  entered: Int,
+  labels: List(String),
+) -> Nil
+
+@external(erlang, "campy_wx_native", "editor_word_at")
+pub fn editor_word_at(editor: Dynamic) -> Result(#(Int, Int, String), Nil)
+
+@external(erlang, "campy_wx_native", "editor_line_at")
+pub fn editor_line_at(editor: Dynamic) -> #(Int, Int)
+
+@external(erlang, "campy_wx_native", "editor_marker_add")
+pub fn editor_marker_add(editor: Dynamic, line: Int, severity: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "editor_marker_clear")
+pub fn editor_marker_clear(editor: Dynamic) -> Nil
+
+@external(erlang, "campy_wx_native", "editor_replace_line")
+pub fn editor_replace_line(editor: Dynamic, line: Int, new_text: String) -> Nil
+
 @external(erlang, "campy_wx_native", "editor_show_end")
 pub fn editor_show_end(editor: Dynamic) -> Nil
 
 @external(erlang, "campy_wx_native", "editor_gleam")
 pub fn editor_gleam(editor: Dynamic) -> Nil
+
+/// Token-color the editor's current buffer (container-lexer styling). Run
+/// after every document replacement: `set_editor` resets the styling bytes.
+@external(erlang, "campy_wx_native", "editor_style_gleam")
+pub fn editor_style_gleam(editor: Dynamic) -> Nil
 
 @external(erlang, "campy_wx_native", "editor_get_text")
 pub fn editor_get_text(editor: Dynamic) -> String

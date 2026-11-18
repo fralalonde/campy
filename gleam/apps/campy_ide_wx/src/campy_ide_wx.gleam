@@ -2408,8 +2408,9 @@ fn set_code(shell: campy_wx.Shell, state: model.State) {
     Ok(module) -> campy_wx.set_editor(shell, "code", module.handlers, False)
     Error(_) -> campy_wx.set_editor(shell, "code", "", True)
   }
-  // A document replacement resets the indicator ranges, so repaint the
-  // latest language-server diagnostics afterwards.
+  // Token-color the new document (a replacement resets the styling bytes),
+  // then paint the latest language-server diagnostics on top.
+  campy_wx.style_gleam(shell, "code")
   paint_diagnostics(shell, state)
 }
 
@@ -2475,7 +2476,7 @@ pub fn sync_lsp(shell: campy_wx.Shell, state: model.State) -> model.State {
     Error(_) -> state
     Ok(module) -> {
       let file = handlers_path(module.slug)
-      let text = campy_wx.editor_text(shell, "code")
+      let text = analysis_text(campy_wx.editor_text(shell, "code"))
       case state.lsp.client {
         None -> state
         Some(client) -> {
@@ -2485,6 +2486,7 @@ pub fn sync_lsp(shell: campy_wx.Shell, state: model.State) -> model.State {
               case text == state.lsp.text {
                 True -> state
                 False -> {
+                  campy_wx.style_gleam(shell, "code")
                   campy_lsp.change(client, file, state.lsp.version + 1, text)
                   model.update(
                     state,
@@ -2500,6 +2502,45 @@ pub fn sync_lsp(shell: campy_wx.Shell, state: model.State) -> model.State {
         }
       }
     }
+  }
+}
+
+/// Handlers documents use a dotted-import dialect (`import campy_view.VText`)
+/// that campy_appgen normalises when it generates app modules; plain Gleam
+/// rejects the dotted form. The language server needs real Gleam, so rewrite
+/// dotted member imports into braced ones. The rewrite is strictly
+/// line-for-line, so the server's line numbers map one-to-one onto the
+/// editor's text.
+pub fn analysis_text(handlers: String) -> String {
+  handlers
+  |> string.split("\n")
+  |> list.map(plain_import_line)
+  |> string.join("\n")
+}
+
+fn plain_import_line(line: String) -> String {
+  let trimmed = string.trim_start(line)
+  case string.starts_with(trimmed, "import ") {
+    False -> line
+    True -> {
+      let path =
+        string.trim(string.drop_start(trimmed, string.length("import ")))
+      case string.split_once(path, ".") {
+        Ok(#(module, member)) ->
+          case member_starts_uppercase(member) {
+            True -> "import " <> module <> ".{" <> string.trim(member) <> "}"
+            False -> line
+          }
+        Error(_) -> line
+      }
+    }
+  }
+}
+
+fn member_starts_uppercase(member: String) -> Bool {
+  case string.to_graphemes(member) {
+    [first, ..] -> first != string.lowercase(first)
+    [] -> False
   }
 }
 
@@ -2562,9 +2603,33 @@ fn handle_lsp(
     DiagnosticsMsg(file, rows) -> {
       let state =
         model.update(state, model.LspDiagnostics(file, to_diags(rows)))
+      // Console evidence: one line per diagnostic of the open document.
+      let state =
+        list.fold(rows, state, fn(state, row) {
+          let #(line, _end, text, severity) = row
+          let kind = case severity {
+            1 -> "error"
+            2 -> "warning"
+            _ -> "info"
+          }
+          model.update(
+            state,
+            model.Log(
+              "code "
+              <> kind
+              <> " line "
+              <> int.to_string(line + 1)
+              <> ": "
+              <> string.slice(text, 0, 80),
+            ),
+          )
+        })
       // Squiggles belong to the document the editor is showing.
       case state.lsp.file == Some(file) {
-        True -> paint_diagnostics(shell, state)
+        True -> {
+          set_console(shell, state)
+          paint_diagnostics(shell, state)
+        }
         False -> Nil
       }
       state
@@ -2611,7 +2676,9 @@ pub fn source_text(state: model.State) -> String {
 }
 
 fn set_source(shell: campy_wx.Shell, state: model.State) {
+  campy_wx.highlight_gleam(shell, "source")
   campy_wx.set_editor(shell, "source", source_text(state), True)
+  campy_wx.style_gleam(shell, "source")
 }
 
 fn handlers_of(state: model.State) -> String {
