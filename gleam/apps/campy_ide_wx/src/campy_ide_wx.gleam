@@ -2725,14 +2725,7 @@ fn handle_lsp(
           set_console(shell, state)
           paint_diagnostics(shell, state)
         }
-        False ->
-          io.println(
-            "[lsp] diagnostics for another document: "
-            <> file
-            <> " (open: "
-            <> string.inspect(state.lsp.file)
-            <> ")",
-          )
+        False -> Nil
       }
       state
     }

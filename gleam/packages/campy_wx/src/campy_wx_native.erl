@@ -726,16 +726,19 @@ underline_diagnostics(Editor, [{Line, _EndLine, _Text, Severity} | Rest]) ->
     end,
     underline_diagnostics(Editor, Rest).
 
-%% Show the completion popup at the caret. Labels are joined with \n (index
-%% separator 10) so labels containing spaces or punctuation stay whole.
+%% Show the completion popup, replacing the word prefix under the caret.
+%% autoCompShow's first argument is how many characters of the word are
+%% already typed; the popup then covers them, so choosing an item replaces
+%% the partial word. Labels are joined with \n (separator 10) so labels
+%% containing spaces or punctuation stay whole.
 editor_autocomplete(_Editor, []) ->
     ok;
 editor_autocomplete(Editor, Labels) ->
+    Pos = wxStyledTextCtrl:getCurrentPos(Editor),
+    Start = wxStyledTextCtrl:wordStartPosition(Editor, Pos, true),
     wxStyledTextCtrl:autoCompSetSeparator(Editor, 10),
     wxStyledTextCtrl:autoCompSetCancelAtStart(Editor, false),
-    wxStyledTextCtrl:autoCompShow(Editor,
-                                  wxStyledTextCtrl:getCurrentPos(Editor),
-                                  join_labels(Labels)),
+    wxStyledTextCtrl:autoCompShow(Editor, Pos - Start, join_labels(Labels)),
     ok.
 
 join_labels([Label]) ->
