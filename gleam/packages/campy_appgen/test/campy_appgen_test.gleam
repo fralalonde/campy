@@ -148,3 +148,31 @@ fn count_occurrences(haystack: String, needle: String) -> Int {
   |> list.length
   |> fn(count) { count - 1 }
 }
+
+pub fn handler_doc_comments_and_imports_are_handled_test() {
+  let source =
+    "//// Notes handlers.\n\nimport campy_app.{type Effect, type Event, Log}\nimport campy_view.VText\n\npub type State {\n  State(text: String)\n}\n\npub fn init() -> State {\n  State(\"\")\n}\n"
+
+  let assert Ok(generated) =
+    campy_appgen.generate(
+      "notes",
+      document([button("body", ["change"])]),
+      source,
+    )
+
+  // The user doc comment is first, imports are merged exactly once, and the
+  // body keeps only declarations.
+  let lines = string.split(generated, "\n")
+  let assert [first, ..] = lines
+  first |> should.equal("//// Notes handlers.")
+  count_occurrences(generated, "import campy_app.")
+  |> should.equal(1)
+  count_occurrences(generated, "import campy_view.")
+  |> should.equal(1)
+  string.contains(generated, "import campy_view.{type Document, VText}")
+  |> should.equal(True)
+  string.contains(generated, "pub type State {")
+  |> should.equal(True)
+  string.contains(generated, "import campy_view.VText")
+  |> should.equal(False)
+}

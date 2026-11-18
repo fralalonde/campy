@@ -26,7 +26,7 @@ pub type Event {
 
 pub type Effect {
   Log(text: String)
-  EffectNotify(text: String)
+  Notify(text: String)
   Stop
 }
 
@@ -35,7 +35,9 @@ pub type Reply {
   View(document: Document, generation: Int)
   /// A console line: `Log` effects and contained handler errors.
   Report(text: String)
-  Notify(text: String)
+  /// Delivery of the app's `Notify` effect (distinct from the effect itself,
+  /// whose constructor name must stay unambiguous for user handlers).
+  Notified(text: String)
   /// The ABI v2 `state_version` after a (re)start or upgrade.
   Version(Int)
   Stopped
@@ -211,8 +213,8 @@ fn run_effects(data: Data, effects: List(Effect)) -> Effects {
       process.send(data.reply, Report(text))
       run_effects(data, rest)
     }
-    [EffectNotify(text), ..rest] -> {
-      process.send(data.reply, Notify(text))
+    [Notify(text), ..rest] -> {
+      process.send(data.reply, Notified(text))
       run_effects(data, rest)
     }
     [Stop, ..] -> {

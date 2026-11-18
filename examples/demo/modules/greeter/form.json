@@ -24,6 +24,16 @@
           "text": "your name",
           "w": 240
         }
+      },
+      {
+        "kind": "button",
+        "id": "greet",
+        "props": {
+          "text": "Greet"
+        },
+        "events": [
+          "click"
+        ]
       }
     ]
   }

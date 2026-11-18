@@ -3,7 +3,7 @@
 //// resolves against a real loaded module.
 
 import campy_app.{
-  type Effect, type Event, type Spec, EffectNotify, Event, EventReceived, Log,
+  type Effect, type Event, type Spec, Event, EventReceived, Log, Notify,
   SnapshotRequest, Stop, StopRequest, Upgrade,
 }
 
@@ -49,7 +49,7 @@ pub fn view(_state: State) -> Document {
 }
 
 pub fn ok_click(state: State, _event: Event) -> #(State, List(Effect)) {
-  #(State(state.count + 1), [Log("ok"), EffectNotify("hello")])
+  #(State(state.count + 1), [Log("ok"), Notify("hello")])
 }
 
 pub fn boom_click(_state: State, _event: Event) -> #(State, List(Effect)) {
@@ -116,7 +116,7 @@ pub fn event_dispatches_and_publishes_the_next_generation_test() {
   process.send(h.subject, click("ok", "click"))
 
   let assert Ok(campy_app.Report("ok")) = process.receive(h.reply, 1000)
-  let assert Ok(campy_app.Notify("hello")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.Notified("hello")) = process.receive(h.reply, 1000)
   let assert Ok(campy_app.View(_, 2)) = process.receive(h.reply, 1000)
 }
 
@@ -128,7 +128,7 @@ pub fn missing_handler_is_a_no_op_test() {
   // No reply at all; the next handled event still advances 1 -> 2.
   process.send(h.subject, click("ok", "click"))
   let assert Ok(campy_app.Report("ok")) = process.receive(h.reply, 1000)
-  let assert Ok(campy_app.Notify("hello")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.Notified("hello")) = process.receive(h.reply, 1000)
   let assert Ok(campy_app.View(_, 2)) = process.receive(h.reply, 1000)
 }
 
@@ -138,7 +138,7 @@ pub fn undeclared_event_is_ignored_test() {
   process.send(h.subject, click("ok", "paint"))
   process.send(h.subject, click("ok", "click"))
   let assert Ok(campy_app.Report("ok")) = process.receive(h.reply, 1000)
-  let assert Ok(campy_app.Notify("hello")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.Notified("hello")) = process.receive(h.reply, 1000)
   let assert Ok(campy_app.View(_, 2)) = process.receive(h.reply, 1000)
 }
 
@@ -154,7 +154,7 @@ pub fn crashing_handler_is_contained_test() {
   // The actor is still alive and the state is unchanged (count 0 -> 1).
   process.send(h.subject, click("ok", "click"))
   let assert Ok(campy_app.Report("ok")) = process.receive(h.reply, 1000)
-  let assert Ok(campy_app.Notify("hello")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.Notified("hello")) = process.receive(h.reply, 1000)
   let assert Ok(campy_app.View(_, 2)) = process.receive(h.reply, 1000)
 }
 
@@ -178,7 +178,7 @@ pub fn upgrade_runs_migrate_and_republishes_test() {
   drain_initial(h)
   process.send(h.subject, click("ok", "click"))
   let assert Ok(campy_app.Report("ok")) = process.receive(h.reply, 1000)
-  let assert Ok(campy_app.Notify("hello")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.Notified("hello")) = process.receive(h.reply, 1000)
   let assert Ok(campy_app.View(_, 2)) = process.receive(h.reply, 1000)
 
   process.send(h.subject, Upgrade("campy_app_test", 1, 2))
@@ -188,7 +188,7 @@ pub fn upgrade_runs_migrate_and_republishes_test() {
   // The migrated state carried count + 100.
   process.send(h.subject, click("ok", "click"))
   let assert Ok(campy_app.Report("ok")) = process.receive(h.reply, 1000)
-  let assert Ok(campy_app.Notify("hello")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.Notified("hello")) = process.receive(h.reply, 1000)
   let assert Ok(campy_app.View(_, 4)) = process.receive(h.reply, 1000)
 
   let assert campy_app.Snapshot(state, 2) = snapshot(h)
@@ -202,7 +202,7 @@ pub fn upgrade_with_the_running_version_is_a_no_op_test() {
   process.send(h.subject, Upgrade("campy_app_test", 1, 1))
   process.send(h.subject, click("ok", "click"))
   let assert Ok(campy_app.Report("ok")) = process.receive(h.reply, 1000)
-  let assert Ok(campy_app.Notify("hello")) = process.receive(h.reply, 1000)
+  let assert Ok(campy_app.Notified("hello")) = process.receive(h.reply, 1000)
   // No migrate ran and no upgrade view: the handled event published gen 2.
   let assert Ok(campy_app.View(_, 2)) = process.receive(h.reply, 1000)
 }
