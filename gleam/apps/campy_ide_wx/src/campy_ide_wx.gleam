@@ -20,6 +20,7 @@ import campy_view.{type Node, VBool, VInt, VList, VMap, VText}
 import campy_view/diff
 import campy_wx
 import gleam/dict
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process
 import gleam/int
 import gleam/io
@@ -157,6 +158,9 @@ fn loop(
         "nodes-deploy" -> deploy_to_peer(shell, state, current, dir)
         "nodes-redeploy" -> redeploy_on_peer(shell, state, current, dir)
         "nodes-app-stop" -> toggle_run(shell, state, current, dir)
+        "debug-state" -> dump_state(shell, state, current, dir)
+        "debug-trace" -> toggle_trace(shell, state, current, dir)
+        "debug-refresh" -> refresh_processes(shell, state, current, dir)
         "menu-help-keys" -> {
           campy_wx.show_message(shell, "Keyboard shortcuts", help_text())
           loop(shell, state, current, dir, drag)
@@ -197,7 +201,16 @@ fn loop(
       }
       loop(shell, state, current, dir, drag)
     }
-    campy_wx.Message(_message) -> loop(shell, state, current, dir, drag)
+    campy_wx.Message(message) ->
+      case trace_log_text(message) {
+        Ok(text) -> {
+          io.println("[trace] " <> text)
+          let state = model.update(state, model.RunReport(text))
+          set_console(shell, state)
+          loop(shell, state, current, dir, drag)
+        }
+        Error(_) -> loop(shell, state, current, dir, drag)
+      }
     campy_wx.Idle -> loop(shell, state, current, dir, drag)
   }
 }
@@ -554,6 +567,31 @@ fn pause_on(node: String, pid: process.Pid) -> Result(Nil, String)
 @external(erlang, "campy_ide_wx_ffi", "resume_on")
 fn resume_on(node: String, pid: process.Pid) -> Result(Nil, String)
 
+@external(erlang, "campy_ide_wx_ffi", "format_term")
+fn format_term(term: a) -> String
+
+@external(erlang, "campy_ide_wx_ffi", "spawn_tracer")
+fn spawn_tracer(node: String, master: process.Pid, label: String) -> Dynamic
+
+@external(erlang, "campy_ide_wx_ffi", "trace_send_receive")
+fn trace_send_receive(
+  node: String,
+  pid: process.Pid,
+  tracer: Dynamic,
+  on: Bool,
+) -> Result(Nil, String)
+
+@external(erlang, "campy_ide_wx_ffi", "stop_tracer")
+fn stop_tracer(node: String, tracer: Dynamic) -> Nil
+
+@external(erlang, "campy_ide_wx_ffi", "processes_on")
+fn processes_on(
+  node: String,
+) -> Result(List(#(String, Int, Int, String)), String)
+
+@external(erlang, "campy_ide_wx_ffi", "trace_log_text")
+fn trace_log_text(message: anything) -> Result(String, Nil)
+
 /// The ebin directories a peer needs for the runtime; paths under the repo
 /// root so they resolve on the (local) peer node too.
 fn runtime_dirs() -> List(String) {
@@ -659,6 +697,93 @@ fn write_scratch_package(dir: String) -> Result(Nil, String) {
       <> root()
       <> "/gleam/packages/campy_app\" }\n",
   )
+}
+
+/// Dump the attached app's state: SnapshotRequest round trip, the state term
+/// formatted into the console.
+fn dump_state(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+) {
+  let previous = state
+  let state = case state.running {
+    None -> model.update(state, model.Log("Nothing running"))
+    Some(running) -> {
+      let me = process.new_subject()
+      process.send(running.dispatch, campy_app.SnapshotRequest(me))
+      case process.receive(me, 2000) {
+        Ok(campy_app.Snapshot(snapshot, version)) -> {
+          io.println("[app] state: " <> format_term(snapshot))
+          model.update(
+            state,
+            model.RunReport(
+              "state version "
+              <> int.to_string(version)
+              <> ": "
+              <> format_term(snapshot),
+            ),
+          )
+        }
+        Error(_) -> model.update(state, model.Log("state request timed out"))
+      }
+    }
+  }
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  refresh(shell, Some(previous), state)
+  loop(shell, state, next, dir, NoDrag)
+}
+
+/// Toggle send/receive tracing on the attached app's actor. Trace lines come
+/// back as campy_wx.Message({trace_log, ...}) and land in the console.
+fn toggle_trace(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+) {
+  let previous = state
+  let state = case state.running, state.tracer {
+    Some(running), Some(tracer) -> {
+      stop_tracer(running.node, tracer)
+      model.update(state, model.TracingStopped)
+    }
+    Some(running), None -> {
+      let assert Ok(actor) = process.subject_owner(running.dispatch)
+      let tracer =
+        spawn_tracer(
+          running.node,
+          process.self(),
+          running.slug <> "@" <> running.node,
+        )
+      case trace_send_receive(running.node, actor, tracer, True) {
+        Ok(_) -> model.update(state, model.TracingStarted(tracer))
+        Error(reason) ->
+          model.update(state, model.Log("trace failed: " <> reason))
+      }
+    }
+    None, _ -> model.update(state, model.Log("Nothing running"))
+  }
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  refresh(shell, Some(previous), state)
+  loop(shell, state, next, dir, NoDrag)
+}
+
+/// Re-read the process list of the app's node.
+fn refresh_processes(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+) {
+  let previous = state
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  set_debug(shell, state)
+  loop(shell, state, next, dir, NoDrag)
 }
 
 /// Start a peer node named after the Nodes page field.
@@ -1663,6 +1788,7 @@ fn page_selected(state: model.State, value: campy_view.Value) -> model.State {
     VInt(1) -> model.update(state, model.ShowCode)
     VInt(2) -> model.update(state, model.ShowSource)
     VInt(4) -> model.update(state, model.ShowNodes)
+    VInt(5) -> model.update(state, model.ShowDebug)
     VInt(_) -> model.update(state, model.ShowTabs)
     _ -> state
   }
@@ -1972,6 +2098,7 @@ fn refresh(
       set_source(shell, state)
       set_console(shell, state)
       set_nodes(shell, state)
+      set_debug(shell, state)
       campy_wx.select_page(shell, "tabs", page_index(state))
     }
     Some(previous) -> {
@@ -2001,6 +2128,10 @@ fn refresh(
       }
       case previous.peers == state.peers {
         False -> set_nodes(shell, state)
+        True -> Nil
+      }
+      case previous.debug_view == state.debug_view {
+        False -> set_debug(shell, state)
         True -> Nil
       }
     }
@@ -2053,17 +2184,21 @@ fn sync_shortcuts(
 }
 
 pub fn page_index(state: model.State) -> Int {
-  case state.nodes_view {
-    // The Nodes page is an explicit choice; it wins even while an app runs.
-    True -> 4
+  case state.debug_view {
+    True -> 5
     False ->
-      case state.running {
-        Some(_) -> 3
-        None ->
-          case state.source_view, state.code_view {
-            True, _ -> 2
-            False, True -> 1
-            False, False -> 0
+      case state.nodes_view {
+        // The Nodes page is an explicit choice; it wins even while an app runs.
+        True -> 4
+        False ->
+          case state.running {
+            Some(_) -> 3
+            None ->
+              case state.source_view, state.code_view {
+                True, _ -> 2
+                False, True -> 1
+                False, False -> 0
+              }
           }
       }
   }
@@ -2140,6 +2275,28 @@ fn typed_grid_editors(
       }
     })
   Nil
+}
+
+fn set_debug(shell: campy_wx.Shell, state: model.State) {
+  let node = case state.running {
+    Some(running) -> running.node
+    None -> ""
+  }
+  case processes_on(node) {
+    Ok(rows) ->
+      campy_wx.set_items(
+        shell,
+        "debug-list",
+        list.map(rows, fn(row) {
+          row.0
+          <> "  r"
+          <> int.to_string(row.1)
+          <> "  q"
+          <> int.to_string(row.2)
+        }),
+      )
+    Error(_) -> campy_wx.set_items(shell, "debug-list", [])
+  }
 }
 
 fn set_nodes(shell: campy_wx.Shell, state: model.State) {
@@ -2597,6 +2754,7 @@ fn centre(state: model.State) -> Node {
         source_page(),
         run_page(state),
         nodes_page(state),
+        debug_page(state),
       ]),
     campy_view.node("panel", "console-header")
       |> campy_view.with_props([
@@ -2661,6 +2819,57 @@ fn source_page() -> Node {
     campy_view.node("editor", "source")
     |> campy_view.with_props([#("grow", VBool(True))])
     |> campy_view.with_events([]),
+  ])
+}
+
+/// The Debug page: the attached app's process list, its state snapshot, and
+/// a send/receive trace toggle whose output lands in the console.
+fn debug_page(state: model.State) -> Node {
+  campy_view.node("page", "page-debug")
+  |> campy_view.with_props([
+    #("text", VText("Debug")),
+    #("layout", VText("column")),
+  ])
+  |> campy_view.with_children([
+    campy_view.node("panel", "debug-controls")
+      |> campy_view.with_props([
+        #("layout", VText("row")),
+        #("border", VInt(4)),
+        #("h", VInt(34)),
+      ])
+      |> campy_view.with_children([
+        campy_view.node("button", "debug-state")
+          |> campy_view.with_events(["click"])
+          |> campy_view.with_props([#("text", VText("Dump state"))]),
+        campy_view.node("button", "debug-trace")
+          |> campy_view.with_events(["click"])
+          |> campy_view.with_props([
+            #(
+              "text",
+              VText(case state.tracer {
+                Some(_) -> "Stop tracing"
+                None -> "Trace send/receive"
+              }),
+            ),
+          ]),
+        campy_view.node("button", "debug-refresh")
+          |> campy_view.with_events(["click"])
+          |> campy_view.with_props([#("text", VText("Refresh processes"))]),
+      ]),
+    campy_view.node("label", "debug-list-label")
+      |> campy_view.with_props([
+        #(
+          "text",
+          VText(
+            "Processes on the app's node (pid, reductions, queue, initial call):",
+          ),
+        ),
+      ]),
+    campy_view.node("list", "debug-list")
+      |> campy_view.with_props([
+        #("grow", VBool(True)),
+        #("items", VList([])),
+      ]),
   ])
 }
 

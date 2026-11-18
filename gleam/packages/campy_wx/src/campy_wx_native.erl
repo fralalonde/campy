@@ -859,6 +859,9 @@ event_type(Event) when is_tuple(Event) ->
     case element(1, Event) of
         % wxGrid edits arrive as wxGridEvent records, not wxCommandEvent.
         wxGrid -> <<"command">>;
+        % Notebook page changes arrive as wxBookCtrl records, not wxCommand;
+        % only the (post-change) page_changed selection is a logical command.
+        wxBookCtrl -> <<"command">>;
         % Tree selection is a wxTreeEvent; only the selection change is a
         % logical command. Expanding/collapsing must not fire `select`.
         wxTree ->

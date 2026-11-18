@@ -108,6 +108,31 @@ sleep 2
 click 882 173
 sleep 20
 shot t43-peer-redeploy
+# --- T4.4: debug page — state dump, send/receive trace, process list --------
+# The Debug tab is the sixth notebook tab: client ≈ (583, 147).
+click 583 147
+sleep 2
+shot t44-debug-page
+# Dump state (first button in the debug row).
+click 240 173
+sleep 2
+shot t44-state-dump
+# Trace send/receive on the actor; the greet below feeds the console lines.
+click 390 173
+sleep 2
+# Greet on the Run page to generate traced traffic.
+click 451 147
+sleep 1
+click 505 235
+sleep 2
+# Back to Debug and stop tracing.
+click 583 147
+sleep 1
+shot t44-trace
+click 390 173
+sleep 2
+shot t44-debug-after
+
 # Stop the peer: the app attached to it detaches and the console reports it.
 click 604 173
 sleep 3

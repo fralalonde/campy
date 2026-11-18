@@ -17,6 +17,8 @@ import campy_peer.{type Peer}
 import campy_project.{type Module, type Project}
 import campy_view.{type Node, type Value, VText}
 import gleam/dict
+import gleam/dynamic.{type Dynamic}
+import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -41,6 +43,8 @@ pub type State {
     /// The generated-source page. At most one of `code_view` and
     /// `source_view` is true; both false means the design canvas (Form).
     source_view: Bool,
+    /// The Debug page, like nodes_view an explicit page choice.
+    debug_view: Bool,
     /// The Nodes page. It overrides the Form/Code/Source flags while set;
     /// Run (an attached app) still wins because page_index checks running
     /// first.
@@ -62,6 +66,9 @@ pub type State {
     peers: List(Peer),
     /// The name typed into the Nodes page's peer-name field.
     nodes_name: String,
+    /// The send/receive tracer for the attached app, when tracing is on.
+    /// It lives on the app's node; the pid is carried as an opaque term.
+    tracer: Option(Dynamic),
     /// The peer the app tree selection points at, by node name.
     selected_peer: Option(String),
   )
@@ -113,7 +120,10 @@ pub type Command {
   PeerGone(String)
   SetNodesName(String)
   ShowNodes
+  ShowDebug
   ShowTabs
+  TracingStarted(Dynamic)
+  TracingStopped
   SetHandlers(String)
   OpenHandler(control_id: String, event: String)
 }
@@ -132,12 +142,14 @@ pub fn new(project: Project) -> State {
       code_view: False,
       source_view: False,
       nodes_view: False,
+      debug_view: False,
       clipboard: [],
       armed: None,
       running: None,
       live_view: None,
       peers: [],
       nodes_name: "node1",
+      tracer: None,
       selected_peer: None,
     )
 
@@ -1259,8 +1271,13 @@ pub fn update(state: State, command: Command) -> State {
     PeerSelected(node) -> peer_selected(state, node)
     PeerGone(node) -> peer_gone(state, node)
     SetNodesName(name) -> State(..state, nodes_name: name)
-    ShowNodes -> State(..state, nodes_view: True)
-    ShowTabs -> State(..state, nodes_view: False)
+    ShowNodes -> State(..state, nodes_view: True, debug_view: False)
+    ShowDebug -> State(..state, debug_view: True, nodes_view: False)
+    ShowTabs -> State(..state, nodes_view: False, debug_view: False)
+    TracingStarted(tracer) ->
+      State(..state, tracer: Some(tracer))
+      |> log("tracing send/receive on the app actor")
+    TracingStopped -> State(..state, tracer: None)
     SetControlRect(id, rect) -> set_control_rect(state, id, rect)
     SetControlProp(id, name, value) -> set_control_prop(state, id, name, value)
     SetHandlers(handlers) -> set_handlers(state, handlers)

@@ -29,5 +29,6 @@ campy_design = { path = "../campy_design" }
 campy_peer = { path = "../campy_peer" }
 campy_project = { path = "../campy_project" }
 campy_view = { path = "../campy_view" }
+gleam_erlang = { version = ">= 1.3.0 and < 2.0.0" }
 gleam_stdlib = { version = ">= 0.70.0 and < 1.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }

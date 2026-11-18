@@ -1,5 +1,5 @@
 -module(campy_ide_wx_ffi).
--export([make_dir/1, write_file/2, compile_and_load/2, cwd/0, start_app_on/3, load_code_on/3, pause_on/2, resume_on/2]).
+-export([make_dir/1, write_file/2, compile_and_load/2, cwd/0, start_app_on/3, load_code_on/3, pause_on/2, resume_on/2, format_term/1, spawn_tracer/3, trace_send_receive/4, stop_tracer/2, processes_on/1, trace_log_text/1]).
 
 make_dir(Dir) ->
     case filelib:ensure_path(Dir) of
@@ -74,6 +74,51 @@ resume_on(Node, Pid) ->
 
 node_name(Node) when is_binary(Node) -> binary_to_atom(Node, utf8);
 node_name(Node) when is_atom(Node) -> Node.
+
+%% The debug page's process list: on the peer when the app lives there,
+%% locally otherwise.
+processes_on(Node) when is_binary(Node), byte_size(Node) > 0 ->
+    case rpc:call(node_name(Node), campy_runner, processes, [], 15000) of
+        {badrpc, Reason} -> {error, reason(Reason)};
+        Rows -> {ok, Rows}
+    end;
+processes_on(_) ->
+    {ok, campy_runner:processes()}.
+
+%% Decode a trace_log message forwarded by the tracer process.
+trace_log_text({trace_log, Text}) -> {ok, Text};
+trace_log_text(_) -> {error, nil}.
+
+%% Format any term (an app's state snapshot) for the debug viewer.
+format_term(Term) ->
+    unicode:characters_to_binary(
+        string:slice(io_lib:format("~p", [Term]), 0, 800)).
+
+%% The tracer runs ON the peer (erlang:trace accepts only local tracers);
+%% campy_runner_ffi:tracer_loop forwards the events to the master pid here.
+spawn_tracer(Node, Master, Label) ->
+    case rpc:call(node_name(Node), erlang, spawn,
+                  [campy_runner_ffi, tracer_loop, [Master, Label]]) of
+        {badrpc, Reason} -> erlang:error({badrpc, Reason});
+        Tracer -> Tracer
+    end.
+
+%% Trace send/receive on the actor process, with the tracer on the same node.
+trace_send_receive(Node, Pid, Tracer, true) ->
+    Flags = [send, 'receive', {tracer, Tracer}],
+    case rpc:call(node_name(Node), erlang, trace, [Pid, true, Flags], 15000) of
+        Count when is_integer(Count) ->
+            {ok, nil};
+        {badrpc, Reason} -> {error, reason(Reason)};
+        Other -> {error, format("trace: ~p", [Other])}
+    end;
+trace_send_receive(_Node, _Pid, _Tracer, false) ->
+    {ok, nil}.
+
+%% Stop a tracer living on the app's node; cross-node send is fine.
+stop_tracer(_Node, Tracer) ->
+    Tracer ! stop,
+    ok.
 
 format(Template, Arguments) ->
     unicode:characters_to_binary(io_lib:format(Template, Arguments)).

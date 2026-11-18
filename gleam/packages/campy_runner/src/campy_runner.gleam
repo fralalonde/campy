@@ -58,6 +58,12 @@ pub fn status() -> List(#(String, String))
 @external(erlang, "campy_runner_ffi", "init_of")
 pub fn init_of(module: String) -> Result(Dynamic, String)
 
+/// The interesting processes on this node for the debug page: user processes
+/// only (skip the OTP machinery), with pid, reductions, message queue length
+/// and initial call. Called ON the peer via rpc.
+@external(erlang, "campy_runner_ffi", "processes")
+pub fn processes() -> List(#(String, Int, Int, String))
+
 /// Purge and delete an installed module (rollback).
 @external(erlang, "campy_runner_ffi", "purge")
 pub fn purge(module: String) -> Nil
