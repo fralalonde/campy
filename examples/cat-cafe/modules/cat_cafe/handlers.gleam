@@ -6,6 +6,7 @@
 
 import campy_app.{type Effect, type Event, Log, Notify, SetProp}
 import campy_view.{VInt, VText}
+import gleam/int
 
 pub type State {
   State(snacks: Int, pets: Int)

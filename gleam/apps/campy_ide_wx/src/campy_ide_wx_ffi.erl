@@ -47,8 +47,12 @@ compile_and_load(Dir, Module) ->
             case code:ensure_loaded(Atom) of
                 {module, _} -> {ok, nil};
                 {error, Reason2} ->
+                    %% ~ts, not ~s: gleam's compiler output contains
+                    %% codepoints above 255 (arrows, box characters), and
+                    %% plain ~s raises badarg on those — crashing the IDE
+                    %% instead of reporting the compile failure.
                     {error, unicode:characters_to_binary(
-                              io_lib:format("~p: ~s", [Reason2, Out]))}
+                              io_lib:format("~p: ~ts", [Reason2, Out]))}
             end
     end.
 
