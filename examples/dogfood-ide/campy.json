@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "title": "CampyIDE Dogfood",
+  "modules": [
+    "editor_window"
+  ]
+}
