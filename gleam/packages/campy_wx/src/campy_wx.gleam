@@ -5,10 +5,13 @@
 //// `mount`/`apply` are synchronous calls, and `next` is the single receive
 //// point for wx events plus the caller's own messages.
 
+import campy_catalog
+import campy_design
 import campy_view.{
   type Node, type Patch, type Value, Insert, Order, Remove, Replace, SetEvents,
   SetProps, VBool, VInt, VMap, VText,
 }
+import campy_view/diff
 import campy_wx/native
 import campy_wx/plan
 import gleam/dict.{type Dict}
@@ -21,6 +24,8 @@ import gleam/result
 pub type Incoming {
   /// A declared view event: control id, event key, and the control's value.
   Event(id: String, key: String, value: Value)
+  /// A declared view event from the run window (the attached app's UI).
+  RunEvent(id: String, key: String, value: Value)
   /// A non-wx message addressed to the renderer's process.
   Message(message: Dynamic)
   /// An editor's jump list picked an entry ("name:line").
@@ -29,6 +34,8 @@ pub type Incoming {
   Idle
   /// The top-level window asked to close.
   Closed
+  /// The run window asked to close (the user closed the app's window).
+  RunClosed
   /// A canvas needs painting; the caller should call `paint`.
   Paint(id: String)
   /// Mouse input on a selection handle: role 0..7 resize, 8 move.
@@ -55,21 +62,34 @@ pub opaque type Shell {
     by_wx: Dict(Int, String),
     next_wx: Int,
     chrome: Chrome,
+    /// The running app's own window, when one is open. Separate registries
+    /// with a disjoint wx-id space (frames at 900000+), so the single message
+    /// pump can attribute every wx event to the right window.
+    run: Option(RunWindow),
   )
 }
 
-/// Selection chrome drawn by the canvas' own paint handler. There are no
-/// chrome widgets: nothing to place, nothing to hide, no extra windows.
-pub type Chrome {
-  Chrome(
-    selection: Option(#(Int, Int, Int, Int)),
-    single: Bool,
-    marquee: Option(#(Int, Int, Int, Int)),
+/// The running app's top-level window and its widget registries. Opaque:
+/// only this module reads or drives it.
+pub opaque type RunWindow {
+  RunWindow(
+    frame: Dynamic,
+    frame_id: Int,
+    widgets: Dict(String, Widget),
+    by_wx: Dict(Int, String),
+    next_wx: Int,
+    root: Node,
   )
+}
+
+/// Selection and marquee chrome. Selection is native grab panels (see
+/// `show_selection`); the canvas paint only draws the marquee.
+pub type Chrome {
+  Chrome(marquee: Option(#(Int, Int, Int, Int)))
 }
 
 fn empty_chrome() -> Chrome {
-  Chrome(selection: None, single: False, marquee: None)
+  Chrome(marquee: None)
 }
 
 type Widget {
@@ -91,8 +111,18 @@ type Widget {
 
 pub fn start(title: String, width: Int, height: Int) -> Shell {
   let _ = native.new_app()
+  shell_with_frame(title, width, height, 1000)
+}
 
-  let frame_id = 1000
+/// A second top-level window in the same wx app (no `wx:new`): the run
+/// window. Its id space starts high, away from the main shell's ids, so the
+/// shared message pump can tell the two apart.
+fn shell_with_frame(
+  title: String,
+  width: Int,
+  height: Int,
+  frame_id: Int,
+) -> Shell {
   let frame = native.frame(frame_id, title, width, height)
   let sizer = native.box_sizer(True)
   native.set_sizer(frame, sizer)
@@ -121,6 +151,139 @@ pub fn start(title: String, width: Int, height: Int) -> Shell {
     by_wx: dict.from_list([#(frame_id, "__window__")]),
     next_wx: frame_id + 1,
     chrome: empty_chrome(),
+    run: None,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The run window: the attached app's live view in its own top-level window.
+// ---------------------------------------------------------------------------
+
+/// Open the run window and mount the app's published view into it. The view
+/// root may be a `form`/`window` node: it configures the window like a form.
+pub fn open_run_window(
+  shell: Shell,
+  title: String,
+  root: Node,
+) -> Result(Shell, String) {
+  let width = plan.int_of(root.props, "w") |> plan.unwrap_or(640)
+  let height = plan.int_of(root.props, "h") |> plan.unwrap_or(480)
+  let root = case plan.text_of(root.props, "title") {
+    Ok(_) -> root
+    Error(_) ->
+      campy_view.with_props(root, [#("title", VText(title)), ..root.props])
+  }
+  let child = shell_with_frame(title, width, height, 900_000)
+
+  case mount(child, root) {
+    Ok(mounted) ->
+      Ok(
+        Shell(
+          ..shell,
+          run: Some(RunWindow(
+            frame: mounted.frame,
+            frame_id: mounted.frame_id,
+            widgets: mounted.widgets,
+            by_wx: mounted.by_wx,
+            next_wx: mounted.next_wx,
+            root: root,
+          )),
+        ),
+      )
+    Error(error) -> {
+      native.destroy(child.frame)
+      Error(error)
+    }
+  }
+}
+
+/// Push a new published view into the open run window (structural diff).
+pub fn update_run(shell: Shell, root: Node) -> Shell {
+  case shell.run {
+    None -> shell
+    Some(run) ->
+      case apply(run_as_shell(run), diff.diff(run.root, root)) {
+        Ok(updated) ->
+          Shell(
+            ..shell,
+            run: Some(
+              RunWindow(
+                ..run,
+                widgets: updated.widgets,
+                by_wx: updated.by_wx,
+                next_wx: updated.next_wx,
+                root: root,
+              ),
+            ),
+          )
+        Error(_) -> shell
+      }
+  }
+}
+
+/// Close the run window (the app was stopped or the window asked to close).
+pub fn close_run(shell: Shell) -> Shell {
+  case shell.run {
+    None -> shell
+    Some(run) -> {
+      native.destroy(run.frame)
+      Shell(..shell, run: None)
+    }
+  }
+}
+
+/// True when the run window is open.
+pub fn run_open(shell: Shell) -> Bool {
+  case shell.run {
+    Some(_) -> True
+    None -> False
+  }
+}
+
+/// Resize the main frame and re-run the align pass (same path a user
+/// maximize takes). Probe and tool support.
+pub fn resize_frame(shell: Shell, width: Int, height: Int) -> Nil {
+  native.resize(shell.frame, width, height)
+  native.layout(shell.frame)
+  relayout_free_children(shell)
+}
+
+/// A layout child's current widget rectangle: #(x, y, w, h).
+pub fn widget_rect(
+  shell: Shell,
+  id: String,
+) -> Result(#(Int, Int, Int, Int), Nil) {
+  let from = fn(widgets: Dict(String, Widget)) {
+    case dict.get(widgets, id) {
+      Ok(widget) ->
+        case native.widget_rect(widget.ref) {
+          Ok(#(x, y, w, h)) -> Ok(#(x, y, w, h))
+          Error(_) -> Error(Nil)
+        }
+      Error(_) -> Error(Nil)
+    }
+  }
+  case from(shell.widgets) {
+    Ok(rect) -> Ok(rect)
+    Error(_) ->
+      case shell.run {
+        Some(run) -> from(run.widgets)
+        None -> Error(Nil)
+      }
+  }
+}
+
+/// Re-wrap a run window's registries as a Shell so the mount/apply machinery
+/// can drive it; never stored back as the main shell.
+fn run_as_shell(run: RunWindow) -> Shell {
+  Shell(
+    frame: run.frame,
+    frame_id: run.frame_id,
+    widgets: run.widgets,
+    by_wx: run.by_wx,
+    next_wx: run.next_wx,
+    chrome: empty_chrome(),
+    run: None,
   )
 }
 
@@ -270,7 +433,9 @@ fn create_node(
     "menu" -> Ok(native.menu())
     "menuitem" -> Ok(native.menuitem(parent.ref, wx_id, text))
     "toolbar" -> Ok(native.toolbar(shell.frame))
-    "tool" -> Ok(native.tool(parent.ref, wx_id, text))
+    "tool" ->
+      Ok(native.tool_icon(parent.ref, wx_id, text, tool_icon_kind(node.id)))
+    "palette" -> Ok(native.palette(parent.ref, palette_entries()))
     "separator" -> Ok(native.tool_separator(parent.ref))
     "status" -> Ok(native.statusbar(shell.frame))
     "notebook" -> Ok(native.notebook(parent.ref, wx_id))
@@ -392,8 +557,12 @@ fn attach(
       case is_chrome(child.kind) {
         True -> Nil
         False ->
-          case parent.sizer {
-            Some(sizer) ->
+          case parent.sizer, parent.layout {
+            // Free-layout parents position children absolutely, even when a
+            // stray sizer object is still attached (the frame root keeps one
+            // from `start`): the align pass places these children.
+            Some(_), "free" -> native.raise(child.ref)
+            Some(sizer), _ ->
               native.insert(
                 sizer,
                 sizer_index_at(shell, parent, index),
@@ -402,7 +571,7 @@ fn attach(
                 True,
                 proportion(child),
               )
-            None -> native.raise(child.ref)
+            None, _ -> native.raise(child.ref)
           }
       }
 
@@ -448,7 +617,8 @@ fn is_chrome(kind: String) -> Bool {
     | "tool"
     | "separator"
     | "status"
-    | "page" -> True
+    | "page"
+    | "palette" -> True
     _ -> False
   }
 }
@@ -475,59 +645,72 @@ fn apply_all_props(shell: Shell, id: String) -> Shell {
 fn apply_prop(shell: Shell, id: String, name: String) -> Shell {
   case get_widget(shell, id) {
     Error(_) -> shell
-    Ok(widget) -> {
+    Ok(widget) ->
       case name {
-        "title" -> {
-          let title = plan.text_of(widget.props, "title") |> plan.unwrap_or("")
-          native.set_label(widget.ref, title)
-        }
-        "text" -> apply_text(widget)
-        "value" -> apply_value(widget)
-        "checked" ->
-          native.set_bool(
-            widget.ref,
-            widget.kind,
-            plan.bool_of(widget.props, "checked") |> plan.unwrap_or(False),
-          )
-        "selection" ->
-          native.set_selection(
-            widget.ref,
-            widget.kind,
-            plan.int_of(widget.props, "selection") |> plan.unwrap_or(0),
-          )
-        "items" ->
-          native.set_items(
-            widget.ref,
-            widget.kind,
-            plan.items_of(widget.props, "items"),
-          )
-        "enabled" ->
-          native.set_enabled(
-            widget.ref,
-            plan.bool_of(widget.props, "enabled") |> plan.unwrap_or(True),
-          )
-        "visible" ->
-          native.set_visible(
-            widget.ref,
-            plan.bool_of(widget.props, "visible") |> plan.unwrap_or(True),
-          )
-        "tooltip" ->
-          native.set_tooltip(
-            widget.ref,
-            plan.text_of(widget.props, "tooltip") |> plan.unwrap_or(""),
-          )
-        "highlight" ->
-          case
-            plan.bool_of(widget.props, "highlight") |> plan.unwrap_or(False)
-          {
-            True -> native.set_background(widget.ref, 199, 220, 250)
-            False -> native.set_background(widget.ref, 240, 240, 240)
+        // Containers can switch layout at runtime (the inspector's
+        // none/vertical/horizontal dropdown): rebuild the sizer or detach
+        // the children to absolute positioning accordingly.
+        "layout" -> apply_layout(shell, widget, id)
+        _ -> {
+          case name {
+            "title" -> {
+              let title =
+                plan.text_of(widget.props, "title") |> plan.unwrap_or("")
+              native.set_label(widget.ref, title)
+            }
+            "text" -> apply_text(widget)
+            "value" -> apply_value(widget)
+            "checked" ->
+              native.set_bool(
+                widget.ref,
+                widget.kind,
+                plan.bool_of(widget.props, "checked") |> plan.unwrap_or(False),
+              )
+            "selection" ->
+              native.set_selection(
+                widget.ref,
+                widget.kind,
+                plan.int_of(widget.props, "selection") |> plan.unwrap_or(0),
+              )
+            "items" ->
+              native.set_items(
+                widget.ref,
+                widget.kind,
+                plan.items_of(widget.props, "items"),
+              )
+            "enabled" ->
+              native.set_enabled(
+                widget.ref,
+                plan.bool_of(widget.props, "enabled") |> plan.unwrap_or(True),
+              )
+            "visible" ->
+              native.set_visible(
+                widget.ref,
+                plan.bool_of(widget.props, "visible") |> plan.unwrap_or(True),
+              )
+            "tooltip" ->
+              native.set_tooltip(
+                widget.ref,
+                plan.text_of(widget.props, "tooltip") |> plan.unwrap_or(""),
+              )
+            "highlight" ->
+              case
+                plan.bool_of(widget.props, "highlight") |> plan.unwrap_or(False)
+              {
+                True -> native.set_background(widget.ref, 199, 220, 250)
+                False -> native.set_background(widget.ref, 240, 240, 240)
+              }
+            "canvas_bg" -> {
+              let hex =
+                plan.text_of(widget.props, "canvas_bg") |> plan.unwrap_or("")
+              native.set_background_hex(widget.ref, hex)
+            }
+            "x" | "y" | "w" | "h" -> apply_geometry(shell, widget)
+            _ -> Nil
           }
-        "x" | "y" | "w" | "h" -> apply_geometry(shell, widget)
-        _ -> Nil
+          shell
+        }
       }
-      shell
-    }
   }
 }
 
@@ -594,6 +777,66 @@ fn geometry_applies(shell: Shell, widget: Widget) -> Bool {
           }
         Error(_) -> True
       }
+  }
+}
+
+/// Switch a container's layout at runtime. Column/row get a fresh sizer and
+/// re-attach the children in order; free detaches them back to absolute
+/// positioning and runs the align pass.
+fn apply_layout(shell: Shell, widget: Widget, id: String) -> Shell {
+  let name = plan.text_of(widget.props, "layout") |> plan.unwrap_or("free")
+
+  case name {
+    "column" | "row" -> {
+      let sizer = native.box_sizer(name == "column")
+      native.set_sizer(widget.ref, sizer)
+      widget.children
+      |> list.index_map(fn(child_id, index) { #(child_id, index) })
+      |> list.each(fn(pair) {
+        let #(child_id, index) = pair
+        case get_widget(shell, child_id) {
+          Ok(child) ->
+            case is_chrome(child.kind) {
+              True -> Nil
+              False -> {
+                native.detach(sizer, child.ref)
+                native.insert(
+                  sizer,
+                  index,
+                  child.ref,
+                  widget.border,
+                  True,
+                  proportion(child),
+                )
+              }
+            }
+          Error(_) -> Nil
+        }
+      })
+      native.layout(widget.ref)
+      update_widget(shell, id, fn(w) {
+        Widget(..w, sizer: Some(sizer), layout: name)
+      })
+    }
+    _ -> {
+      case widget.sizer {
+        Some(sizer) ->
+          list.each(widget.children, fn(child_id) {
+            case get_widget(shell, child_id) {
+              Ok(child) -> native.detach(sizer, child.ref)
+              Error(_) -> Nil
+            }
+          })
+        None -> Nil
+      }
+
+      let shell =
+        update_widget(shell, id, fn(w) {
+          Widget(..w, sizer: None, layout: "free")
+        })
+      layout_free_tree(shell, id, None)
+      shell
+    }
   }
 }
 
@@ -840,6 +1083,7 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
       KeyPressed(Key(code: code, control: control, shift: shift, alt: alt))
     native.ShortcutEvent(action) -> Accelerator(action)
     native.WxEvent(wx_id, "close") if wx_id == shell.frame_id -> Closed
+    native.WxEvent(wx_id, "close") -> run_closed(shell, wx_id)
     native.WxEvent(wx_id, "paint") -> paint_event(shell, wx_id)
     native.WxEvent(wx_id, "command") -> command_event(shell, wx_id)
     native.WxEvent(_wx_id, "move") -> FrameMoved
@@ -851,20 +1095,57 @@ pub fn next(shell: Shell, timeout_ms: Int) -> Incoming {
   }
 }
 
-fn command_event(shell: Shell, wx_id: Int) -> Incoming {
+fn run_closed(shell: Shell, wx_id: Int) -> Incoming {
+  case shell.run {
+    Some(run) if wx_id == run.frame_id -> RunClosed
+    _ -> Idle
+  }
+}
+
+/// Find a widget by its wx id in either registry; the flag marks run-window
+/// widgets so their events are tagged `RunEvent`.
+fn lookup_widget(shell: Shell, wx_id: Int) -> Result(#(Widget, Bool), Nil) {
   case dict.get(shell.by_wx, wx_id) {
-    Error(Nil) -> Idle
     Ok(view_id) ->
       case dict.get(shell.widgets, view_id) {
+        Ok(widget) -> Ok(#(widget, False))
+        Error(Nil) -> Error(Nil)
+      }
+    Error(Nil) ->
+      case shell.run {
+        Some(run) ->
+          case dict.get(run.by_wx, wx_id) {
+            Ok(view_id) ->
+              case dict.get(run.widgets, view_id) {
+                Ok(widget) -> Ok(#(widget, True))
+                Error(Nil) -> Error(Nil)
+              }
+            Error(Nil) -> Error(Nil)
+          }
+        None -> Error(Nil)
+      }
+  }
+}
+
+fn command_event(shell: Shell, wx_id: Int) -> Incoming {
+  case native.palette_owner(wx_id) {
+    // A palette button press arms the widget kind it depicts.
+    Ok(kind) -> Event("palette-" <> kind, "click", VBool(True))
+    Error(_) ->
+      case lookup_widget(shell, wx_id) {
         Error(Nil) -> Idle
-        Ok(widget) -> {
+        Ok(#(widget, is_run)) -> {
           case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
             True -> Event(widget.view_id, "select", VText(widget.view_id))
             False -> {
               let key = plan.event_key(widget.kind)
               case list.contains(widget.events, key) {
                 False -> Idle
-                True -> Event(widget.view_id, key, event_value(widget))
+                True ->
+                  case is_run {
+                    True -> RunEvent(widget.view_id, key, event_value(widget))
+                    False -> Event(widget.view_id, key, event_value(widget))
+                  }
               }
             }
           }
@@ -873,8 +1154,6 @@ fn command_event(shell: Shell, wx_id: Int) -> Incoming {
   }
 }
 
-/// A grid edit reports the cell from the wxGridEvent itself, so Enter moving
-/// the cursor to the next cell cannot misattribute the value.
 fn grid_event(
   shell: Shell,
   wx_id: Int,
@@ -882,15 +1161,24 @@ fn grid_event(
   col: Int,
   text: String,
 ) -> Incoming {
-  case dict.get(shell.by_wx, wx_id) {
+  case lookup_widget(shell, wx_id) {
     Error(Nil) -> Idle
-    Ok(view_id) ->
-      case dict.get(shell.widgets, view_id) {
-        Error(Nil) -> Idle
-        Ok(widget) ->
-          case list.contains(widget.events, "change") {
-            False -> Idle
+    Ok(#(widget, is_run)) ->
+      case list.contains(widget.events, "change") {
+        False -> Idle
+        True ->
+          case is_run {
             True ->
+              RunEvent(
+                widget.view_id,
+                "change",
+                VMap([
+                  #("col", VInt(col)),
+                  #("row", VInt(row)),
+                  #("text", VText(text)),
+                ]),
+              )
+            False ->
               Event(
                 widget.view_id,
                 "change",
@@ -929,28 +1217,59 @@ fn event_value(widget: Widget) -> Value {
 }
 
 /// Paint a canvas: background, grid, chrome, and border, in form coordinates.
+/// Canvases in either window resolve here; the paint extent is the widget's
+/// actual client size, so a maximized window fills with grid.
 pub fn paint(shell: Shell, id: String) -> Nil {
   case get_widget(shell, id) {
-    Error(_) -> Nil
-    Ok(widget) ->
-      case widget.kind {
-        "canvas" -> {
-          let width = plan.int_of(widget.props, "w") |> plan.unwrap_or(400)
-          let height = plan.int_of(widget.props, "h") |> plan.unwrap_or(300)
-          let grid = plan.int_of(widget.props, "grid") |> plan.unwrap_or(24)
-          let chrome = shell.chrome
-          native.paint_canvas(
-            widget.ref,
-            width,
-            height,
-            grid,
-            chrome.selection,
-            chrome.marquee,
-            chrome.single,
-          )
-        }
-        _ -> Nil
+    Ok(widget) -> paint_canvas_widget(shell, widget)
+    Error(_) ->
+      case run_widget(shell, id) {
+        Ok(widget) -> paint_canvas_widget(shell, widget)
+        Error(_) -> Nil
       }
+  }
+}
+
+fn run_widget(shell: Shell, id: String) -> Result(Widget, Nil) {
+  case shell.run {
+    Some(run) -> dict.get(run.widgets, id)
+    None -> Error(Nil)
+  }
+}
+
+fn paint_canvas_widget(shell: Shell, widget: Widget) -> Nil {
+  case widget.kind {
+    "canvas" -> {
+      let #(actual_w, actual_h) = native.client_size(widget.ref)
+      let width = case actual_w > 0 {
+        True -> actual_w
+        False -> plan.int_of(widget.props, "w") |> plan.unwrap_or(400)
+      }
+      let height = case actual_h > 0 {
+        True -> actual_h
+        False -> plan.int_of(widget.props, "h") |> plan.unwrap_or(300)
+      }
+      let grid = plan.int_of(widget.props, "grid") |> plan.unwrap_or(24)
+      let bg =
+        plan.text_of(widget.props, "canvas_bg") |> plan.unwrap_or("#f5f6f8")
+      let grid_color =
+        plan.text_of(widget.props, "canvas_grid")
+        |> plan.unwrap_or("#e2e4e8")
+      let chrome = case widget.view_id == "canvas" {
+        True -> shell.chrome
+        False -> empty_chrome()
+      }
+      native.paint_canvas(
+        widget.ref,
+        width,
+        height,
+        grid,
+        chrome.marquee,
+        bg,
+        grid_color,
+      )
+    }
+    _ -> Nil
   }
 }
 
@@ -962,50 +1281,113 @@ fn design_mouse(
   y: Int,
   control: Bool,
 ) -> Incoming {
-  case dict.get(shell.by_wx, wx_id) {
-    Error(Nil) -> Idle
-    Ok(view_id) ->
-      case dict.get(shell.widgets, view_id) {
-        Error(Nil) -> Idle
-        Ok(widget) ->
-          case plan.bool_of(widget.props, "design") |> plan.unwrap_or(False) {
-            True -> Mouse(widget.view_id, kind, x, y, control)
-            False -> Idle
+  case native.grab_owner(wx_id) {
+    // A press/motion/release on a grab strip reports in the decorated
+    // widget's space: strip-relative coordinates plus the strip's offset.
+    Ok(#(widget_id, dx, dy)) -> Mouse(widget_id, kind, x + dx, y + dy, control)
+    Error(_) ->
+      case native.plate_owner(wx_id) {
+        // A press on the form plate reports in the form's space (the plate
+        // origin is the form's editor position).
+        Ok(form_id) -> Mouse(form_id, kind, x, y, control)
+        Error(_) ->
+          case dict.get(shell.by_wx, wx_id) {
+            Error(Nil) -> Idle
+            Ok(view_id) ->
+              case dict.get(shell.widgets, view_id) {
+                Error(Nil) -> Idle
+                Ok(widget) ->
+                  case
+                    plan.bool_of(widget.props, "design")
+                    |> plan.unwrap_or(False)
+                  {
+                    True -> Mouse(widget.view_id, kind, x, y, control)
+                    False -> Idle
+                  }
+              }
           }
       }
   }
 }
 
 fn paint_event(shell: Shell, wx_id: Int) -> Incoming {
-  case dict.get(shell.by_wx, wx_id) {
-    Ok(view_id) -> Paint(view_id)
+  case lookup_widget(shell, wx_id) {
+    Ok(#(widget, _)) -> Paint(widget.view_id)
     Error(Nil) -> Idle
   }
 }
 
-/// Selection chrome around a control rectangle (canvas coordinates). `None`
-/// hides it. The chrome is painted by the canvas itself and repainted here, so
-/// there are no chrome widgets to place or hide.
-pub fn show_selection(
+/// Selection chrome: four yellow grab strips around each selected widget,
+/// protruding 3px on every side. The strips never overlap the widget, so
+/// windowless widgets (labels) stay visible; with a single selection the
+/// strips start resizes and the control body starts a move. The strips are
+/// raised above the siblings; the widget itself keeps its own depth, so
+/// deselect has nothing to restore. The form root is selectable too: its
+/// plate (form_plate_show) acts as the widget.
+pub fn show_selection(shell: Shell, ids: List(String)) -> Nil {
+  list.each(native.grab_list(), fn(view_id) {
+    case list.contains(ids, view_id) {
+      True -> Nil
+      False -> native.grab_hide(view_id)
+    }
+  })
+
+  list.each(ids, fn(id) {
+    case grab_target(shell, id) {
+      Ok(#(parent_ref, rect)) -> {
+        let #(x, y, w, h) = rect
+        case list.contains(native.grab_list(), id) {
+          True -> native.grab_move(id, x, y, w, h)
+          False -> native.grab_show(id, parent_ref, x, y, w, h)
+        }
+      }
+      Error(_) -> native.grab_hide(id)
+    }
+  })
+}
+
+/// A selection target: the parent to draw chrome in, and the widget's
+/// rectangle in that parent's coordinates. View widgets resolve through the
+/// registry; the form root resolves through its plate.
+fn grab_target(
   shell: Shell,
-  rect: Option(#(Int, Int, Int, Int)),
-  resizable: Bool,
-) -> Nil {
-  let chrome =
-    Chrome(selection: rect, single: resizable, marquee: shell.chrome.marquee)
-  let shell = Shell(..shell, chrome: chrome)
-  invalidate_canvas(shell)
+  id: String,
+) -> Result(#(Dynamic, #(Int, Int, Int, Int)), Nil) {
+  case get_widget(shell, id) {
+    Ok(widget) ->
+      case widget.parent {
+        Some(parent_id) ->
+          case get_widget(shell, parent_id) {
+            Ok(parent) ->
+              case native.widget_rect(widget.ref) {
+                Ok(rect) -> Ok(#(parent.ref, rect))
+                Error(_) -> Error(Nil)
+              }
+            Error(_) -> Error(Nil)
+          }
+        None ->
+          case native.widget_rect(widget.ref) {
+            Ok(rect) -> Ok(#(shell.frame, rect))
+            Error(_) -> Error(Nil)
+          }
+      }
+    Error(_) ->
+      // The form root's plate is its widget; the strips draw in the canvas
+      // (the plate's parent), since child windows clip to their parent.
+      case native.form_plate_rect(id) {
+        Ok(rect) -> {
+          let #(canvas, _, _) = canvas_widget(shell)
+          Ok(#(canvas, rect))
+        }
+        Error(_) -> Error(Nil)
+      }
+  }
 }
 
 /// Marquee outline while a placement/selection drag is active.
+/// Marquee outline while a placement/selection drag is active.
 pub fn show_marquee(shell: Shell, rect: Option(#(Int, Int, Int, Int))) -> Nil {
-  let chrome =
-    Chrome(
-      selection: shell.chrome.selection,
-      single: shell.chrome.single,
-      marquee: rect,
-    )
-  let shell = Shell(..shell, chrome: chrome)
+  let shell = Shell(..shell, chrome: Chrome(marquee: rect))
   invalidate_canvas(shell)
 }
 
@@ -1017,10 +1399,12 @@ pub fn repaint(shell: Shell) -> Nil {
   native.update(shell.frame)
 }
 
-/// Lay out the sizers of widgets whose parent positions children freely.
-/// Free-layout parents are not managed by any sizer, so the frame-level
-/// layout pass never recalculates their children; everything else is laid
-/// out correctly by the frame pass and must not be touched with stale sizes.
+/// Lay out the sizers of widgets whose parent positions children freely, and
+/// re-resolve every free-layout container's children from their align props
+/// against the container's actual client size. Free-layout parents are not
+/// managed by any sizer, so the frame-level layout pass never recalculates
+/// their children; the align pass runs after patches and on every frame
+/// resize, so panes follow maximize/restore.
 pub fn relayout_free_children(shell: Shell) -> Nil {
   dict.values(shell.widgets)
   |> list.each(fn(widget) {
@@ -1037,6 +1421,137 @@ pub fn relayout_free_children(shell: Shell) -> Nil {
       _, _ -> Nil
     }
   })
+
+  // Align pass: walk every root window's free-layout tree, docking children
+  // from their align props and handing each nested container its freshly
+  // resolved rectangle, so nothing re-reads a stale wx size mid-pass.
+  dict.values(shell.widgets)
+  |> list.filter(fn(widget) { widget.parent == None })
+  |> list.each(fn(root) { layout_free_tree(shell, root.view_id, None) })
+
+  case shell.run {
+    Some(run) ->
+      dict.values(run.widgets)
+      |> list.filter(fn(widget) { widget.parent == None })
+      |> list.each(fn(root) {
+        layout_free_tree(run_as_shell(run), root.view_id, None)
+      })
+    None -> Nil
+  }
+}
+
+/// Dock a free-layout container's children, then recurse into child
+/// containers. `override` carries the container's freshly resolved size for
+/// nested passes; None reads the widget's actual wx client size (roots, and
+/// sizer-managed containers whose sizer was just laid out).
+fn layout_free_tree(
+  shell: Shell,
+  parent_id: String,
+  override: Option(#(Int, Int)),
+) -> Nil {
+  case get_widget(shell, parent_id) {
+    Error(_) -> Nil
+    Ok(parent) -> {
+      let #(client_w, client_h) = case override {
+        Some(#(w, h)) -> #(w, h)
+        None -> native.client_size(parent.ref)
+      }
+
+      case parent.layout {
+        "free" -> {
+          let children =
+            parent.children
+            |> list.filter_map(fn(child_id) {
+              case get_widget(shell, child_id) {
+                Ok(child) ->
+                  Ok(
+                    campy_view.node(child.kind, child.view_id)
+                    |> campy_view.with_props(child.props),
+                  )
+                Error(_) -> Error(Nil)
+              }
+            })
+          let frame =
+            campy_view.node(parent.kind, parent.view_id)
+            |> campy_view.with_props(
+              list.append(parent.props, [
+                // Runtime geometry: only the size applies (the form's
+                // recorded position is editor-only chrome).
+                #("x", VInt(0)),
+                #("y", VInt(0)),
+                #("w", VInt(int.max(client_w, 1))),
+                #("h", VInt(int.max(client_h, 1))),
+                #("layout", VText("free")),
+                #("border", VInt(parent.border)),
+              ]),
+            )
+            |> campy_view.with_children(children)
+          let resolved = campy_design.resolve(frame)
+
+          list.each(parent.children, fn(child_id) {
+            case get_widget(shell, child_id) {
+              Ok(child) ->
+                case is_chrome(child.kind) {
+                  True -> Nil
+                  False ->
+                    case
+                      list.find(resolved.places, fn(place) {
+                        place.id == child_id && place.parent == Some(parent_id)
+                      })
+                    {
+                      Ok(place) -> {
+                        native.move(child.ref, place.rect.x, place.rect.y)
+                        native.resize(
+                          child.ref,
+                          int.max(place.rect.w, 1),
+                          int.max(place.rect.h, 1),
+                        )
+                        // Nested containers continue with their fresh rect.
+                        case campy_design.is_container(child.kind) {
+                          True ->
+                            layout_free_tree(
+                              shell,
+                              child_id,
+                              Some(#(place.rect.w, place.rect.h)),
+                            )
+                          False -> Nil
+                        }
+                      }
+                      Error(_) -> Nil
+                    }
+                }
+              Error(_) -> Nil
+            }
+          })
+        }
+        _ ->
+          // Sizer-managed container: re-layout its sizer at the current
+          // size, then descend. Its children's wx sizes are fresh after
+          // wxSizer:layout, so nested passes read the widget again.
+          case parent.sizer {
+            Some(sizer) -> native.layout_sizer(parent.ref, sizer)
+            None -> Nil
+          }
+      }
+
+      // Sizer-managed containers still descend (their subtree may hold free
+      // containers); their children's rects come from wx, now fresh.
+      case parent.layout {
+        "free" -> Nil
+        _ ->
+          list.each(parent.children, fn(child_id) {
+            case get_widget(shell, child_id) {
+              Ok(child) ->
+                case campy_design.is_container(child.kind) {
+                  True -> layout_free_tree(shell, child_id, None)
+                  False -> Nil
+                }
+              Error(_) -> Nil
+            }
+          })
+      }
+    }
+  }
 }
 
 /// A canvas repaint draws background, grid, and the current chrome.
@@ -1115,6 +1630,20 @@ pub fn set_grid_number_cell(
 pub fn set_grid_text_cell(shell: Shell, id: String, row: Int, col: Int) -> Nil {
   case get_widget(shell, id) {
     Ok(widget) -> native.grid_text_cell(widget.ref, row, col)
+    Error(_) -> Nil
+  }
+}
+
+/// Give an inspector cell a dropdown editor (enum properties).
+pub fn set_grid_choice_cell(
+  shell: Shell,
+  id: String,
+  row: Int,
+  col: Int,
+  options: List(String),
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.grid_choice_cell(widget.ref, row, col, options)
     Error(_) -> Nil
   }
 }
@@ -1271,6 +1800,63 @@ pub fn show_message(shell: Shell, title: String, message: String) -> Nil {
   native.show_message(shell.frame, title, message)
 }
 
+/// Apply the scheme palette to a text editor's Scintilla styles.
+pub fn apply_scheme(
+  shell: Shell,
+  id: String,
+  palette: List(#(String, String)),
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_scheme(widget.ref, palette)
+    Error(_) -> Nil
+  }
+}
+
+/// Apply the settings font family and size to a text editor.
+pub fn apply_editor_font(
+  shell: Shell,
+  id: String,
+  face: String,
+  size: Int,
+) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_font(widget.ref, face, size)
+    Error(_) -> Nil
+  }
+}
+
+/// The modal Settings → Editor… dialog; indexes address the caller's lists.
+pub fn show_settings_dialog(
+  shell: Shell,
+  fonts: List(String),
+  sizes: List(String),
+  schemes: List(String),
+  font_index: Int,
+  size_index: Int,
+  scheme_index: Int,
+) -> Result(#(Int, Int, Int), Nil) {
+  native.settings_dialog(
+    shell.frame,
+    fonts,
+    sizes,
+    schemes,
+    font_index,
+    size_index,
+    scheme_index,
+  )
+}
+
+/// The modal Settings → Agent… dialog: MCP enable checkbox and port text.
+pub fn show_agent_dialog(
+  shell: Shell,
+  enabled: Bool,
+  port: String,
+  status: String,
+  endpoint: String,
+) -> Result(#(Bool, String), Nil) {
+  native.agent_dialog(shell.frame, enabled, port, status, endpoint)
+}
+
 /// Rebuild the frame accelerator table for the active page. Text shortcuts
 /// are omitted while Code/Source is visible so the editor keeps them.
 pub fn set_shortcuts(shell: Shell, editing: Bool) -> Nil {
@@ -1291,8 +1877,229 @@ pub fn set_tooltip(shell: Shell, id: String, text: String) -> Nil {
   }
 }
 
+/// Apply a clipboard/undo command to a text editor by view id.
+pub fn editor_clipboard(shell: Shell, id: String, action: String) -> Nil {
+  case get_widget(shell, id) {
+    Ok(widget) -> native.editor_clipboard(widget.ref, action)
+    Error(_) -> Nil
+  }
+}
+
+/// Create or reposition the form plate: the form as a selectable white panel
+/// on the canvas at the form's editor position, kept below the controls.
+pub fn form_plate_show(
+  shell: Shell,
+  id: String,
+  parent_id: String,
+  x: Int,
+  y: Int,
+  w: Int,
+  h: Int,
+) -> Nil {
+  case get_widget(shell, parent_id) {
+    Ok(parent) -> native.form_plate_set(id, parent.ref, x, y, w, h)
+    Error(_) -> Nil
+  }
+}
+
+/// The pointer position in the design canvas' coordinates: drags read the
+/// true pointer so a moving widget cannot shift the coordinate base.
+pub fn canvas_pointer(shell: Shell) -> #(Int, Int) {
+  let #(canvas, _, _) = canvas_widget(shell)
+  native.pointer_in(canvas)
+}
+
+// ---------------------------------------------------------------------------
+// Probe support: synthetic event injection through the real message pump, so
+// scripted tests drive the real IDE loop end to end.
+// ---------------------------------------------------------------------------
+
+/// A view widget's wx id (event attribution for synthetic events).
+pub fn probe_wx_id(shell: Shell, view_id: String) -> Result(Int, Nil) {
+  native.view_wx_id(shell, view_id)
+}
+
+/// A view widget's native ref (for pointer warps and event payloads).
+pub fn probe_ref(shell: Shell, view_id: String) -> Result(Dynamic, Nil) {
+  native.view_ref(shell, view_id)
+}
+
+/// Override the pointer position drags read (deterministic scripted
+/// gestures; production keeps the real pointer).
+pub fn probe_pointer(x: Int, y: Int) -> Nil {
+  native.pointer_override(x, y)
+}
+
+pub fn probe_pointer_clear() -> Nil {
+  native.pointer_clear()
+}
+
+/// The top grab strip's wx id for a selection (strip presses start resizes).
+pub fn probe_grab_strip(view_id: String) -> Result(Int, Nil) {
+  native.grab_strip_wx_id(view_id)
+}
+
+/// A grab strip's wx id and offset by index (0=top, 1=bottom, 2=left,
+/// 3=right), for scripted strip presses.
+pub fn probe_strip(
+  view_id: String,
+  index: Int,
+) -> Result(#(Int, Int, Int), Nil) {
+  native.grab_strip_info(view_id, index)
+}
+
+/// A palette tool's wx id by widget kind.
+pub fn probe_palette_tool(kind: String) -> Result(Int, Nil) {
+  native.palette_tool(kind)
+}
+
+/// The form plate's wx id (presses select and drag the form).
+pub fn probe_plate(view_id: String) -> Result(Int, Nil) {
+  native.plate_wx_id(view_id)
+}
+
+/// The open enum dropdown's list ref, for scripted picks.
+pub fn probe_enum_list() -> Result(Dynamic, Nil) {
+  native.enum_popup_list()
+}
+
+/// Preselect an option in the open enum dropdown (as a user click would).
+pub fn probe_enum_select(index: Int) -> Nil {
+  native.enum_popup_select(index)
+}
+
+/// Is the open dropdown anchored at its cell? (probe assertion)
+pub fn probe_enum_anchored() -> Bool {
+  case native.enum_popup_anchored() {
+    Ok(True) -> True
+    _ -> False
+  }
+}
+
+/// Read an inspector grid cell (probe assertions).
+pub fn probe_inspector_cell(shell: Shell, row: Int, col: Int) -> String {
+  native.inspector_cell(shell, row, col)
+}
+
+/// Inject a synthetic mouse event into the pump.
+pub fn probe_mouse(
+  shell: Shell,
+  view_id: String,
+  kind: String,
+  x: Int,
+  y: Int,
+  control: Bool,
+) -> Nil {
+  // The form root is not a view widget: its presses ride the plate's id.
+  let wx_id = case probe_wx_id(shell, view_id) {
+    Ok(id) -> Ok(id)
+    Error(_) -> probe_plate(view_id)
+  }
+  let payload = case probe_ref(shell, view_id) {
+    Ok(ref) -> ref
+    Error(_) -> native.null_ref()
+  }
+  case wx_id {
+    Ok(id) -> native.inject_mouse(id, payload, kind, x, y, control)
+    Error(_) -> Nil
+  }
+}
+
+/// Inject a synthetic command event (menu items, palette tools).
+pub fn probe_command(shell: Shell, view_id: String, kind: String) -> Nil {
+  case probe_wx_id(shell, view_id) {
+    Ok(wx_id) -> native.inject_command(wx_id, kind, wx_id)
+    Error(_) -> Nil
+  }
+}
+
+/// Inject a synthetic grid cell selection (enum dropdowns open on select).
+pub fn probe_grid_select(
+  shell: Shell,
+  view_id: String,
+  row: Int,
+  col: Int,
+) -> Nil {
+  case probe_ref(shell, view_id) {
+    Ok(ref) -> native.inject_grid_select(ref, row, col)
+    Error(_) -> Nil
+  }
+}
+
+/// Inject a grab-strip press (starts a resize in the real loop).
+pub fn probe_strip_press(wx_id: Int, x: Int, y: Int) -> Nil {
+  native.inject_strip_press(wx_id, x, y)
+}
+
+/// Inject a form-plate press (selects/moves the form in the real loop).
+pub fn probe_plate_press(wx_id: Int, x: Int, y: Int) -> Nil {
+  native.inject_plate_press(wx_id, x, y)
+}
+
+/// Inject a palette tool press (arms the widget kind).
+pub fn probe_tool_press(wx_id: Int) -> Nil {
+  native.inject_tool_press(wx_id)
+}
+
+/// The form plate's current rectangle (probe assertions).
+pub fn probe_plate_rect(view_id: String) -> Result(#(Int, Int, Int, Int), Nil) {
+  native.form_plate_rect(view_id)
+}
+
+/// Toolbar diagnostics (probe assertions): tool size, bitmap size, and the
+/// toolbar's client/frame size.
+pub fn probe_toolbar_stats(
+  shell: Shell,
+) -> Result(#(#(Int, Int), #(Int, Int), #(Int, Int), #(Int, Int)), Nil) {
+  case probe_ref(shell, "toolbar") {
+    Ok(bar) -> Ok(native.toolbar_stats(bar))
+    Error(_) -> Error(Nil)
+  }
+}
+
+/// Capture a window's content to a PNG (probe diagnostics).
+pub fn probe_snapshot(shell: Shell, view_id: String, path: String) -> Nil {
+  case probe_ref(shell, view_id) {
+    Ok(ref) -> native.snapshot(ref, path)
+    Error(_) -> Nil
+  }
+}
+
+/// Inject a synthetic enum dropdown pick (as a user click would commit).
+pub fn probe_list_pick(text: String, index: Int) -> Nil {
+  case native.enum_popup_list() {
+    Ok(list) -> {
+      let list_id = case native.enum_popup_wx_id() {
+        Ok(id) -> id
+        Error(_) -> 0
+      }
+      native.inject_list_pick(list_id, list, text, index)
+    }
+    Error(_) -> Nil
+  }
+}
+
+/// Run/Stop tools get pictograms; the rest keep their text labels.
+fn tool_icon_kind(id: String) -> String {
+  case id {
+    "tool-run" -> "run"
+    "tool-stop" -> "stop"
+    _ -> "none"
+  }
+}
+
+/// The palette entries: one pictogram button per catalog widget, with the
+/// widget name plus the placement hint as its tooltip.
+fn palette_entries() -> List(#(String, String)) {
+  campy_catalog.all()
+  |> list.map(fn(widget) {
+    #(widget.kind, widget.label <> " — click, then drag on the form")
+  })
+}
+
 /// Move/resize a control's live widget without touching the document. Used for
 /// drag previews; the commit goes through `campy_design.set_rect` and the model.
+/// The widget's grab panel (if selected) follows.
 pub fn preview_rect(
   shell: Shell,
   id: String,
@@ -1305,8 +2112,18 @@ pub fn preview_rect(
     Ok(widget) -> {
       native.move(widget.ref, x, y)
       native.resize(widget.ref, width, height)
+      native.grab_move(id, x, y, width, height)
     }
-    Error(_) -> Nil
+    Error(_) ->
+      // The form root previews through its plate.
+      case native.form_plate_get(id) {
+        Ok(plate) -> {
+          native.move(plate, x, y)
+          native.resize(plate, width, height)
+          native.grab_move(id, x, y, width, height)
+        }
+        Error(_) -> Nil
+      }
   }
 }
 

@@ -37,6 +37,15 @@ pub fn border(node: Node) -> Int {
   prop_int(node, "border") |> unwrap_or(0)
 }
 
+/// The child's dock alignment inside a free-layout parent: "none" (raw
+/// x/y/w/h), "top", "bottom", "left", "right", or "fill"/"client".
+pub fn align(node: Node) -> String {
+  case prop_text(node, "align") {
+    Ok(value) -> value
+    Error(_) -> "none"
+  }
+}
+
 pub fn prop(node: Node, name: String) -> Result(Value, Nil) {
   campy_view.prop(node, name)
 }

@@ -151,9 +151,30 @@ pub fn alignment_overrides_free_geometry_test() {
       ]),
     )
 
-  rect_of(layout, "client") |> should.equal(campy_design.Rect(8, 8, 584, 384))
+  // LCL-style docking: the top band spans the full width, the right band
+  // takes its width below the top band, and the client gets what remains.
+  rect_of(layout, "client") |> should.equal(campy_design.Rect(8, 28, 524, 364))
   rect_of(layout, "top") |> should.equal(campy_design.Rect(8, 8, 584, 20))
-  rect_of(layout, "right") |> should.equal(campy_design.Rect(532, 8, 60, 384))
+  rect_of(layout, "right") |> should.equal(campy_design.Rect(532, 28, 60, 364))
+}
+
+pub fn fill_takes_the_space_after_all_docked_edges_test() {
+  let layout =
+    campy_design.resolve(
+      form([], [
+        node("label", "left", [#("align", VText("left")), #("w", VInt(120))]),
+        node("label", "right", [#("align", VText("right")), #("w", VInt(80))]),
+        node("label", "bottom", [#("align", VText("bottom")), #("h", VInt(30))]),
+        node("label", "centre", [#("align", VText("fill"))]),
+      ]),
+    )
+
+  rect_of(layout, "left") |> should.equal(campy_design.Rect(0, 0, 120, 400))
+  rect_of(layout, "right") |> should.equal(campy_design.Rect(520, 0, 80, 400))
+  rect_of(layout, "bottom")
+  |> should.equal(campy_design.Rect(120, 370, 400, 30))
+  rect_of(layout, "centre")
+  |> should.equal(campy_design.Rect(120, 0, 400, 370))
 }
 
 pub fn hit_test_picks_the_last_painted_control_test() {
@@ -194,6 +215,32 @@ pub fn container_hit_test_finds_the_deepest_container_test() {
     Some(placed) -> placed.id |> should.equal("root")
     None -> should.fail()
   }
+}
+
+pub fn form_position_is_editor_only_chrome_test() {
+  let layout =
+    campy_design.resolve(
+      form([#("x", VInt(40)), #("y", VInt(30))], [
+        node("label", "a", [#("x", VInt(8)), #("y", VInt(9))]),
+      ]),
+    )
+
+  // The form's recorded position offsets everything in the editor layout.
+  rect_of(layout, "a") |> should.equal(campy_design.Rect(48, 39, 100, 20))
+
+  // The materialized canvas view keeps controls canvas-absolute: the root's
+  // direct children stand inside the drawn form outline.
+  let view =
+    campy_design.design_view(
+      form([#("x", VInt(40)), #("y", VInt(30))], [
+        node("label", "a", [#("x", VInt(8)), #("y", VInt(9))]),
+      ]),
+      "canvas",
+    )
+  let assert [control] = view.children
+  view.id |> should.equal("canvas")
+  campy_view.prop(control, "x") |> should.equal(Ok(VInt(48)))
+  campy_view.prop(control, "y") |> should.equal(Ok(VInt(39)))
 }
 
 pub fn move_updates_position_and_clears_alignment_test() {

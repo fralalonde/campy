@@ -40,8 +40,11 @@ pub const min_size = 8
 pub fn resolve(root: Node) -> Layout {
   let rect =
     Rect(
-      x: 0,
-      y: 0,
+      // The form's recorded position positions it in the form editor only;
+      // the runtime resizes by w/h and ignores x/y (the run window clears
+      // them before resolving the published view).
+      x: int_prop(root, "x", 0),
+      y: int_prop(root, "y", 0),
       w: int_prop(root, "w", default_w(root.kind)),
       h: int_prop(root, "h", default_h(root.kind)),
     )
@@ -80,9 +83,142 @@ fn free_children(
   parent_id: String,
   acc: List(Placed),
 ) -> List(Placed) {
-  list.fold(children, acc, fn(acc, child) {
-    add_child(child, free_rect(child, inner), parent_id, acc)
+  // LCL-style docking in a free container: top/bottom/left/right children
+  // reserve bands in document order (each side stacks), then fill/client
+  // children take whatever remains — in document order, overlapping each
+  // other when there are several. Free-positioned children keep raw x/y/w/h.
+  let #(acc, remaining) = dock_edges(children, parent_id, acc, inner)
+
+  children
+  |> list.filter(fn(child) {
+    case text_prop(child, "align") {
+      "client" | "fill" -> True
+      _ -> False
+    }
   })
+  |> list.fold(acc, fn(acc, child) {
+    add_child(child, remaining, parent_id, acc)
+  })
+}
+
+fn dock_edges(
+  children: List(Node),
+  parent_id: String,
+  acc: List(Placed),
+  remaining: Rect,
+) -> #(List(Placed), Rect) {
+  case children {
+    [] -> #(acc, remaining)
+    [child, ..rest] -> {
+      let width = int_prop(child, "w", default_w(child.kind))
+      let height = int_prop(child, "h", default_h(child.kind))
+
+      case text_prop(child, "align") {
+        "top" -> {
+          let h = int.min(height, remaining.h)
+          dock_edges(
+            rest,
+            parent_id,
+            add_child(
+              child,
+              Rect(x: remaining.x, y: remaining.y, w: remaining.w, h: h),
+              parent_id,
+              acc,
+            ),
+            Rect(
+              x: remaining.x,
+              y: remaining.y + h,
+              w: remaining.w,
+              h: remaining.h - h,
+            ),
+          )
+        }
+        "bottom" -> {
+          let h = int.min(height, remaining.h)
+          dock_edges(
+            rest,
+            parent_id,
+            add_child(
+              child,
+              Rect(
+                x: remaining.x,
+                y: remaining.y + remaining.h - h,
+                w: remaining.w,
+                h: h,
+              ),
+              parent_id,
+              acc,
+            ),
+            Rect(
+              x: remaining.x,
+              y: remaining.y,
+              w: remaining.w,
+              h: remaining.h - h,
+            ),
+          )
+        }
+        "left" -> {
+          let w = int.min(width, remaining.w)
+          dock_edges(
+            rest,
+            parent_id,
+            add_child(
+              child,
+              Rect(x: remaining.x, y: remaining.y, w: w, h: remaining.h),
+              parent_id,
+              acc,
+            ),
+            Rect(
+              x: remaining.x + w,
+              y: remaining.y,
+              w: remaining.w - w,
+              h: remaining.h,
+            ),
+          )
+        }
+        "right" -> {
+          let w = int.min(width, remaining.w)
+          dock_edges(
+            rest,
+            parent_id,
+            add_child(
+              child,
+              Rect(
+                x: remaining.x + remaining.w - w,
+                y: remaining.y,
+                w: w,
+                h: remaining.h,
+              ),
+              parent_id,
+              acc,
+            ),
+            Rect(
+              x: remaining.x,
+              y: remaining.y,
+              w: remaining.w - w,
+              h: remaining.h,
+            ),
+          )
+        }
+        "client" | "fill" -> dock_edges(rest, parent_id, acc, remaining)
+        _ -> {
+          let x = int_prop(child, "x", 0)
+          let y = int_prop(child, "y", 0)
+          dock_edges(
+            rest,
+            parent_id,
+            add_child(
+              child,
+              Rect(x: remaining.x + x, y: remaining.y + y, w: width, h: height),
+              parent_id,
+              acc,
+            ),
+            remaining,
+          )
+        }
+      }
+    }
+  }
 }
 
 fn column_children(
@@ -161,24 +297,6 @@ fn add_child(
     ])
 
   resolve_children(child, rect, child.id, acc)
-}
-
-fn free_rect(child: Node, inner: Rect) -> Rect {
-  let width = int_prop(child, "w", default_w(child.kind))
-  let height = int_prop(child, "h", default_h(child.kind))
-  let x = int_prop(child, "x", 0)
-  let y = int_prop(child, "y", 0)
-
-  case text_prop(child, "align") {
-    "top" -> Rect(x: inner.x, y: inner.y, w: inner.w, h: height)
-    "bottom" ->
-      Rect(x: inner.x, y: inner.y + inner.h - height, w: inner.w, h: height)
-    "left" -> Rect(x: inner.x, y: inner.y, w: width, h: inner.h)
-    "right" ->
-      Rect(x: inner.x + inner.w - width, y: inner.y, w: width, h: inner.h)
-    "client" | "fill" -> inner
-    _ -> Rect(x: inner.x + x, y: inner.y + y, w: width, h: height)
-  }
 }
 
 /// Topmost (last-painted) placed item containing the point.
@@ -364,7 +482,20 @@ fn build_design(
 
   let children =
     list.map(node.children, fn(child) {
-      build_design(child, rect, rect, places, canvas_id, False)
+      build_design(
+        child,
+        case is_root {
+          // The canvas spans the whole design surface: the root's direct
+          // children keep canvas-absolute positions (the form outline is
+          // painted chrome at the form's editor position on the canvas).
+          True -> Rect(0, 0, 0, 0)
+          False -> rect
+        },
+        rect,
+        places,
+        canvas_id,
+        False,
+      )
     })
 
   campy_view.Node(

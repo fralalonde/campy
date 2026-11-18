@@ -47,6 +47,165 @@ pub fn next_message(timeout_ms: Int) -> NativeMessage
 @external(erlang, "campy_wx_native", "panel")
 pub fn panel(parent: Dynamic, id: Int) -> Dynamic
 
+/// Show the four yellow grab strips around a selected widget (they never
+/// overlap the widget, so nothing is hidden). Each strip remembers its
+/// offset so press coordinates convert into the widget's space.
+@external(erlang, "campy_wx_native", "grab_show")
+pub fn grab_show(
+  view_id: String,
+  parent: Dynamic,
+  x: Int,
+  y: Int,
+  w: Int,
+  h: Int,
+) -> Nil
+
+/// Reposition the grab strips around a moved/resized widget.
+@external(erlang, "campy_wx_native", "grab_move")
+pub fn grab_move(view_id: String, x: Int, y: Int, w: Int, h: Int) -> Nil
+
+/// Destroy a widget's grab strips.
+@external(erlang, "campy_wx_native", "grab_hide")
+pub fn grab_hide(view_id: String) -> Nil
+
+/// Which widget a strip press belongs to, and the strip's offset into that
+/// widget's space.
+@external(erlang, "campy_wx_native", "grab_owner")
+pub fn grab_owner(wx_id: Int) -> Result(#(String, Int, Int), Nil)
+
+/// The ids of every widget with grab strips showing.
+@external(erlang, "campy_wx_native", "grab_list")
+pub fn grab_list() -> List(String)
+
+/// A fresh wx id for chrome (grab strips, the form plate).
+@external(erlang, "campy_wx_native", "grab_next_id")
+pub fn grab_next_id() -> Int
+
+/// Create or move the form plate: the form as a selectable white panel on
+/// the canvas, kept below the controls.
+@external(erlang, "campy_wx_native", "form_plate_set")
+pub fn form_plate_set(
+  view_id: String,
+  parent: Dynamic,
+  x: Int,
+  y: Int,
+  w: Int,
+  h: Int,
+) -> Nil
+
+@external(erlang, "campy_wx_native", "form_plate_get")
+pub fn form_plate_get(view_id: String) -> Result(Dynamic, Nil)
+
+@external(erlang, "campy_wx_native", "form_plate_rect")
+pub fn form_plate_rect(view_id: String) -> Result(#(Int, Int, Int, Int), Nil)
+
+/// Which form id a plate press belongs to.
+@external(erlang, "campy_wx_native", "plate_owner")
+pub fn plate_owner(wx_id: Int) -> Result(String, Nil)
+
+/// The pointer position in a window's client coordinates: drags read the
+/// true pointer so a moving widget cannot shift the coordinate base.
+@external(erlang, "campy_wx_native", "pointer_in")
+pub fn pointer_in(ref: Dynamic) -> #(Int, Int)
+
+// Probe support: shell internals and synthetic event injection, so scripted
+// tests drive the real message pump and the real IDE loop.
+@external(erlang, "campy_wx_native", "null_ref")
+pub fn null_ref() -> Dynamic
+
+@external(erlang, "campy_wx_native", "view_wx_id")
+pub fn view_wx_id(shell: a, view_id: String) -> Result(Int, Nil)
+
+@external(erlang, "campy_wx_native", "view_ref")
+pub fn view_ref(shell: a, view_id: String) -> Result(Dynamic, Nil)
+
+@external(erlang, "campy_wx_native", "pointer_override")
+pub fn pointer_override(x: Int, y: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "pointer_clear")
+pub fn pointer_clear() -> Nil
+
+@external(erlang, "campy_wx_native", "grab_strip_wx_id")
+pub fn grab_strip_wx_id(view_id: String) -> Result(Int, Nil)
+
+/// A grab strip's wx id and offset by index (0=top, 1=bottom, 2=left,
+/// 3=right), for scripted strip presses.
+@external(erlang, "campy_wx_native", "grab_strip_info")
+pub fn grab_strip_info(
+  view_id: String,
+  index: Int,
+) -> Result(#(Int, Int, Int), Nil)
+
+@external(erlang, "campy_wx_native", "palette_tool")
+pub fn palette_tool(kind: String) -> Result(Int, Nil)
+
+@external(erlang, "campy_wx_native", "plate_wx_id")
+pub fn plate_wx_id(view_id: String) -> Result(Int, Nil)
+
+@external(erlang, "campy_wx_native", "enum_popup_list")
+pub fn enum_popup_list() -> Result(Dynamic, Nil)
+
+@external(erlang, "campy_wx_native", "enum_popup_wx_id")
+pub fn enum_popup_wx_id() -> Result(Int, Nil)
+
+/// Is the open dropdown anchored at the cell it belongs to?
+@external(erlang, "campy_wx_native", "debug_str")
+pub fn debug_str(term: a) -> String
+
+@external(erlang, "campy_wx_native", "enum_popup_anchored")
+pub fn enum_popup_anchored() -> Result(Bool, Nil)
+
+@external(erlang, "campy_wx_native", "enum_popup_select")
+pub fn enum_popup_select(index: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "inspector_cell")
+pub fn inspector_cell(shell: a, row: Int, col: Int) -> String
+
+@external(erlang, "campy_wx_native", "child_count")
+pub fn child_count(ref: Dynamic) -> Int
+
+@external(erlang, "campy_wx_native", "toolbar_stats")
+pub fn toolbar_stats(
+  bar: Dynamic,
+) -> #(#(Int, Int), #(Int, Int), #(Int, Int), #(Int, Int))
+
+@external(erlang, "campy_wx_native", "inject_mouse")
+pub fn inject_mouse(
+  wx_id: Int,
+  ref: Dynamic,
+  kind: String,
+  x: Int,
+  y: Int,
+  control: Bool,
+) -> Nil
+
+@external(erlang, "campy_wx_native", "inject_command")
+pub fn inject_command(wx_id: Int, kind: String, int: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "inject_grid_select")
+pub fn inject_grid_select(ref: Dynamic, row: Int, col: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "inject_list_pick")
+pub fn inject_list_pick(
+  list_id: Int,
+  list: Dynamic,
+  text: String,
+  index: Int,
+) -> Nil
+
+@external(erlang, "campy_wx_native", "inject_strip_press")
+pub fn inject_strip_press(wx_id: Int, x: Int, y: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "inject_plate_press")
+pub fn inject_plate_press(wx_id: Int, x: Int, y: Int) -> Nil
+
+@external(erlang, "campy_wx_native", "inject_tool_press")
+pub fn inject_tool_press(wx_id: Int) -> Nil
+
+/// Capture a window's on-screen content into a PNG (probe diagnostics).
+@external(erlang, "campy_wx_native", "snapshot")
+pub fn snapshot(ref: Dynamic, path: String) -> Nil
+
 @external(erlang, "campy_wx_native", "label")
 pub fn label(parent: Dynamic, id: Int, text: String) -> Dynamic
 
@@ -132,8 +291,18 @@ pub fn move(ref: Dynamic, x: Int, y: Int) -> Nil
 @external(erlang, "campy_wx_native", "resize")
 pub fn resize(ref: Dynamic, width: Int, height: Int) -> Nil
 
+/// A widget's current on-screen rectangle #(x, y, w, h) in its parent's
+/// coordinates.
+@external(erlang, "campy_wx_native", "widget_rect")
+pub fn widget_rect(ref: Dynamic) -> Result(#(Int, Int, Int, Int), Nil)
+
 @external(erlang, "campy_wx_native", "set_min_size")
 pub fn set_min_size(ref: Dynamic, width: Int, height: Int) -> Nil
+
+/// A window's client area as #(Width, Height); the align docking pass
+/// resolves free-layout children against this.
+@external(erlang, "campy_wx_native", "client_size")
+pub fn client_size(ref: Dynamic) -> #(Int, Int)
 
 @external(erlang, "campy_wx_native", "set_label")
 pub fn set_label(ref: Dynamic, text: String) -> Nil
@@ -167,6 +336,10 @@ pub fn update(ref: Dynamic) -> Nil
 
 @external(erlang, "campy_wx_native", "set_background")
 pub fn set_background(ref: Dynamic, r: Int, g: Int, b: Int) -> Nil
+
+/// Background colour from a "#rrggbb" hex string (scheme-aware canvases).
+@external(erlang, "campy_wx_native", "set_background_hex")
+pub fn set_background_hex(ref: Dynamic, hex: String) -> Nil
 
 @external(erlang, "campy_wx_native", "focus")
 pub fn focus(ref: Dynamic) -> Nil
@@ -219,6 +392,20 @@ pub fn toolbar(frame: Dynamic) -> Dynamic
 
 @external(erlang, "campy_wx_native", "tool")
 pub fn tool(bar: Dynamic, id: Int, label: String) -> Dynamic
+
+/// A toolbar tool; "run"/"stop" get drawn pictograms, others keep labels.
+@external(erlang, "campy_wx_native", "tool")
+pub fn tool_icon(bar: Dynamic, id: Int, label: String, icon: String) -> Dynamic
+
+/// The widget palette: pictogram tools inside the toolbar (right of the
+/// Run/Stop tools), one per catalog widget. Presses are routed back through
+/// `palette_owner`.
+@external(erlang, "campy_wx_native", "palette")
+pub fn palette(bar: Dynamic, entries: List(#(String, String))) -> Dynamic
+
+/// The widget kind a palette button press belongs to.
+@external(erlang, "campy_wx_native", "palette_owner")
+pub fn palette_owner(wx_id: Int) -> Result(String, Nil)
 
 @external(erlang, "campy_wx_native", "tool_separator")
 pub fn tool_separator(bar: Dynamic) -> Dynamic
@@ -280,6 +467,15 @@ pub fn grid_text_cell(grid: Dynamic, row: Int, col: Int) -> Nil
 @external(erlang, "campy_wx_native", "grid_read_only")
 pub fn grid_read_only(grid: Dynamic, row: Int, col: Int, read_only: Bool) -> Nil
 
+/// A dropdown cell editor for enum properties (align, layout).
+@external(erlang, "campy_wx_native", "grid_choice_cell")
+pub fn grid_choice_cell(
+  grid: Dynamic,
+  row: Int,
+  col: Int,
+  options: List(String),
+) -> Nil
+
 @external(erlang, "campy_wx_native", "editor")
 pub fn editor(parent: Dynamic, id: Int) -> Dynamic
 
@@ -323,6 +519,23 @@ pub fn editor_show_end(editor: Dynamic) -> Nil
 @external(erlang, "campy_wx_native", "editor_gleam")
 pub fn editor_gleam(editor: Dynamic) -> Nil
 
+/// Recolor an editor's Scintilla styles from a scheme palette
+/// (["bg", "fg", "keyword", "comment", "string", "number", "punct", "type"]
+/// as hex strings).
+@external(erlang, "campy_wx_native", "editor_scheme")
+pub fn editor_scheme(editor: Dynamic, palette: List(#(String, String))) -> Nil
+
+/// Apply the chosen editor font family and size to every style the editors
+/// use.
+@external(erlang, "campy_wx_native", "editor_font")
+pub fn editor_font(editor: Dynamic, face: String, size: Int) -> Nil
+
+/// Explicit clipboard/undo commands on a Scintilla editor (copy, cut, paste,
+/// undo, redo): this GTK build drops the default key bindings when a frame
+/// accelerator table is installed.
+@external(erlang, "campy_wx_native", "editor_clipboard")
+pub fn editor_clipboard(editor: Dynamic, action: String) -> Nil
+
 /// Token-color the editor's current buffer (container-lexer styling). Run
 /// after every document replacement: `set_editor` resets the styling bytes.
 @external(erlang, "campy_wx_native", "editor_style_gleam")
@@ -364,6 +577,30 @@ pub fn save_dialog(frame: Dynamic, wildcard: String, default: String) -> String
 @external(erlang, "campy_wx_native", "show_message")
 pub fn show_message(frame: Dynamic, title: String, message: String) -> Nil
 
+/// Modal Settings → Editor… dialog. Returns the chosen indexes into the
+/// caller's font/size/scheme lists, or `Error(Nil)` on Cancel.
+@external(erlang, "campy_wx_native", "settings_dialog")
+pub fn settings_dialog(
+  frame: Dynamic,
+  fonts: List(String),
+  sizes: List(String),
+  schemes: List(String),
+  font_index: Int,
+  size_index: Int,
+  scheme_index: Int,
+) -> Result(#(Int, Int, Int), Nil)
+
+/// Modal Settings → Agent… dialog. Returns the checkbox state and the port
+/// text, or `Error(Nil)` on Cancel.
+@external(erlang, "campy_wx_native", "agent_dialog")
+pub fn agent_dialog(
+  frame: Dynamic,
+  enabled: Bool,
+  port: String,
+  status: String,
+  endpoint: String,
+) -> Result(#(Bool, String), Nil)
+
 @external(erlang, "campy_wx_native", "set_tooltip")
 pub fn set_tooltip(ref: Dynamic, text: String) -> Nil
 
@@ -382,9 +619,9 @@ pub fn paint_canvas(
   width: Int,
   height: Int,
   grid: Int,
-  selection: Option(#(Int, Int, Int, Int)),
   marquee: Option(#(Int, Int, Int, Int)),
-  single: Bool,
+  bg: String,
+  grid_color: String,
 ) -> Nil
 
 @external(erlang, "campy_wx_native", "connect_design")

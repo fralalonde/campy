@@ -15,9 +15,9 @@ import campy_ide_model as model
 import campy_lsp
 import campy_peer
 import campy_project
-import campy_runner
 import campy_source
 import campy_view.{type Node, VBool, VInt, VList, VMap, VText}
+import campy_view/codec
 import campy_view/diff
 import campy_wx
 import gleam/dict
@@ -27,7 +27,6 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/otp/system
 import gleam/result
 import gleam/string
 
@@ -40,9 +39,13 @@ pub fn main() {
   case campy_project.load(dir) {
     Error(error) -> io.println("[ide] cannot load " <> dir <> ": " <> error)
     Ok(project) ->
-      case campy_wx.getenv("CAMPY_WX_SMOKE") {
-        "1" -> smoke(project, dir)
-        _ -> interactive(project, dir)
+      case campy_wx.getenv("CAMPY_WX_PROBE") {
+        "1" -> probe(project, dir)
+        _ ->
+          case campy_wx.getenv("CAMPY_WX_SMOKE") {
+            "1" -> smoke(project, dir)
+            _ -> interactive(project, dir)
+          }
       }
   }
 }
@@ -57,17 +60,16 @@ fn interactive(project: campy_project.Project, dir: String) {
     |> model.update(model.Log("Loaded " <> dir))
     |> model.update(model.SetStatus(dir))
     |> start_lsp(dir)
+    |> load_settings
   let current_view = view(state)
 
   let assert Ok(shell) = campy_wx.mount(shell, current_view)
   refresh(shell, None, state)
+  apply_appearance(shell, state)
   loop(shell, state, current_view, dir, NoDrag)
 }
 
-/// Spawn the Gleam language server against the generated analysis workspace
-/// (the editor's handlers.gleam documents are mirrored there so the server
-/// sees a real Gleam project). Failure is not fatal: the editor keeps working
-/// without language intelligence.
+/// The Gleam language server for the Code editor. Failure is not fatal.
 fn start_lsp(state: model.State, dir: String) -> model.State {
   let root = lsp_workspace_dir(dir)
   case write_lsp_workspace(root) {
@@ -97,6 +99,7 @@ fn start_lsp(state: model.State, dir: String) -> model.State {
   }
 }
 
+/// Scripted mount/open/save/close smoke; needs a display.
 fn smoke(project: campy_project.Project, dir: String) {
   let shell = campy_wx.start("Campy — " <> project.title, 1280, 860)
   let started = campy_wx.now_ms()
@@ -111,6 +114,7 @@ fn smoke(project: campy_project.Project, dir: String) {
     "[ide] mount " <> int.to_string(campy_wx.now_ms() - started) <> "ms",
   )
   refresh(shell, None, state)
+  apply_appearance(shell, state)
 
   let previous = state
   let state = case project.modules {
@@ -129,6 +133,307 @@ fn smoke(project: campy_project.Project, dir: String) {
   )
   io.println("[ide] smoke ok")
   campy_wx.close(shell)
+}
+
+fn rect_text(x: Int, y: Int, w: Int, h: Int) -> String {
+  int.to_string(x)
+  <> ","
+  <> int.to_string(y)
+  <> ","
+  <> int.to_string(w)
+  <> ","
+  <> int.to_string(h)
+}
+
+/// Verify a scripted expectation against the live state and geometry.
+/// Scripted end-to-end form-editor test. Synthetic wx events are injected
+/// into the owner's mailbox, so the REAL message pump and the REAL IDE loop
+/// drive every gesture: select, drag, strip-resize, form select/move/resize,
+/// palette placement, and the enum dropdown. Steps self-queue through the
+/// message channel (later stages need ids only the loop can create), and
+/// each prints [probe] PASS/FAIL lines the runner greps.
+fn probe(project: campy_project.Project, dir: String) {
+  let shell = campy_wx.start("Campy probe", 1280, 860)
+  let state =
+    model.new(project)
+    |> model.update(model.Log("probe " <> dir))
+    |> model.update(model.SetStatus(dir))
+  let current = view(state)
+  let assert Ok(shell) = campy_wx.mount(shell, current)
+  refresh(shell, None, state)
+
+  // Kick off the staged script; the loop runs every gesture for real.
+  inject_step(0)
+  loop(shell, state, current, dir, NoDrag)
+}
+
+@external(erlang, "campy_ide_wx_ffi", "inject_step")
+fn inject_step(step: Int) -> Nil
+
+@external(erlang, "campy_ide_wx_ffi", "inject_check")
+fn inject_check(check: String) -> Nil
+
+@external(erlang, "campy_ide_wx_ffi", "probe_step_decode")
+fn probe_step_decode(message: Dynamic) -> Result(Int, Nil)
+
+/// Run one scripted stage: inject its gestures, assert the outcome, queue
+/// the next stage. The state is live at each stage, so expectations are
+/// computed from the actual document.
+fn probe_step_run(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+  step: Int,
+) {
+  let check = fn(text: String) { inject_check(text) }
+  let next = fn(n: Int) { inject_step(n) }
+
+  case step {
+    0 -> {
+      campy_wx.probe_mouse(shell, "greet", "left_down", 30, 15, False)
+      campy_wx.probe_mouse(shell, "greet", "left_up", 30, 15, False)
+      check("sel=greet")
+      next(1)
+    }
+    1 -> {
+      let assert Ok(module) = model.active_module(state)
+      let assert Some(rect) = campy_design.absolute(module.form.view, "greet")
+      let #(gx, gy, gw, gh) = #(rect.x, rect.y, rect.w, rect.h)
+      campy_wx.probe_mouse(shell, "greet", "left_down", 30, 15, False)
+      campy_wx.probe_pointer(gx + 30, gy + 15)
+      campy_wx.probe_mouse(shell, "greet", "motion", 30, 15, False)
+      campy_wx.probe_pointer(gx + 70, gy + 39)
+      campy_wx.probe_mouse(shell, "greet", "motion", 30, 15, False)
+      campy_wx.probe_mouse(shell, "greet", "left_up", 30, 15, False)
+      check("rect:greet=" <> rect_text(gx + 40, gy + 24, gw, gh))
+      next(2)
+    }
+    2 -> {
+      let assert Ok(module) = model.active_module(state)
+      let assert Some(rect) = campy_design.absolute(module.form.view, "greet")
+      let #(gx, gy, gw, gh) = #(rect.x, rect.y, rect.w, rect.h)
+      let assert Ok(strip_id) = campy_wx.probe_grab_strip("greet")
+      campy_wx.probe_strip_press(strip_id, gw / 2, 1)
+      campy_wx.probe_pointer(gx + 44, gy - 12)
+      campy_wx.probe_mouse(shell, "greet", "motion", 0, 0, False)
+      campy_wx.probe_mouse(shell, "greet", "left_up", 0, 0, False)
+      check("rect:greet=" <> rect_text(gx, gy - 10, gw, gh + 10))
+      next(3)
+    }
+    3 -> {
+      let assert Ok(plate_id) = campy_wx.probe_plate("root")
+      campy_wx.probe_plate_press(plate_id, 300, 320)
+      campy_wx.probe_mouse(shell, "root", "left_up", 300, 320, False)
+      check("sel=root")
+      next(4)
+    }
+    4 -> {
+      let assert Ok(module) = model.active_module(state)
+      let assert Some(rect) = campy_design.absolute(module.form.view, "root")
+      let #(fx, fy, fw, fh) = #(rect.x, rect.y, rect.w, rect.h)
+      let assert Ok(plate_id) = campy_wx.probe_plate("root")
+      campy_wx.probe_plate_press(plate_id, 300, 320)
+      campy_wx.probe_pointer(fx + 300, fy + 320)
+      campy_wx.probe_mouse(shell, "root", "motion", 300, 320, False)
+      campy_wx.probe_pointer(fx + 320, fy + 330)
+      campy_wx.probe_mouse(shell, "root", "motion", 300, 320, False)
+      campy_wx.probe_mouse(shell, "root", "left_up", 300, 320, False)
+      check("plate=" <> rect_text(fx + 20, fy + 10, fw, fh))
+      next(5)
+    }
+    5 -> {
+      let assert Ok(module) = model.active_module(state)
+      let assert Some(rect) = campy_design.absolute(module.form.view, "root")
+      let #(fx, fy, fw, fh) = #(rect.x, rect.y, rect.w, rect.h)
+      let assert Ok(#(strip_id, _dx, _dy)) = campy_wx.probe_strip("root", 1)
+      campy_wx.probe_strip_press(strip_id, fw + 3, 1)
+      campy_wx.probe_pointer(fx + fw + 33, fy + fh + 4)
+      campy_wx.probe_mouse(shell, "root", "motion", fw + 3, 1, False)
+      campy_wx.probe_mouse(shell, "root", "left_up", fw + 3, 1, False)
+      check("plate=" <> rect_text(fx, fy, fw + 33, fh + 3))
+      next(6)
+    }
+    6 -> {
+      let assert Ok(button_tool) = campy_wx.probe_palette_tool("button")
+      campy_wx.probe_tool_press(button_tool)
+      check("armed=button")
+      campy_wx.probe_mouse(shell, "canvas", "left_down", 480, 330, False)
+      campy_wx.probe_mouse(shell, "canvas", "left_up", 480, 330, False)
+      check("sel=button_1")
+      next(7)
+    }
+    7 -> {
+      let assert Ok(plate_id) = campy_wx.probe_plate("root")
+      campy_wx.probe_plate_press(plate_id, 300, 320)
+      campy_wx.probe_mouse(shell, "root", "left_up", 300, 320, False)
+      check("sel=root")
+      campy_wx.probe_grid_select(shell, "inspector", 8, 1)
+      next(8)
+    }
+    8 -> {
+      // The dropdown is open now: pick an option like a user click would.
+      check("dropdown-anchored")
+      campy_wx.probe_enum_select(2)
+      campy_wx.probe_list_pick("horizontal", 2)
+      check("root-layout=row")
+      next(9)
+    }
+    9 -> {
+      case campy_wx.probe_toolbar_stats(shell) {
+        Ok(stats) -> {
+          let #(#(tw, th), #(bw, bh), #(cw, ch), #(fw, fh)) = stats
+          io.println(
+            "[probe] toolbar tool="
+            <> int.to_string(tw)
+            <> "x"
+            <> int.to_string(th)
+            <> " bitmap="
+            <> int.to_string(bw)
+            <> "x"
+            <> int.to_string(bh)
+            <> " client="
+            <> int.to_string(cw)
+            <> "x"
+            <> int.to_string(ch)
+            <> " frame="
+            <> int.to_string(fw)
+            <> "x"
+            <> int.to_string(fh),
+          )
+        }
+        Error(_) -> io.println("[probe] toolbar missing")
+      }
+      // Visual record for the runner: toolbar, canvas, inspector.
+      campy_wx.probe_snapshot(
+        shell,
+        "toolbar",
+        "/tmp/opencode/probe_toolbar.png",
+      )
+      campy_wx.probe_snapshot(shell, "canvas", "/tmp/opencode/probe_canvas.png")
+      campy_wx.probe_snapshot(
+        shell,
+        "inspector",
+        "/tmp/opencode/probe_inspector.png",
+      )
+      io.println("[probe] snapshots saved")
+      inject_step(10)
+    }
+    _ -> {
+      campy_wx.probe_command(shell, "menu-quit", "command_menu_selected")
+    }
+  }
+
+  loop(shell, state, current, dir, drag)
+}
+
+fn probe_verify(
+  shell: campy_wx.Shell,
+  state: model.State,
+  check: String,
+) -> String {
+  case check {
+    "sel=" <> expected -> {
+      let actual = string.join(state.selection, ",")
+      case actual == expected {
+        True -> "PASS " <> check
+        False -> "FAIL " <> check <> " (selection: " <> actual <> ")"
+      }
+    }
+    "armed=" <> expected -> {
+      let actual = case state.armed {
+        Some(kind) -> kind
+        None -> "none"
+      }
+      case actual == expected {
+        True -> "PASS " <> check
+        False -> "FAIL " <> check <> " (armed: " <> actual <> ")"
+      }
+    }
+    "root-layout=" <> expected -> {
+      let actual = case model.active_module(state) {
+        Ok(module) ->
+          case campy_view.prop(module.form.view, "layout") {
+            Ok(VText(layout)) -> layout
+            _ -> "free"
+          }
+        Error(_) -> "none"
+      }
+      case actual == expected {
+        True -> "PASS " <> check
+        False -> "FAIL " <> check <> " (root layout: " <> actual <> ")"
+      }
+    }
+    "rect:" <> rest -> {
+      case string.split_once(rest, "=") {
+        Ok(#(id, expected)) -> {
+          let expected_parts = string.split(expected, ",")
+          case campy_wx.widget_rect(shell, id), expected_parts {
+            Ok(#(x, y, w, h)), [ex, ey, ew, eh] ->
+              case
+                int.to_string(x) == ex
+                && int.to_string(y) == ey
+                && int.to_string(w) == ew
+                && int.to_string(h) == eh
+              {
+                True -> "PASS " <> check
+                False ->
+                  "FAIL "
+                  <> check
+                  <> " (actual: "
+                  <> int.to_string(x)
+                  <> ","
+                  <> int.to_string(y)
+                  <> ","
+                  <> int.to_string(w)
+                  <> ","
+                  <> int.to_string(h)
+                  <> ")"
+              }
+            _, _ -> "FAIL " <> check <> " (widget missing or malformed)"
+          }
+        }
+        Error(_) -> "FAIL " <> check <> " (malformed expectation)"
+      }
+    }
+    "plate=" <> expected -> {
+      let expected_parts = string.split(expected, ",")
+      case campy_wx.probe_plate_rect("root"), expected_parts {
+        Ok(#(x, y, w, h)), [ex, ey, ew, eh] ->
+          case
+            int.to_string(x) == ex
+            && int.to_string(y) == ey
+            && int.to_string(w) == ew
+            && int.to_string(h) == eh
+          {
+            True -> "PASS " <> check
+            False ->
+              "FAIL "
+              <> check
+              <> " (plate: "
+              <> int.to_string(x)
+              <> ","
+              <> int.to_string(y)
+              <> ","
+              <> int.to_string(w)
+              <> ","
+              <> int.to_string(h)
+              <> ")"
+          }
+        _, _ -> "FAIL " <> check <> " (plate missing)"
+      }
+    }
+    "dropdown-anchored" -> {
+      let verdict = campy_wx.probe_enum_anchored()
+      io.println("[dbg] verdict=" <> bool_text(verdict))
+      case verdict {
+        True -> "PASS " <> check
+        False -> "FAIL " <> check <> " (popup not anchored at the cell)"
+      }
+    }
+    _ -> "FAIL unknown check " <> check
+  }
 }
 
 fn rebind(shell: campy_wx.Shell, previous: Node, next: Node) -> campy_wx.Shell {
@@ -160,8 +465,9 @@ fn loop(
   drag: Drag,
 ) {
   // Drain the running app's replies before the next wx event; console text
-  // set outside a wx event needs an explicit frame repaint to show.
-  let drained = poll_app(shell, state, current)
+  // set outside a wx event needs an explicit frame repaint to show. The
+  // drained shell carries the run window's registries.
+  let #(shell, drained) = poll_app(shell, state, current)
   let state = case drained.console != state.console {
     True -> {
       campy_wx.repaint(shell)
@@ -219,6 +525,10 @@ fn loop(
           campy_wx.show_message(shell, "Keyboard shortcuts", help_text())
           loop(shell, state, current, dir, drag)
         }
+        "menu-settings-editor" ->
+          editor_settings(shell, state, current, dir, drag)
+        "menu-settings-agent" ->
+          agent_settings(shell, state, current, dir, drag)
         _ -> {
           let previous = state
           let state = handle(shell, state, dir, id, key, value)
@@ -242,15 +552,15 @@ fn loop(
     campy_wx.Accelerator(action) ->
       handle_accelerator(shell, state, current, dir, drag, action)
     campy_wx.FrameMoved -> {
-      // Reposition screen-anchored chrome after the window moves/resizes, but
-      // never fight a live drag preview (child move events can arrive too).
+      // Re-run the align pass so free-layout panes and the design canvas
+      // follow the new frame size — but never fight a live drag preview
+      // (child move events can arrive too).
       case drag {
-        NoDrag ->
-          campy_wx.show_selection(
-            shell,
-            selection_rect(state),
-            list.length(state.selection) == 1,
-          )
+        NoDrag -> {
+          campy_wx.relayout_free_children(shell)
+          let _ = campy_wx.show_selection(shell, state.selection)
+          Nil
+        }
         _ -> Nil
       }
       loop(shell, state, current, dir, drag)
@@ -274,21 +584,61 @@ fn loop(
       loop(shell, state, next, dir, drag)
     }
     campy_wx.Message(message) ->
-      case lsp_message(message) {
-        Ok(lsp) -> handle_lsp(shell, state, current, dir, drag, lsp)
+      case probe_step_decode(message) {
+        Ok(step) -> probe_step_run(shell, state, current, dir, drag, step)
         Error(_) ->
-          case trace_log_text(message) {
-            Ok(text) -> {
-              io.println("[trace] " <> text)
-              let state = model.update(state, model.RunReport(text))
-              set_console(shell, state)
+          case probe_message(message) {
+            Ok(check) -> {
+              io.println("[probe] " <> probe_verify(shell, state, check))
               loop(shell, state, current, dir, drag)
             }
-            Error(_) -> loop(shell, state, current, dir, drag)
+            Error(_) ->
+              case lsp_message(message) {
+                Ok(lsp) -> handle_lsp(shell, state, current, dir, drag, lsp)
+                Error(_) ->
+                  case trace_log_text(message) {
+                    Ok(text) -> {
+                      io.println("[trace] " <> text)
+                      let state = model.update(state, model.RunReport(text))
+                      set_console(shell, state)
+                      loop(shell, state, current, dir, drag)
+                    }
+                    Error(_) -> loop(shell, state, current, dir, drag)
+                  }
+              }
           }
       }
+    campy_wx.RunEvent(id, key, value) -> {
+      // The app window's controls talk straight to the running actor.
+      let _ = route_live_event(state, id, key, value)
+      loop(shell, state, current, dir, drag)
+    }
+    campy_wx.RunClosed -> run_window_closed(shell, state, current, dir, drag)
     campy_wx.Idle -> loop(shell, state, current, dir, drag)
   }
+}
+
+/// The user closed the app's own window: stop the actor the way Stop does.
+fn run_window_closed(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  _drag: Drag,
+) {
+  let state = case state.running {
+    Some(running) -> {
+      process.send(running.dispatch, campy_app.StopRequest)
+      state
+    }
+    None -> state
+  }
+  let shell = campy_wx.close_run(shell)
+  let state = model.update(state, model.RunStopped)
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  refresh(shell, Some(state), state)
+  loop(shell, state, next, dir, NoDrag)
 }
 
 /// Forward a shell event to the running app when the event's control is part
@@ -327,29 +677,45 @@ fn route_live_event(
 /// Drain the running app's replies into model commands. A `View` reply
 /// re-renders the live preview; reports go to the console. The wx loop calls
 /// this once per pass, so replies queue while wx events are processed.
+/// Drain the running app's replies into model commands. A `View` reply
+/// opens/updates the app's own window; reports go to the console. The wx loop
+/// calls this once per pass, so replies queue while wx events are processed.
+/// Returns the shell too: the run window's registries live here.
 fn poll_app(
   shell: campy_wx.Shell,
   state: model.State,
   current: Node,
-) -> model.State {
+) -> #(campy_wx.Shell, model.State) {
   case state.running {
-    None -> state
+    None -> #(shell, state)
     Some(running) ->
       case process.receive(running.reply, 0) {
-        Error(_) -> state
+        Error(_) -> #(shell, state)
         Ok(campy_app.View(document, gen)) -> {
           io.println("[app] view generation " <> int.to_string(gen))
-          let first = state.live_view == None
           let previous = state
           let state = model.update(state, model.RunView(document, gen))
           let next = view(state)
           let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
-          // Follow the app to the Run page only when it first attaches;
-          // later generations must not yank the user off another page.
-          case first {
-            True -> campy_wx.select_page(shell, "tabs", page_index(state))
-            False -> Nil
+          // Open the app's own window on the first published view; later
+          // generations update it in place (no reload, no focus loss).
+          let shell = case campy_wx.run_open(shell) {
+            True -> campy_wx.update_run(shell, run_window_root(state))
+            False ->
+              case open_run_window_for(shell, state) {
+                Ok(shell) -> shell
+                Error(error) -> {
+                  io.println("[ide] run window failed: " <> error)
+                  let state =
+                    model.update(
+                      state,
+                      model.Log("run window failed: " <> error),
+                    )
+                  set_console(shell, state)
+                  shell
+                }
+              }
           }
           poll_app(shell, state, next)
         }
@@ -382,7 +748,8 @@ fn poll_app(
           let next = view(state)
           let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
-          state
+          let shell = campy_wx.close_run(shell)
+          #(shell, state)
         }
       }
   }
@@ -399,21 +766,77 @@ fn handle_key(
   drag: Drag,
   key: campy_wx.Key,
 ) {
-  // char_hook handles the editing keys; the accelerator table handles the
-  // base keys (save/quit/pages/escape). Ignore the latter here so a key is
-  // never applied twice.
-  let action = case shortcut(state, key) {
-    Save
-    | Quit
-    | ShowFormPage
-    | ShowCodePage
-    | ShowSourcePage
-    | Complete
-    | JumpToDefinition
-    | Cancel -> NoShortcut
-    action -> action
+  // Scintilla keeps its own text handling (key events flow through with
+  // skip); the clipboard/undo keys are applied explicitly because this GTK
+  // build drops the editor's default key bindings when a frame accelerator
+  // table is installed.
+  let editing = state.code_view || state.source_view
+  case key.control, key.shift, key.code {
+    True, _, "c" ->
+      editor_clipboard_key(shell, state, current, dir, drag, editing, "copy")
+    True, _, "x" ->
+      editor_clipboard_key(shell, state, current, dir, drag, editing, "cut")
+    True, _, "v" ->
+      editor_clipboard_key(shell, state, current, dir, drag, editing, "paste")
+    True, False, "z" ->
+      editor_clipboard_key(shell, state, current, dir, drag, editing, "undo")
+    True, _, "z" ->
+      editor_clipboard_key(shell, state, current, dir, drag, editing, "redo")
+    True, _, "y" ->
+      editor_clipboard_key(shell, state, current, dir, drag, editing, "redo")
+    _, _, _ -> {
+      // char_hook handles the editing keys; the accelerator table handles the
+      // base keys (save/quit/pages/escape). Ignore the latter here so a key is
+      // never applied twice.
+      let action = case shortcut(state, key) {
+        Save
+        | Quit
+        | ShowFormPage
+        | ShowCodePage
+        | ShowSourcePage
+        | Complete
+        | JumpToDefinition
+        | Cancel -> NoShortcut
+        action -> action
+      }
+      dispatch_shortcut(shell, state, current, dir, drag, action)
+    }
   }
-  dispatch_shortcut(shell, state, current, dir, drag, action)
+}
+
+/// Apply a clipboard command to the focused page's editor. On Code/Source it
+/// drives the editor itself; on the Form page Ctrl+C copies the console text
+/// and the selection keys fall through to the form actions.
+fn editor_clipboard_key(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+  editing: Bool,
+  action: String,
+) {
+  case editing {
+    True -> {
+      let id = case state.source_view {
+        True -> "source"
+        False -> "code"
+      }
+      campy_wx.editor_clipboard(shell, id, action)
+      loop(shell, state, current, dir, drag)
+    }
+    False ->
+      case action {
+        "copy" -> {
+          campy_wx.editor_clipboard(shell, "console", action)
+          loop(shell, state, current, dir, drag)
+        }
+        "cut" -> dispatch_shortcut(shell, state, current, dir, drag, Cut)
+        "paste" -> dispatch_shortcut(shell, state, current, dir, drag, Paste)
+        "undo" -> dispatch_shortcut(shell, state, current, dir, drag, Undo)
+        _ -> dispatch_shortcut(shell, state, current, dir, drag, Redo)
+      }
+  }
 }
 
 fn handle_accelerator(
@@ -649,6 +1072,16 @@ pub type LspMessage {
   NoDefinitionMsg
   DownMsg(reason: String)
 }
+
+fn bool_text(b: Bool) -> String {
+  case b {
+    True -> "true"
+    False -> "false"
+  }
+}
+
+@external(erlang, "campy_ide_wx_ffi", "probe_message")
+fn probe_message(message: Dynamic) -> Result(String, Nil)
 
 @external(erlang, "campy_ide_wx_ffi", "lsp_message")
 fn lsp_message(message: Dynamic) -> Result(LspMessage, Nil)
@@ -915,11 +1348,199 @@ fn refresh_processes(
   current: Node,
   dir: String,
 ) {
-  let previous = state
   let next = view(state)
   let shell = rebind(shell, current, next)
   set_debug(shell, state)
   loop(shell, state, next, dir, NoDrag)
+}
+
+// ---------------------------------------------------------------------------
+// Settings (Settings → Editor…, Settings → Agent…)
+//
+// The Slint version's dialogs, rebuilt on wx: Editor… offers the same font
+// families, sizes, and Dark/Light/Solarized scheme; Agent… keeps the MCP
+// enable/port options. Settings live outside undo/redo and persist to the
+// user's config directory.
+// ---------------------------------------------------------------------------
+
+fn editor_settings(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+) {
+  let settings = state.settings
+  let picked =
+    campy_wx.show_settings_dialog(
+      shell,
+      model.fonts,
+      list.map(model.sizes, int.to_string),
+      model.scheme_names(),
+      model.font_index(settings),
+      model.size_index(settings),
+      model.scheme_index(settings.scheme),
+    )
+
+  case picked {
+    Error(_) -> loop(shell, state, current, dir, drag)
+    Ok(#(font, size, scheme)) -> {
+      let settings =
+        model.Settings(
+          ..settings,
+          font: list_at(model.fonts, font, settings.font),
+          font_size: list_at(model.sizes, size, settings.font_size),
+          scheme: model.scheme_from_name(list_at(
+            model.scheme_names(),
+            scheme,
+            model.scheme_name(settings.scheme),
+          )),
+        )
+
+      commit_settings(shell, state, current, dir, drag, settings)
+    }
+  }
+}
+
+fn agent_settings(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+) {
+  let settings = state.settings
+  let picked =
+    campy_wx.show_agent_dialog(
+      shell,
+      settings.mcp_enabled,
+      int.to_string(settings.mcp_port),
+      "MCP agent server is not available in this build; the options are saved.",
+      "Endpoint: http://127.0.0.1:"
+        <> int.to_string(settings.mcp_port)
+        <> "/mcp",
+    )
+
+  case picked {
+    Error(_) -> loop(shell, state, current, dir, drag)
+    Ok(#(enabled, port_text)) -> {
+      // An unparsable or out-of-range port keeps the previous value.
+      let #(port, state) = case int.parse(port_text) {
+        Ok(port) if port >= 1024 && port <= 65_535 -> #(port, state)
+        _ -> #(
+          settings.mcp_port,
+          model.update(
+            state,
+            model.Log(
+              "invalid MCP port \""
+              <> port_text
+              <> "\"; kept "
+              <> int.to_string(settings.mcp_port),
+            ),
+          ),
+        )
+      }
+      let settings =
+        model.Settings(..settings, mcp_enabled: enabled, mcp_port: port)
+      let state =
+        model.update(
+          state,
+          model.Log(
+            "MCP agent "
+            <> case enabled {
+              True -> "enabled"
+              False -> "disabled"
+            }
+            <> " (port "
+            <> int.to_string(port)
+            <> "); the agent server is not available in this build",
+          ),
+        )
+
+      commit_settings(shell, state, current, dir, drag, settings)
+    }
+  }
+}
+
+/// Apply a settings change: update the model, persist, and re-theme the
+/// editors (the canvas recolors through its node props in `view`).
+fn commit_settings(
+  shell: campy_wx.Shell,
+  state: model.State,
+  current: Node,
+  dir: String,
+  drag: Drag,
+  settings: model.Settings,
+) {
+  let previous = state
+  let state = model.update(state, model.ApplySettings(settings))
+  save_settings(state)
+  let next = view(state)
+  let shell = rebind(shell, current, next)
+  apply_appearance(shell, state)
+  campy_wx.repaint(shell)
+  refresh(shell, Some(previous), state)
+  loop(shell, state, next, dir, drag)
+}
+
+/// Recolor and resize every text editor from the settings: font family and
+/// size, then the scheme palette. The canvas follows through its node props.
+fn apply_appearance(shell: campy_wx.Shell, state: model.State) -> Nil {
+  let palette = model.scheme_palette(state.settings.scheme)
+  list.each(["code", "source", "console"], fn(id) {
+    campy_wx.apply_editor_font(
+      shell,
+      id,
+      state.settings.font,
+      state.settings.font_size,
+    )
+    campy_wx.apply_scheme(shell, id, palette)
+  })
+}
+
+fn list_at(items: List(a), index: Int, fallback: a) -> a {
+  case index >= 0 && index < list.length(items) {
+    True -> list.drop(items, index) |> list.first |> result.unwrap(fallback)
+    False -> fallback
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Settings persistence: one JSON document in the user's config directory
+// (~/.config/campy/settings.json). Missing or damaged files fall back to the
+// defaults.
+// ---------------------------------------------------------------------------
+
+@external(erlang, "campy_ide_wx_ffi", "settings_path")
+fn settings_path() -> String
+
+@external(erlang, "campy_ide_wx_ffi", "read_text")
+fn read_text(path: String) -> Result(String, String)
+
+fn load_settings(state: model.State) -> model.State {
+  case read_text(settings_path()) {
+    Error(_) -> state
+    Ok(text) ->
+      case codec.parse_json(text) {
+        Error(_) -> state
+        Ok(json) ->
+          case model.settings_from_json(json) {
+            Ok(settings) -> model.update(state, model.ApplySettings(settings))
+            Error(_) -> state
+          }
+      }
+  }
+}
+
+fn save_settings(state: model.State) -> Nil {
+  let path = settings_path()
+  case
+    write_file(path, codec.write_json(model.settings_to_json(state.settings)))
+  {
+    Ok(_) -> Nil
+    Error(error) ->
+      io.println("[ide] cannot save settings to " <> path <> ": " <> error)
+  }
 }
 
 /// Start a peer node named after the Nodes page field.
@@ -967,6 +1588,11 @@ fn stop_peer(
     Error(error) -> model.update(state, model.Log(error))
   }
   let next = view(state)
+  // A stopped peer takes its attached app (and its window) with it.
+  let shell = case state.running {
+    None -> campy_wx.close_run(shell)
+    Some(_) -> shell
+  }
   let shell = rebind(shell, current, next)
   refresh(shell, Some(previous), state)
   loop(shell, state, next, dir, NoDrag)
@@ -1221,9 +1847,14 @@ fn toggle_run(
 ) {
   case state.running {
     Some(running) -> {
-      io.println("[ide] stopping " <> running.slug)
-      process.send(running.dispatch, campy_app.StopRequest)
-      loop(shell, state, current, dir, NoDrag)
+      // Run/F5 while an app is attached updates it in place (hot code
+      // update) instead of stopping it.
+      io.println("[ide] updating " <> running.slug)
+      let state = update_code(state, running)
+      let next = view(state)
+      let shell = rebind(shell, current, next)
+      refresh(shell, Some(state), state)
+      loop(shell, state, next, dir, NoDrag)
     }
     None ->
       case deploy(state) {
@@ -1243,7 +1874,8 @@ fn toggle_run(
           let next = view(state)
           let shell = rebind(shell, current, next)
           refresh(shell, Some(previous), state)
-          campy_wx.select_page(shell, "tabs", page_index(state))
+          // The app shows in its own window as soon as it publishes its
+          // first view (poll_app); the notebook stays where the user is.
           loop(shell, state, next, dir, NoDrag)
         }
       }
@@ -1260,8 +1892,11 @@ fn help_text() -> String {
   <> "Delete            Delete selection (Form page)\n"
   <> "Escape            Cancel placement or drag\n"
   <> "Ctrl+1/2/3        Form, Code, Source\n\n"
-  <> "Design: click a palette button, then click or drag on the canvas.\n"
-  <> "Drag a control's body to move it; drag the small blue handles to resize."
+  <> "Design: click a pictogram in the toolbar palette, then click or drag\n"
+  <> "on the canvas. Drag a control's body to move it; drag the yellow grab\n"
+  <> "strips around the selection to resize. Click the form's body to select\n"
+  <> "the form itself (move/resizes it on the canvas). With several controls\n"
+  <> "selected each gets its own grab strips and the group moves."
 }
 
 fn begin_body_move(
@@ -1316,9 +1951,13 @@ fn handle_mouse(
   dir: String,
   drag: Drag,
   kind: String,
-  x: Int,
-  y: Int,
+  _event_x: Int,
+  _event_y: Int,
 ) {
+  // The events arrive on the pressed (and moving) widget, so their
+  // widget-relative base shifts under the pointer. Read the true pointer in
+  // canvas coordinates instead: no jump, exact end position.
+  let #(x, y) = campy_wx.canvas_pointer(shell)
   case kind {
     "motion" -> {
       let drag = drag_at(drag, x, y)
@@ -1426,7 +2065,7 @@ fn handle_design_mouse(
                       }
                     None -> {
                       let state = model.select_controls(state, [])
-                      campy_wx.show_selection(shell, None, False)
+                      campy_wx.show_selection(shell, [])
                       campy_wx.capture_canvas(shell)
                       let previous = state
                       refresh(shell, Some(previous), state)
@@ -1561,11 +2200,9 @@ fn hit_target(state: model.State, x: Int, y: Int) -> Option(String) {
     Ok(module) -> {
       let layout = campy_design.resolve(module.form.view)
       case campy_design.at(layout, x, y) {
-        Some(placed) ->
-          case placed.id == layout.root {
-            True -> None
-            False -> Some(placed.id)
-          }
+        // The form body itself is selectable (its plate is the form's
+        // widget): only clicks beyond the form start a marquee.
+        Some(placed) -> Some(placed.id)
         None -> None
       }
     }
@@ -1654,10 +2291,13 @@ fn move_reparent(
                     )
                   case target {
                     None -> None
+                    // The form root cannot be reparented: moving it just
+                    // changes its editor-only position.
                     Some(placed) ->
-                      case current {
-                        Some(parent) if parent == placed.id -> None
-                        _ -> Some(#(id, placed.id))
+                      case placed.id == id, current {
+                        True, _ -> None
+                        False, Some(parent) if parent == placed.id -> None
+                        False, _ -> Some(#(id, placed.id))
                       }
                   }
                 }
@@ -2000,9 +2640,9 @@ fn page_selected(state: model.State, value: campy_view.Value) -> model.State {
   case value {
     VInt(1) -> model.update(state, model.ShowCode)
     VInt(2) -> model.update(state, model.ShowSource)
-    VInt(4) -> model.update(state, model.ShowNodes)
-    VInt(5) -> model.update(state, model.ShowDebug)
-    VInt(_) -> model.update(state, model.ShowTabs)
+    VInt(3) -> model.update(state, model.ShowNodes)
+    VInt(4) -> model.update(state, model.ShowDebug)
+    VInt(_) -> model.update(state, model.ShowForm)
     _ -> state
   }
 }
@@ -2084,19 +2724,52 @@ fn inspector_edit(
           model.update(state, model.SetControlProp(id, "text", VText(text)))
         "title" ->
           model.update(state, model.SetControlProp(id, "title", VText(text)))
+        // Container layout: none/vertical/horizontal -> free/column/row.
+        "layout" ->
+          case layout_value(text) {
+            Ok(value) ->
+              model.update(
+                state,
+                model.SetControlProp(id, "layout", VText(value)),
+              )
+            Error(Nil) -> state
+          }
+        // Dock alignment inside a free-layout parent.
+        "align" ->
+          case align_value(text) {
+            Ok(value) ->
+              model.update(
+                state,
+                model.SetControlProp(id, "align", VText(value)),
+              )
+            Error(Nil) -> state
+          }
         _ -> state
       }
     [] ->
       case model.active_module(state) {
         Ok(module) ->
           case label {
-            "w" | "h" ->
+            "x" | "y" | "w" | "h" ->
               edit_root_dimension(state, module.form.view.id, label, text)
             "title" ->
               model.update(
                 state,
                 model.SetControlProp(module.form.view.id, "title", VText(text)),
               )
+            "layout" ->
+              case layout_value(text) {
+                Ok(value) ->
+                  model.update(
+                    state,
+                    model.SetControlProp(
+                      module.form.view.id,
+                      "layout",
+                      VText(value),
+                    ),
+                  )
+                Error(Nil) -> state
+              }
             _ -> state
           }
         Error(_) -> state
@@ -2135,15 +2808,18 @@ fn edit_root_dimension(
   text: String,
 ) -> model.State {
   case int.parse(string.trim(text)) {
-    Ok(value) ->
+    Ok(value) -> {
+      // Position is editor-only chrome (clamped at 0); size floors at the
+      // design minimum.
+      let floor = case field {
+        "x" | "y" -> 0
+        _ -> campy_design.min_size
+      }
       model.update(
         state,
-        model.SetControlProp(
-          root_id,
-          field,
-          VInt(int.max(value, campy_design.min_size)),
-        ),
+        model.SetControlProp(root_id, field, VInt(int.max(value, floor))),
       )
+    }
     Error(_) -> state
   }
 }
@@ -2380,13 +3056,36 @@ fn refresh(
   campy_wx.set_grid(shell, "inspector", rows)
   typed_grid_editors(shell, rows, list.length(state.selection) != 1)
   case page_index(state) == 0 {
-    True ->
-      campy_wx.show_selection(
-        shell,
-        selection_rect(state),
-        list.length(state.selection) == 1,
-      )
-    False -> campy_wx.show_selection(shell, None, False)
+    True -> {
+      // The form plate: the form itself as a selectable, draggable surface
+      // on the canvas (kept below the controls). Its grab strips follow
+      // through show_selection.
+      case model.active_module(state) {
+        Ok(module) -> {
+          let layout = campy_design.resolve(module.form.view)
+          case campy_design.placed(layout, layout.root) {
+            Some(placed) ->
+              campy_wx.form_plate_show(
+                shell,
+                module.form.view.id,
+                "canvas",
+                placed.rect.x,
+                placed.rect.y,
+                placed.rect.w,
+                placed.rect.h,
+              )
+            None -> Nil
+          }
+        }
+        Error(_) -> Nil
+      }
+      let _ = campy_wx.show_selection(shell, state.selection)
+      Nil
+    }
+    False -> {
+      let _ = campy_wx.show_selection(shell, [])
+      Nil
+    }
   }
 }
 
@@ -2414,9 +3113,8 @@ pub fn page_index(state: model.State) -> Int {
   case state.page {
     model.CodePage -> 1
     model.SourcePage -> 2
-    model.RunPage -> 3
-    model.NodesPage -> 4
-    model.DebugPage -> 5
+    model.NodesPage -> 3
+    model.DebugPage -> 4
     model.DesignPage -> 0
   }
 }
@@ -2832,10 +3530,20 @@ fn typed_grid_editors(
                 1,
                 campy_design.min_size,
               )
+            // Enum properties get dropdown editors.
+            "align" ->
+              campy_wx.set_grid_choice_cell(shell, "inspector", index, 1, [
+                "none", "top", "bottom", "left", "right", "fill",
+              ])
+            "layout" ->
+              campy_wx.set_grid_choice_cell(shell, "inspector", index, 1, [
+                "none", "vertical", "horizontal",
+              ])
             _ -> campy_wx.set_grid_text_cell(shell, "inspector", index, 1)
           }
           let editable = case label {
-            "x" | "y" | "w" | "h" | "text" | "title" -> True
+            "x" | "y" | "w" | "h" | "text" | "title" | "align" | "layout" ->
+              True
             _ -> False
           }
           campy_wx.set_grid_read_only(
@@ -2882,32 +3590,6 @@ fn set_console(shell: campy_wx.Shell, state: model.State) {
   campy_wx.set_editor(shell, "console", model.console_text(state), True)
   // Keep the newest lines in view.
   campy_wx.scroll_editor_to_end(shell, "console")
-}
-
-fn selection_rect(state: model.State) -> Option(#(Int, Int, Int, Int)) {
-  case selection_items(state) {
-    [] -> None
-    [#(_, first), ..rest] ->
-      Some(
-        list.fold(rest, first, fn(acc, item) {
-          let #(_, rect) = item
-          union(acc, rect)
-        }),
-      )
-  }
-}
-
-fn union(
-  a: #(Int, Int, Int, Int),
-  b: #(Int, Int, Int, Int),
-) -> #(Int, Int, Int, Int) {
-  let #(ax, ay, aw, ah) = a
-  let #(bx, by, bw, bh) = b
-  let x = int.min(ax, bx)
-  let y = int.min(ay, by)
-  let right = int.max(ax + aw, bx + bw)
-  let bottom = int.max(ay + ah, by + bh)
-  #(x, y, right - x, bottom - y)
 }
 
 fn status_text(state: model.State) -> String {
@@ -3045,6 +3727,7 @@ fn multi_rows(state: model.State, ids: List(String)) -> List(List(String)) {
         ["w", common(list.map(rects, fn(rect) { int.to_string(rect.w) }))],
         ["h", common(list.map(rects, fn(rect) { int.to_string(rect.h) }))],
         ["text", common(list.map(nodes, text_of))],
+        ["align", common(list.map(nodes, align_label))],
       ]
     }
   }
@@ -3085,15 +3768,13 @@ fn summary_rows(state: model.State) -> List(List(String)) {
             _ -> module.slug
           },
         ],
+        // The form's position is editor-only chrome: it places the form on
+        // the design canvas; the runtime uses only the size.
+        ["x", int.to_string(rect.x)],
+        ["y", int.to_string(rect.y)],
         ["w", int.to_string(rect.w)],
         ["h", int.to_string(rect.h)],
-        [
-          "layout",
-          case campy_view.prop(root, "layout") {
-            Ok(VText(layout)) -> layout
-            _ -> "free"
-          },
-        ],
+        ["layout", root_layout_label(root)],
         ["module", module.slug],
         ["undo", int.to_string(list.length(state.undo))],
         ["redo", int.to_string(list.length(state.redo))],
@@ -3115,16 +3796,22 @@ fn control_rows(state: model.State, id: String) -> List(List(String)) {
             Some(rect) -> rect
             None -> campy_design.Rect(0, 0, 0, 0)
           }
-          [
-            ["id", id],
-            ["kind", node.kind],
-            ["parent", parent_label(module.form.view, id)],
-            ["x", int.to_string(rect.x)],
-            ["y", int.to_string(rect.y)],
-            ["w", int.to_string(rect.w)],
-            ["h", int.to_string(rect.h)],
-            ["text", text_of(node)],
-          ]
+          list.append(
+            [
+              ["id", id],
+              ["kind", node.kind],
+              ["parent", parent_label(module.form.view, id)],
+              ["x", int.to_string(rect.x)],
+              ["y", int.to_string(rect.y)],
+              ["w", int.to_string(rect.w)],
+              ["h", int.to_string(rect.h)],
+              ["text", text_of(node)],
+            ],
+            case campy_catalog.accepts_children(node.kind) {
+              True -> [["layout", layout_label(node)]]
+              False -> [["align", align_label(node)]]
+            },
+          )
         }
       }
   }
@@ -3144,6 +3831,47 @@ fn text_of(node: Node) -> String {
   }
 }
 
+/// Container layout in the inspector's vocabulary: the document stores
+/// free/column/row, the user sees none/vertical/horizontal.
+fn layout_label(node: Node) -> String {
+  case campy_view.prop(node, "layout") {
+    Ok(VText("column")) -> "vertical"
+    Ok(VText("row")) -> "horizontal"
+    _ -> "none"
+  }
+}
+
+fn root_layout_label(root: Node) -> String {
+  layout_label(root)
+}
+
+/// Map the inspector's layout vocabulary back to document values.
+fn layout_value(text: String) -> Result(String, Nil) {
+  case string.trim(text) {
+    "none" -> Ok("free")
+    "vertical" -> Ok("column")
+    "horizontal" -> Ok("row")
+    _ -> Error(Nil)
+  }
+}
+
+/// Valid dock alignments for a control in a free-layout parent.
+fn align_value(text: String) -> Result(String, Nil) {
+  case string.trim(text) {
+    "none" | "top" | "bottom" | "left" | "right" | "fill" | "client" ->
+      Ok(string.trim(text))
+    _ -> Error(Nil)
+  }
+}
+
+/// A control's dock alignment in a free-layout parent.
+fn align_label(node: Node) -> String {
+  case campy_view.prop(node, "align") {
+    Ok(VText(align)) -> align
+    _ -> "none"
+  }
+}
+
 fn active_slug(state: model.State) -> String {
   case state.active {
     Some(slug) -> slug
@@ -3152,12 +3880,38 @@ fn active_slug(state: model.State) -> String {
 }
 
 fn canvas_node(state: model.State) -> Node {
-  case model.active_module(state) {
+  let node = case model.active_module(state) {
     Ok(module) -> campy_design.design_view(module.form.view, "canvas")
     Error(_) ->
       campy_view.node("canvas", "canvas")
       |> campy_view.with_props([#("h", VInt(300)), #("w", VInt(400))])
       |> campy_view.with_events(["select"])
+  }
+
+  // The scheme recolors the canvas: background and grid colors ride the node
+  // props so a settings change reaches the paint handler through the normal
+  // diff. The panel background follows too (apply_prop handles "canvas_bg").
+  // The canvas fills its page, so a maximized window grows the editing area.
+  let #(bg, grid) = canvas_colors(state)
+  campy_view.with_props(node, [
+    #("canvas_bg", VText(bg)),
+    #("canvas_grid", VText(grid)),
+    #("align", VText("fill")),
+    ..node.props
+  ])
+}
+
+/// The canvas paint colors implied by the settings' scheme:
+/// #(background, grid).
+pub fn canvas_colors(state: model.State) -> #(String, String) {
+  let palette = model.scheme_palette(state.settings.scheme)
+  #(palette_value(palette, "canvas"), palette_value(palette, "grid"))
+}
+
+fn palette_value(palette: List(#(String, String)), key: String) -> String {
+  case list.find(palette, fn(entry) { entry.0 == key }) {
+    Ok(#(_, value)) -> value
+    Error(Nil) -> ""
   }
 }
 
@@ -3167,12 +3921,13 @@ fn view(state: model.State) -> Node {
     #("title", VText("Campy")),
     #("w", VInt(1280)),
     #("h", VInt(860)),
-    #("layout", VText("column")),
+    // The shell is align-driven: panes declare their dock side and the
+    // renderer re-docks them on every resize.
+    #("layout", VText("none")),
   ])
   |> campy_view.with_children([
     menubar(),
     toolbar(),
-    palette_strip(state),
     status(state),
     body(state),
   ])
@@ -3203,6 +3958,10 @@ fn menubar() -> Node {
       menu_item("menu-source", "Generated source    Ctrl+3"),
       menu_item("menu-outline", "Outline            Ctrl+F12"),
     ]),
+    menu("settings-menu", "Settings", [
+      menu_item("menu-settings-editor", "Editor…"),
+      menu_item("menu-settings-agent", "Agent…"),
+    ]),
     menu("help-menu", "Help", [
       menu_item("menu-help-keys", "Keyboard shortcuts    F1"),
     ]),
@@ -3224,18 +3983,12 @@ fn menu_item(id: String, label: String) -> Node {
 fn toolbar() -> Node {
   campy_view.node("toolbar", "toolbar")
   |> campy_view.with_children([
-    tool("tool-save", "Save"),
-    tool("tool-undo", "Undo"),
-    tool("tool-redo", "Redo"),
-    tool_separator(),
-    tool("tool-cut", "Cut"),
-    tool("tool-copy", "Copy"),
-    tool("tool-paste", "Paste"),
-    tool("tool-duplicate", "Duplicate"),
-    tool("tool-delete", "Delete"),
-    tool_separator(),
+    // Only Run/Stop live in the toolbar; the edit commands are covered by
+    // the menus and their shortcuts. The palette pictograms follow.
     tool("tool-run", "Run"),
     tool("tool-stop", "Stop"),
+    tool_separator(),
+    campy_view.node("palette", "toolbar-palette"),
   ])
 }
 
@@ -3257,9 +4010,10 @@ fn status(state: model.State) -> Node {
 fn body(state: model.State) -> Node {
   campy_view.node("panel", "body")
   |> campy_view.with_props([
-    #("layout", VText("row")),
+    // Side panes dock by their align property; the centre fills the rest.
+    #("layout", VText("none")),
     #("border", VInt(2)),
-    #("grow", VBool(True)),
+    #("align", VText("fill")),
   ])
   |> campy_view.with_children([
     navigator(state),
@@ -3276,6 +4030,7 @@ fn navigator(state: model.State) -> Node {
     #("layout", VText("column")),
     #("border", VInt(6)),
     #("w", VInt(200)),
+    #("align", VText("left")),
   ])
   |> campy_view.with_children([
     campy_view.node("label", "projects-title")
@@ -3305,7 +4060,7 @@ fn centre(state: model.State) -> Node {
   |> campy_view.with_props([
     #("layout", VText("column")),
     #("border", VInt(2)),
-    #("grow", VBool(True)),
+    #("align", VText("fill")),
   ])
   |> campy_view.with_children([
     campy_view.node("panel", "centre-header")
@@ -3328,7 +4083,6 @@ fn centre(state: model.State) -> Node {
         form_page(state),
         code_page(),
         source_page(),
-        run_page(state),
         nodes_page(state),
         debug_page(state),
       ]),
@@ -3518,42 +4272,40 @@ fn nodes_page(state: model.State) -> Node {
   ])
 }
 
-/// The Run page grafts the running app's published view into the IDE: the
-/// form root becomes a panel (nested windows are not supported) with the
-/// same children and props; its controls connect with normal (non-design)
-/// events, which the shell routes to the running actor.
-fn run_page(state: model.State) -> Node {
-  campy_view.node("page", "page-run")
-  |> campy_view.with_props([
-    #("text", VText("Run")),
-    #("layout", VText("free")),
-  ])
-  |> campy_view.with_children([preview_node(state)])
-}
-
-fn preview_node(state: model.State) -> Node {
+/// The running app publishes into its own top-level window (open_run_window /
+/// update_run); there is no in-notebook Run page any more.
+/// The view the run window mounts: the app's published root, retitled as a
+/// run window when the form has no title of its own.
+fn run_window_root(state: model.State) -> Node {
   case state.live_view {
-    Some(document) -> {
-      let root = document.view
-      campy_view.Node(
-        kind: case root.kind {
-          "form" | "window" -> "panel"
-          kind -> kind
-        },
-        id: "preview-root",
-        key: root.key,
-        props: root.props,
-        events: root.events,
-        children: root.children,
-        extra: root.extra,
-      )
-    }
+    Some(document) ->
+      case campy_view.prop(document.view, "title") {
+        Ok(VText(_)) -> document.view
+        _ ->
+          campy_view.with_props(document.view, [
+            #("title", VText(active_slug(state))),
+            ..document.view.props
+          ])
+      }
     None ->
-      campy_view.node("label", "preview-hint")
+      campy_view.node("form", "preview")
       |> campy_view.with_props([
-        #("text", VText("Press Run to start the active form's app")),
+        #("title", VText(active_slug(state))),
+        #("w", VInt(400)),
+        #("h", VInt(300)),
       ])
   }
+}
+
+fn open_run_window_for(
+  shell: campy_wx.Shell,
+  state: model.State,
+) -> Result(campy_wx.Shell, String) {
+  campy_wx.open_run_window(
+    shell,
+    "Campy — " <> active_slug(state),
+    run_window_root(state),
+  )
 }
 
 /// Right dock: selection header with Delete, then a native Properties/Events
@@ -3564,6 +4316,7 @@ fn inspector(state: model.State) -> Node {
     #("layout", VText("column")),
     #("border", VInt(4)),
     #("w", VInt(330)),
+    #("align", VText("right")),
   ])
   |> campy_view.with_children([
     campy_view.node("panel", "inspector-header")
@@ -3634,32 +4387,6 @@ fn events_page(state: model.State) -> Node {
 
 /// Compact palette strip under the toolbar. Buttons are symbol/text tools with
 /// tooltips; clicking one arms placement and highlights that button.
-fn palette_strip(state: model.State) -> Node {
-  campy_view.node("panel", "palette-strip")
-  |> campy_view.with_props([
-    #("layout", VText("row")),
-    #("border", VInt(3)),
-  ])
-  |> campy_view.with_children(list.append(
-    [
-      campy_view.node("label", "palette-title")
-      |> campy_view.with_props([#("text", VText("Widgets"))]),
-    ],
-    list.map(campy_catalog.all(), fn(widget) {
-      let armed = state.armed == Some(widget.kind)
-      campy_view.node("button", "palette-" <> widget.kind)
-      |> campy_view.with_props([
-        #("text", VText(palette_label(widget.kind))),
-        #("tooltip", VText(palette_tooltip(widget))),
-        #("w", VInt(62)),
-        #("h", VInt(28)),
-        #("highlight", VBool(armed)),
-      ])
-      |> campy_view.with_events(["click"])
-    }),
-  ))
-}
-
 fn palette_label(kind: String) -> String {
   case kind {
     "text" -> "Text"
@@ -3669,10 +4396,6 @@ fn palette_label(kind: String) -> String {
     "progress" -> "Progress"
     _ -> campy_catalog.label_of(kind)
   }
-}
-
-fn palette_tooltip(widget: campy_catalog.Widget) -> String {
-  palette_label(widget.kind) <> " — click, then drag on the form"
 }
 
 pub fn palette_labels() -> List(String) {

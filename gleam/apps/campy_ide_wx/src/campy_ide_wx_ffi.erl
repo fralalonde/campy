@@ -1,5 +1,5 @@
 -module(campy_ide_wx_ffi).
--export([make_dir/1, write_file/2, compile_and_load/2, cwd/0, start_app_on/3, load_code_on/3, pause_on/2, resume_on/2, format_term/1, spawn_tracer/3, trace_send_receive/4, stop_tracer/2, processes_on/1, trace_log_text/1, copy_file/2, lsp_message/1]).
+-export([make_dir/1, write_file/2, read_text/1, settings_path/0, probe_message/1, inject_check/1, inject_step/1, probe_step_decode/1, compile_and_load/2, cwd/0, start_app_on/3, load_code_on/3, pause_on/2, resume_on/2, format_term/1, spawn_tracer/3, trace_send_receive/4, stop_tracer/2, processes_on/1, trace_log_text/1, copy_file/2, lsp_message/1]).
 
 make_dir(Dir) ->
     case filelib:ensure_path(Dir) of
@@ -12,6 +12,19 @@ write_file(Path, Text) ->
         ok -> {ok, nil};
         {error, Reason} -> {error, reason(Reason)}
     end.
+
+read_text(Path) ->
+    case file:read_file(Path) of
+        {ok, Binary} -> {ok, unicode:characters_to_binary(Binary)};
+        {error, Reason} -> {error, reason(Reason)}
+    end.
+
+%% The persisted IDE settings document, in the user's config directory
+%% (XDG_CONFIG_HOME/campy/settings.json).
+settings_path() ->
+    Dir = filename:basedir(user_config, "campy"),
+    filelib:ensure_dir(filename:join(Dir, "settings.json")),
+    unicode:characters_to_binary(filename:join(Dir, "settings.json")).
 
 %% Build the scratch package at Dir with the Gleam CLI, add its ebin to the
 %% code path, and ensure Module is loaded. Ok on success; an error message
@@ -108,6 +121,22 @@ lsp_message({lsp_down, Reason}) ->
     {ok, {down_msg, Reason}};
 lsp_message(_) ->
     {error, nil}.
+
+%% A scripted probe check rides the renderer's message channel: the loop
+%% prints a PASS/FAIL line against the live state and geometry.
+probe_message({probe_check, Text}) -> {ok, Text};
+probe_message(_) -> {error, nil}.
+
+inject_check(Check) ->
+    self() ! {probe_check, Check},
+    ok.
+
+inject_step(Step) ->
+    self() ! {probe_step, Step},
+    ok.
+
+probe_step_decode({probe_step, Step}) -> {ok, Step};
+probe_step_decode(_) -> {error, nil}.
 
 %% Keep a copy of a built beam under the versions directory for rollback.
 copy_file(From, To) ->

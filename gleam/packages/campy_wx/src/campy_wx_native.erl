@@ -5,7 +5,8 @@
     textctrl/3, memo/3, slider/5, gauge/3, picture/3,
     box_sizer/1, add/5, insert/6, detach/2, set_sizer/2, layout_sizer/2,
     menubar/0, menu/0, menuitem/3, append_menu/3, set_menubar/2,
-    toolbar/1, tool/3, tool_separator/1, realize_toolbar/1,
+    toolbar/1, tool/3, tool/4, tool_separator/1, realize_toolbar/1,
+    palette/2, palette_owner/1,
     statusbar/1, set_status/2,
     notebook/2, page/3, notebook_selection/1, select_page/2,
     tree/2, tree_set/2, tree_selected_key/1,
@@ -14,13 +15,26 @@
     editor/2, editor_set/3, editor_show_end/1, editor_gleam/1,
     editor_style_gleam/2, editor_get_text/1, editor_caret/1, editor_goto/3,
     editor_diagnostics/2, editor_autocomplete/2,
+    editor_scheme/2, editor_font/3,
+    editor_clipboard/2,
+    settings_dialog/7, agent_dialog/5,
+    grab_show/6, grab_move/5, grab_hide/1, grab_owner/1, grab_list/0,
+    grab_next_id/0, form_plate_set/6, form_plate_get/1, form_plate_rect/1,
+    plate_owner/1, pointer_in/1, enum_popup_wx_id/0, enum_popup_anchored/0,
+    view_wx_id/2, view_ref/2, pointer_override/2, pointer_clear/0,
+    grab_strip_wx_id/1, grab_strip_info/2, palette_tool/1, widget_icon/1,
+    plate_wx_id/1, enum_popup_list/0, enum_popup_select/1, inspector_cell/3,
+    child_count/1, null_ref/0, toolbar_stats/1, debug_str/1, inject_mouse/6, inject_command/3, inject_grid_select/3,
+    inject_strip_press/3, inject_plate_press/3, inject_tool_press/1, snapshot/2,
+    inject_list_pick/4,
+    grid_choice_cell/4,
     open_dialog/2, save_dialog/3, show_message/3,
     set_tooltip/2,
     canvas/2, paint_canvas/7, connect_design/2,
     capture/1, release/1, release_capture/0, set_cursor/2, set_shortcuts/2,
-    freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3,
+    freeze/1, thaw/1, layout/1, move/3, resize/3, set_min_size/3, client_size/1, widget_rect/1,
     set_label/2, set_text/2, set_int/3, set_bool/3, set_selection/3,
-    set_items/3, set_enabled/2, set_visible/2, set_background/4, refresh_window/1, update_window/1, focus/1,
+    set_items/3, set_enabled/2, set_visible/2, set_background/4, set_background_hex/2, refresh_window/1, update_window/1, focus/1,
     focus_ignoring_children/1, set_editable/2, raise/1, destroy/1, apply_shortcuts/1,
     get_text/1, get_int/2, get_bool/2, get_selection/2,
     now_ms/0, getenv/1, editor_word_at/1, editor_replace_line/3, editor_jump_list/2,
@@ -49,6 +63,399 @@ show(Ref) ->
 
 panel(Parent, Id) ->
     wxPanel:new(Parent, [{winid, Id}]).
+
+%% ---------------------------------------------------------------------------
+%% Selection grab strips. Four thin yellow plates surround the selected
+%% widget - top, bottom, left, right - protruding 3px. They never overlap the
+%% widget itself (windowless widgets like labels cannot be raised above a
+%% sibling panel), so nothing is ever hidden. Each strip remembers its offset
+%% so press coordinates convert into the widget's space.
+%% ---------------------------------------------------------------------------
+
+grab_map() ->
+    case get(campy_grabs) of
+        undefined -> #{};
+        M -> M
+    end.
+
+grab_ids_map() ->
+    case get(campy_grab_ids) of
+        undefined -> #{};
+        M -> M
+    end.
+
+strip_layouts(X, Y, W, H) ->
+    [
+        {X - 3, Y - 3, W + 6, 3, -3, -3},
+        {X - 3, Y + H, W + 6, 3, -3, H},
+        {X - 3, Y, 3, H, -3, 0},
+        {X + W, Y, 3, H, W, 0}
+    ].
+
+%% ViewId -> [{Ref, WxId, Dx, Dy}] for its four strips; WxId -> ViewId.
+grab_show(ViewId, Parent, X, Y, W, H) ->
+    grab_hide(ViewId),
+    Made = lists:map(
+        fun({SX, SY, SW, SH, DX, DY}) ->
+            WxId = grab_next_id(),
+            Ref = wxPanel:new(Parent, [{winid, WxId}]),
+            wxPanel:setBackgroundColour(Ref, {255, 221, 0}),
+            wxPanel:connect(Ref, left_down, []),
+            wxPanel:connect(Ref, motion, []),
+            wxPanel:connect(Ref, left_up, []),
+            wxWindow:move(Ref, {SX, SY}),
+            wxWindow:setSize(Ref, {SW, SH}),
+            wxWindow:raise(Ref),
+            {Ref, WxId, DX, DY}
+        end,
+        strip_layouts(X, Y, W, H)
+    ),
+    put(campy_grabs, maps:put(ViewId, Made, grab_map())),
+    put(
+        campy_grab_ids,
+        lists:foldl(
+            fun({_, WxId, _, _}, Acc) -> maps:put(WxId, ViewId, Acc) end,
+            grab_ids_map(),
+            Made
+        )
+    ),
+    ok.
+
+%% Reposition the strips around a (possibly moved/resized) widget.
+grab_move(ViewId, X, Y, W, H) ->
+    case maps:find(ViewId, grab_map()) of
+        {ok, Strips} ->
+            Updated = lists:map(
+                fun({{SX, SY, _SW, _SH, DX, DY}, {Ref, WxId, _, _}}) ->
+                    wxWindow:move(Ref, {SX, SY}),
+                    {Ref, WxId, DX, DY}
+                end,
+                lists:zip(strip_layouts(X, Y, W, H), Strips)
+            ),
+            put(campy_grabs, maps:put(ViewId, Updated, grab_map())),
+            ok;
+        error ->
+            ok
+    end.
+
+grab_hide(ViewId) ->
+    case maps:find(ViewId, grab_map()) of
+        {ok, Strips} ->
+            lists:foreach(
+                fun({Ref, WxId, _, _}) ->
+                    catch wxWindow:destroy(Ref),
+                    put(campy_grab_ids, maps:remove(WxId, grab_ids_map()))
+                end,
+                Strips
+            ),
+            put(campy_grabs, maps:remove(ViewId, grab_map())),
+            ok;
+        error ->
+            ok
+    end.
+
+%% Which widget a strip press belongs to, and the strip's offset into that
+%% widget's space (strip-relative + offset = widget-relative).
+grab_owner(WxId) ->
+    case maps:find(WxId, grab_ids_map()) of
+        {ok, ViewId} ->
+            case maps:find(ViewId, grab_map()) of
+                {ok, Strips} ->
+                    case
+                        lists:search(
+                            fun({_, Id, _, _}) -> Id =:= WxId end, Strips
+                        )
+                    of
+                        {value, {_, _, DX, DY}} -> {ok, {ViewId, DX, DY}};
+                        false -> {ok, {ViewId, 0, 0}}
+                    end;
+                error ->
+                    {ok, {ViewId, 0, 0}}
+            end;
+        error ->
+            {error, nil}
+    end.
+
+grab_list() ->
+    maps:keys(grab_map()).
+
+%% Grab ids live in their own range, away from the view widget ids (main
+%% shell from 1001, run window from 900000).
+grab_next_id() ->
+    Current = case get(campy_grab_next) of
+        undefined -> 400000;
+        N -> N
+    end,
+    put(campy_grab_next, Current + 1),
+    Current.
+
+%% ---------------------------------------------------------------------------
+%% The form plate: the form itself as a selectable surface. A white panel on
+%% the design canvas at the form's editor position, kept below the controls
+%% (it is the form's body: clicking it selects the form, dragging moves it).
+%% ---------------------------------------------------------------------------
+
+plate_map() ->
+    case get(campy_plates) of
+        undefined -> #{};
+        M -> M
+    end.
+
+plate_ids_map() ->
+    case get(campy_plate_ids) of
+        undefined -> #{};
+        M -> M
+    end.
+
+%% Create or move the plate for a form root; its wx id routes presses to the
+%% form's id with plate-relative coordinates.
+form_plate_set(ViewId, Parent, X, Y, W, H) ->
+    {Ref, WxId} = case maps:find(ViewId, plate_map()) of
+        {ok, {R, Id}} ->
+            wxWindow:move(R, {X, Y}),
+            wxWindow:setSize(R, {W, H}),
+            {R, Id};
+        error ->
+            Id = grab_next_id(),
+            R = wxPanel:new(Parent,
+                            [{winid, Id}, {style, ?wxBORDER_SIMPLE bor
+                                              ?wxFULL_REPAINT_ON_RESIZE}]),
+            wxPanel:setBackgroundColour(R, {255, 255, 255}),
+            wxWindow:move(R, {X, Y}),
+            wxWindow:setSize(R, {W, H}),
+            wxWindow:lower(R),
+            wxPanel:connect(R, left_down, []),
+            wxPanel:connect(R, motion, []),
+            wxPanel:connect(R, left_up, []),
+            {R, Id}
+    end,
+    put(campy_plates, maps:put(ViewId, {Ref, WxId}, plate_map())),
+    put(campy_plate_ids, maps:put(WxId, ViewId, plate_ids_map())),
+    ok.
+
+form_plate_get(ViewId) ->
+    case maps:find(ViewId, plate_map()) of
+        {ok, {Ref, _}} -> {ok, Ref};
+        error -> {error, nil}
+    end.
+
+form_plate_rect(ViewId) ->
+    case maps:find(ViewId, plate_map()) of
+        {ok, {Ref, _}} ->
+            case wxWindow:getRect(Ref) of
+                {X, Y, W, H} -> {ok, {X, Y, W, H}};
+                _ -> {error, nil}
+            end;
+        error ->
+            {error, nil}
+    end.
+
+plate_owner(WxId) ->
+    case maps:find(WxId, plate_ids_map()) of
+        {ok, ViewId} -> {ok, ViewId};
+        error -> {error, nil}
+    end.
+
+%% Where the pointer currently is, in a window's client coordinates: drags
+%% read the true pointer so a moving widget cannot shift the coordinate base.
+pointer_in(Ref) ->
+    case get(campy_pointer) of
+        {X, Y} ->
+            {X, Y};
+        undefined ->
+            {SX, SY} = wx_misc:getMousePosition(),
+            wxWindow:screenToClient(Ref, {SX, SY})
+    end.
+
+%% ---------------------------------------------------------------------------
+%% Probe support: scripted tests inject synthetic wx events into the owner's
+%% mailbox, so the REAL message pump and the REAL IDE loop drive every
+%% gesture. Helpers expose shell internals and warp the pointer for
+%% deterministic drags.
+%% ---------------------------------------------------------------------------
+
+null_ref() ->
+    wx:null().
+
+view_wx_id(Shell, ViewId) ->
+    {shell, _, _, Widgets, _, _, _, _} = Shell,
+    case maps:find(ViewId, Widgets) of
+        {ok, {widget, _, _, WxId, _, _, _, _, _, _, _, _, _}} ->
+            {ok, WxId};
+        error ->
+            {error, nil}
+    end.
+
+view_ref(Shell, ViewId) ->
+    {shell, _, _, Widgets, _, _, _, _} = Shell,
+    case maps:find(ViewId, Widgets) of
+        {ok, {widget, Ref, _, _, _, _, _, _, _, _, _, _, _}} -> {ok, Ref};
+        error -> {error, nil}
+    end.
+
+%% Deterministic drags in scripted tests: override what `pointer_in` reads
+%% (the real pointer position is used when no override is set).
+pointer_override(X, Y) ->
+    put(campy_pointer, {X, Y}),
+    ok.
+
+pointer_clear() ->
+    erase(campy_pointer),
+    ok.
+
+grab_strip_wx_id(ViewId) ->
+    case maps:find(ViewId, grab_map()) of
+        {ok, [{_, WxId, _, _} | _]} -> {ok, WxId};
+        _ -> {error, nil}
+    end.
+
+%% A grab strip by index: {WxId, Dx, Dy} (0=top, 1=bottom, 2=left, 3=right).
+grab_strip_info(ViewId, Index) ->
+    case maps:find(ViewId, grab_map()) of
+        {ok, Strips} ->
+            case lists:nth(Index + 1, Strips) of
+                {_, WxId, DX, DY} -> {ok, {WxId, DX, DY}};
+                _ -> {error, nil}
+            end;
+        error ->
+            {error, nil}
+    end.
+
+palette_tool(Kind) ->
+    case
+        lists:search(
+            fun({_, K}) -> K =:= Kind end, maps:to_list(palette_ids_map())
+        )
+    of
+        {value, {Id, _}} -> {ok, Id};
+        false -> {error, nil}
+    end.
+
+plate_wx_id(ViewId) ->
+    case maps:find(ViewId, plate_map()) of
+        {ok, {_, WxId}} -> {ok, WxId};
+        error -> {error, nil}
+    end.
+
+enum_popup_list() ->
+    case get(campy_enum_popup) of
+        {_, List, _, _, _, _, _} -> {ok, List};
+        undefined -> {error, nil}
+    end.
+
+enum_popup_select(Index) ->
+    case get(campy_enum_popup) of
+        {_, List, _, _, _, _, _} ->
+            wxListBox:select(List, Index),
+            ok;
+        undefined ->
+            ok
+    end.
+
+%% Is the open dropdown anchored at the cell it belongs to?
+debug_str(Term) ->
+    unicode:characters_to_binary(io_lib:format("~200p", [Term])).
+
+enum_popup_anchored() ->
+    case get(campy_enum_popup) of
+        {Popup, _, _, _, _, SX, SY} ->
+            erlang:display({anchored_check, SX, SY, wxWindow:getScreenPosition(Popup), wxWindow:getSize(Popup)}),
+            R = case wxWindow:getScreenPosition(Popup) of
+                {SX, SY} -> {ok, true};
+                {X, Y} -> {ok, {X, Y}}
+            end,
+            erlang:display({anchored_result, R}),
+            R;
+        undefined ->
+            {error, nil}
+    end.
+
+enum_popup_wx_id() ->
+    case get(campy_enum_popup) of
+        {_, List, _, _, _, _, _} -> {ok, wxWindow:getId(List)};
+        undefined -> {error, nil}
+    end.
+
+inspector_cell(Shell, Row, Col) ->
+    {shell, _, _, Widgets, _, _, _, _} = Shell,
+    case maps:find(<<"inspector">>, Widgets) of
+        {ok, {widget, Ref, _, _, _, _, _, _, _, _, _, _, _}} ->
+            unicode:characters_to_binary(wxGrid:getCellValue(Ref, Row, Col));
+        error ->
+            <<>>
+    end.
+
+child_count(Ref) ->
+    length(wxWindow:getChildren(Ref)).
+
+inject_mouse(WxId, Ref, Type, X, Y, Ctrl) ->
+    self() ! {wx, WxId, Ref, [],
+              {wxMouse, binary_to_atom(Type, utf8), X, Y, false, false, false,
+               Ctrl, false, false}},
+    ok.
+
+inject_command(WxId, Type, Int) ->
+    self() ! {wx, WxId, wx:null(), [],
+              {wxCommand, binary_to_atom(Type, utf8), <<>>, Int, []}},
+    ok.
+
+%% Strip and plate presses (the pump routes them by wx id; the Obj payload
+%% is irrelevant for mouse attribution).
+inject_strip_press(WxId, X, Y) ->
+    self() ! {wx, WxId, wx:null(), [],
+              {wxMouse, left_down, X, Y, false, false, false, false, false,
+               false}},
+    ok.
+
+inject_plate_press(WxId, X, Y) ->
+    self() ! {wx, WxId, wx:null(), [],
+              {wxMouse, left_down, X, Y, false, false, false, false, false,
+               false}},
+    ok.
+
+inject_tool_press(WxId) ->
+    self() ! {wx, WxId, wx:null(), [],
+              {wxCommand, command_menu_selected, <<>>, WxId, []}},
+    ok.
+
+%% Toolbar diagnostics for the probe: do the bitmap tools actually exist
+%% and how big did the toolbar become?
+toolbar_stats(ToolBar) ->
+    {wxToolBar:getToolSize(ToolBar), wxToolBar:getToolBitmapSize(ToolBar),
+     wxWindow:getClientSize(ToolBar), wxWindow:getSize(ToolBar)}.
+
+%% Capture a window's on-screen content into a PNG (probe diagnostics).
+snapshot(Ref, Path) ->
+    {X, Y} = wxWindow:getScreenPosition(Ref),
+    {W, H} = wxWindow:getClientSize(Ref),
+    Screen = wxScreenDC:new(),
+    Bmp = wxBitmap:new(W, H),
+    Mem = wxMemoryDC:new(),
+    wxMemoryDC:selectObject(Mem, Bmp),
+    catch wxScreenDC:blitTo(Mem, 0, 0, X, Y, W, H),
+    wxMemoryDC:selectObject(Mem, wxBitmap:new(0, 0)),
+    Image = wxBitmap:convertToImage(Bmp),
+    case wxImage:saveFile(Image, unicode:characters_to_list(Path),
+                          <<"image/png">>)
+    of
+        true -> ok;
+        _ -> ok
+    end,
+    wxImage:destroy(Image),
+    wxMemoryDC:destroy(Mem),
+    wxBitmap:destroy(Bmp),
+    wxScreenDC:destroy(Screen),
+    ok.
+
+inject_grid_select(Ref, Row, Col) ->
+    self() ! {wx, wxWindow:getId(Ref), Ref, [],
+              {wxGrid, grid_select_cell, Row, Col, false, {0, 0}, false}},
+    ok.
+
+inject_list_pick(ListId, List, Text, Int) ->
+    self() ! {wx, ListId, List, [],
+              {wxCommand, command_listbox_selected, Text, Int, []}},
+    ok.
 
 label(Parent, Id, Text) ->
     wxStaticText:new(Parent, Id, Text, []).
@@ -145,11 +552,25 @@ move(Ref, X, Y) ->
     wxWindow:move(Ref, {X, Y}),
     ok.
 
+%% The client area a free-layout parent offers its children, as {W, H}. The
+%% align docking pass resolves against this, so panes follow resizes.
+client_size(Ref) ->
+    {W, H} = wxWindow:getClientSize(Ref),
+    {W, H}.
+
 resize(Ref, Width, Height) when Width > 0, Height > 0 ->
     wxWindow:setSize(Ref, {Width, Height}),
     ok;
 resize(_Ref, _Width, _Height) ->
     ok.
+
+%% A widget's current on-screen rectangle {X, Y, W, H} in its parent's
+%% coordinates; {error, nil} when the window is not yet shown.
+widget_rect(Ref) ->
+    case wxWindow:getRect(Ref) of
+        {X, Y, W, H} when W > 0, H > 0 -> {ok, {X, Y, W, H}};
+        _ -> {error, nil}
+    end.
 
 set_min_size(Ref, Width, Height) ->
     {CurrentWidth, CurrentHeight} = wxWindow:getMinSize(Ref),
@@ -237,6 +658,14 @@ set_background(Ref, R, G, B) ->
     wxWindow:refresh(Ref),
     ok.
 
+%% Background colour from a "#rrggbb" scheme value (the design canvas panel;
+%% the buffered paint DC covers it anyway, but a matching panel avoids a
+%% light flash between layout and paint).
+set_background_hex(Ref, Hex) ->
+    wxWindow:setBackgroundColour(Ref, hex_rgb(Hex, {245, 246, 248})),
+    wxWindow:refresh(Ref),
+    ok.
+
 focus(Ref) ->
     wxWindow:setFocus(Ref),
     ok.
@@ -285,13 +714,166 @@ set_menubar(Frame, MenuBar) ->
 toolbar(Frame) ->
     wxFrame:createToolBar(Frame, [
         {style,
-            ?wxTB_TEXT bor ?wxTB_NOICONS bor ?wxTB_HORZ_LAYOUT bor
-                ?wxTB_FLAT bor ?wxTB_NODIVIDER}
+            ?wxTB_HORIZONTAL bor ?wxTB_FLAT bor ?wxTB_NODIVIDER}
     ]).
 
 tool(ToolBar, Id, Label) ->
     wxToolBar:addTool(ToolBar, Id, Label, wxBitmap:new({16, 16})),
     ToolBar.
+
+%% Toolbar tools with pictograms for Run/Stop: a green run triangle and a
+%% red stop square, drawn with wxDC primitives (no binary assets).
+tool(ToolBar, Id, Label, <<"run">>) ->
+    wxToolBar:addTool(ToolBar, Id, Label, widget_icon(<<"run">>)),
+    ToolBar;
+tool(ToolBar, Id, Label, <<"stop">>) ->
+    wxToolBar:addTool(ToolBar, Id, Label, widget_icon(<<"stop">>)),
+    ToolBar;
+tool(ToolBar, Id, Label, _Icon) ->
+    tool(ToolBar, Id, Label).
+
+%% The widget palette: pictogram tools inside the toolbar, to the right of
+%% the Run/Stop tools (this wxErlang build's wxToolBar:addControl rejects
+%% wxPanel, so a hosted panel would never appear). Presses are registered by
+%% wx id so they reach the IDE as regular palette events.
+palette(Bar, Entries) ->
+    lists:foreach(
+        fun({Kind, Label}) ->
+            WxId = palette_next_id(),
+            wxToolBar:addTool(Bar, WxId, <<>>, widget_icon(Kind)),
+            catch wxToolBar:setToolShortHelp(Bar, WxId, Label),
+            put(campy_palette_ids,
+                maps:put(WxId, Kind, palette_ids_map()))
+        end,
+        Entries
+    ),
+    ok.
+
+palette_ids_map() ->
+    case get(campy_palette_ids) of
+        undefined -> #{};
+        M -> M
+    end.
+
+palette_owner(WxId) ->
+    case maps:find(WxId, palette_ids_map()) of
+        {ok, Kind} -> {ok, Kind};
+        error -> {error, nil}
+    end.
+
+palette_next_id() ->
+    Current = case get(campy_palette_next) of
+        undefined -> 500000;
+        N -> N
+    end,
+    put(campy_palette_next, Current + 1),
+    Current.
+
+%% ---------------------------------------------------------------------------
+%% Pictograms: small 18x18 bitmaps drawn with wxDC primitives, one per widget
+%% kind (and for the Run/Stop tools).
+%% ---------------------------------------------------------------------------
+
+widget_icon(Kind) ->
+    Bmp = wxBitmap:new(18, 18),
+    DC = wxMemoryDC:new(),
+    wxMemoryDC:selectObject(DC, Bmp),
+    wxDC:setBackground(DC, wxBrush:new({238, 239, 242})),
+    wxDC:clear(DC),
+    wxDC:setPen(DC, wxPen:new({62, 66, 74}, [{width, 1}])),
+    draw_icon(DC, binary_to_atom(Kind, utf8)),
+    wxMemoryDC:destroy(DC),
+    Bmp.
+
+draw_icon(DC, button) ->
+    wxDC:setBrush(DC, wxBrush:new({168, 200, 240})),
+    wxDC:drawRoundedRectangle(DC, {2, 5, 14, 8}, 2);
+draw_icon(DC, label) ->
+    wxDC:drawText(DC, <<"Ab">>, {3, 2});
+draw_icon(DC, text) ->
+    wxDC:setBrush(DC, wxBrush:new({255, 255, 255})),
+    wxDC:drawRectangle(DC, {2, 5, 14, 8}),
+    wxDC:drawLine(DC, {4, 9}, {8, 9}),
+    wxDC:drawLine(DC, {12, 6}, {12, 12});
+draw_icon(DC, memo) ->
+    wxDC:setBrush(DC, wxBrush:new({255, 255, 255})),
+    wxDC:drawRectangle(DC, {2, 3, 14, 12}),
+    lists:foreach(fun(Y) -> wxDC:drawLine(DC, {4, Y}, {14, Y}) end,
+                  [5, 8, 11]);
+draw_icon(DC, checkbox) ->
+    wxDC:setBrush(DC, wxBrush:new({255, 255, 255})),
+    wxDC:drawRectangle(DC, {3, 5, 8, 8}),
+    wxDC:setPen(DC, wxPen:new({20, 120, 60}, [{width, 2}])),
+    wxDC:drawLine(DC, {4, 9}, {7, 12}),
+    wxDC:drawLine(DC, {7, 12}, {12, 4}),
+    wxDC:setPen(DC, wxPen:new({62, 66, 74}, [{width, 1}]));
+draw_icon(DC, radio) ->
+    wxDC:setBrush(DC, wxBrush:new({255, 255, 255})),
+    wxDC:drawCircle(DC, {8, 9}, 5),
+    wxDC:setBrush(DC, wxBrush:new({20, 120, 60})),
+    wxDC:drawCircle(DC, {8, 9}, 2);
+draw_icon(DC, choice) ->
+    wxDC:setBrush(DC, wxBrush:new({255, 255, 255})),
+    wxDC:drawRectangle(DC, {2, 5, 14, 8}),
+    wxDC:drawLine(DC, {12, 8}, {14, 10}),
+    wxDC:drawLine(DC, {14, 10}, {16, 8}),
+    wxDC:drawLine(DC, {12, 8}, {16, 8});
+draw_icon(DC, list) ->
+    wxDC:setBrush(DC, wxBrush:new({255, 255, 255})),
+    wxDC:drawRectangle(DC, {2, 3, 14, 12}),
+    lists:foreach(fun(Y) -> wxDC:drawLine(DC, {4, Y}, {14, Y}) end, [5, 9]);
+draw_icon(DC, slider) ->
+    wxDC:setPen(DC, wxPen:new({62, 66, 74}, [{width, 2}])),
+    wxDC:drawLine(DC, {2, 9}, {16, 9}),
+    wxDC:setPen(DC, wxPen:new({62, 66, 74}, [{width, 1}])),
+    wxDC:setBrush(DC, wxBrush:new({168, 200, 240})),
+    wxDC:drawCircle(DC, {11, 9}, 3);
+draw_icon(DC, progress) ->
+    wxDC:setBrush(DC, wxBrush:new({255, 255, 255})),
+    wxDC:drawRectangle(DC, {2, 6, 14, 6}),
+    wxDC:setBrush(DC, wxBrush:new({40, 160, 90})),
+    wxDC:drawRectangle(DC, {3, 7, 8, 4});
+draw_icon(DC, picture) ->
+    wxDC:setBrush(DC, wxBrush:new({250, 214, 110})),
+    wxDC:drawCircle(DC, {12, 6}, 2),
+    wxDC:setBrush(DC, wxBrush:new({120, 170, 110})),
+    wxDC:drawPolygon(DC, [{3, 13}, {7, 7}, {10, 11}, {12, 9}, {15, 13}]);
+draw_icon(DC, panel) ->
+    wxDC:setBrush(DC, wxBrush:new({216, 220, 228})),
+    wxDC:drawRectangle(DC, {2, 3, 14, 12});
+draw_icon(DC, group) ->
+    wxDC:setBrush(DC, wxBrush:new({255, 255, 255})),
+    wxDC:drawRectangle(DC, {2, 5, 14, 10}),
+    wxDC:setBrush(DC, wxBrush:new({216, 220, 228})),
+    wxDC:drawRectangle(DC, {2, 3, 7, 4});
+draw_icon(DC, tree) ->
+    wxDC:drawLine(DC, {3, 5}, {15, 5}),
+    wxDC:drawLine(DC, {6, 5}, {6, 10}),
+    wxDC:drawLine(DC, {12, 5}, {12, 10}),
+    wxDC:drawLine(DC, {3, 10}, {9, 10}),
+    wxDC:drawLine(DC, {3, 14}, {15, 14});
+draw_icon(DC, grid) ->
+    wxDC:drawRectangle(DC, {2, 3, 14, 12}),
+    lists:foreach(fun(X) -> wxDC:drawLine(DC, {X, 3}, {X, 15}) end, [7, 12]),
+    lists:foreach(fun(Y) -> wxDC:drawLine(DC, {2, Y}, {16, Y}) end, [7, 11]);
+draw_icon(DC, editor) ->
+    wxDC:setBrush(DC, wxBrush:new({255, 255, 255})),
+    wxDC:drawRectangle(DC, {2, 3, 14, 12}),
+    wxDC:setPen(DC, wxPen:new({150, 60, 140}, [{width, 2}])),
+    wxDC:drawLine(DC, {4, 6}, {9, 6}),
+    wxDC:setPen(DC, wxPen:new({30, 110, 160}, [{width, 2}])),
+    wxDC:drawLine(DC, {4, 10}, {12, 10}),
+    wxDC:setPen(DC, wxPen:new({62, 66, 74}, [{width, 1}]));
+draw_icon(DC, run) ->
+    wxDC:setPen(DC, wxPen:new({30, 130, 70})),
+    wxDC:setBrush(DC, wxBrush:new({40, 170, 90})),
+    wxDC:drawPolygon(DC, [{5, 3}, {14, 9}, {5, 15}]);
+draw_icon(DC, stop) ->
+    wxDC:setPen(DC, wxPen:new({150, 40, 40})),
+    wxDC:setBrush(DC, wxBrush:new({190, 50, 50})),
+    wxDC:drawRectangle(DC, {4, 4, 10, 10});
+draw_icon(_DC, _Other) ->
+    ok.
 
 tool_separator(ToolBar) ->
     wxToolBar:addSeparator(ToolBar),
@@ -387,6 +969,8 @@ grid_fit_value_column(Grid, LabelWidth) ->
     ok.
 
 grid_set(Grid, Rows) ->
+    %% A fresh row set invalidates the remembered enum cells.
+    put(campy_enum_cells, maps:remove(Grid, enum_cells_map())),
     RowCount = length(Rows),
     ColCount = case Rows of
         [] -> 0;
@@ -467,6 +1051,122 @@ grid_text_cell(Grid, Row, Col) ->
 grid_read_only(Grid, Row, Col, ReadOnly) ->
     wxGrid:setReadOnly(Grid, Row, Col, [{isReadOnly, ReadOnly}]),
     ok.
+
+%% A dropdown cell editor for enum properties (align, layout). The editor
+%% commits through the same grid_cell_changed event as the text editors.
+%% An enum property cell. The options are remembered; the dropdown popup
+%% opens automatically as soon as the cell is selected (see next_message).
+grid_choice_cell(Grid, Row, Col, Options) ->
+    Cells = enum_cells_map(),
+    PerGrid = case maps:find(Grid, Cells) of
+        {ok, M} -> M;
+        error -> #{}
+    end,
+    put(campy_enum_cells,
+        maps:put(Grid, maps:put({Row, Col}, Options, PerGrid), Cells)),
+    ok.
+
+enum_cells_map() ->
+    case get(campy_enum_cells) of
+        undefined -> #{};
+        M -> M
+    end.
+
+%% The enum dropdown: a transient popup list anchored under the selected
+%% cell. It pops open immediately and commits through the grid event path.
+maybe_enum_popup(Grid, Row, Col) ->
+    case maps:find(Grid, enum_cells_map()) of
+        {ok, Cells} ->
+            case maps:find({Row, Col}, Cells) of
+                {ok, Options} ->
+                    enum_popup(Grid, Row, Col, Options),
+                    idle;
+                error ->
+                    idle
+            end;
+        error ->
+            idle
+    end.
+
+%% Anchored under the cell like a real dropdown: parented to the toplevel
+%% (GTK refuses to position parentless popups) and placed just below the
+%% cell, in the toplevel's client coordinates (move() is parent-relative).
+enum_popup(Grid, Row, Col, Options) ->
+    enum_popup_dismiss(),
+    {CX, CY, CW, CH} = wxGrid:cellToRect(Grid, Row, Col),
+    {SX, SY} = wxWindow:clientToScreen(Grid, {CX, CY}),
+    Frame = toplevel(Grid),
+    Popup = wxPopupTransientWindow:new(Frame, []),
+    ListId = palette_next_id(),
+    List = wxListBox:new(Popup, ListId, [{style, ?wxLB_SINGLE}]),
+    lists:foreach(fun(Option) -> wxListBox:append(List, Option) end, Options),
+    %% Preselect the cell's current value when it is one of the options.
+    Current = unicode:characters_to_binary(
+                wxGrid:getCellValue(Grid, Row, Col)),
+    case lists:search(fun(O) -> O =:= Current end, Options) of
+        {value, Value} ->
+            wxListBox:select(List, list_index(Value, Options, 0));
+        false ->
+            ok
+    end,
+    wxListBox:connect(List, command_listbox_selected, []),
+    Height = 6 + 22 * erlang:min(length(Options), 8),
+    Width = erlang:max(CW, 120),
+    wxWindow:setClientSize(Popup, Width, Height),
+    {FX0, FY0} = wxWindow:clientToScreen(Frame, {0, 0}),
+    TargetX = SX - FX0,
+    %% wx anchors this popup by its BOTTOM edge on this build: requesting
+    %% y' = cell bottom + height - 1 lands the top exactly at the cell.
+    TargetY = SY + CH + Height - 1 - FY0,
+    wxWindow:move(Popup, {TargetX, TargetY}),
+    wxPopupTransientWindow:popup(Popup),
+    put(campy_enum_popup,
+        {Popup, List, wxWindow:getId(Grid), Row, Col, SX, SY + CH}),
+    ok.
+
+%% Walk up to the owning top-level window.
+toplevel(Win) ->
+    case wxWindow:isTopLevel(Win) of
+        true -> Win;
+        false -> toplevel(wxWindow:getParent(Win))
+    end.
+
+list_index(Value, [Value | _], Index) -> Index;
+list_index(Value, [_ | Rest], Index) -> list_index(Value, Rest, Index + 1);
+list_index(_Value, [], _Index) -> 0.
+
+enum_popup_dismiss() ->
+    case get(campy_enum_popup) of
+        undefined ->
+            ok;
+        {Popup, _List, _GridId, _Row, _Col, _SX, _SY} ->
+            catch wxPopupTransientWindow:dismiss(Popup),
+            catch wxPopupTransientWindow:destroy(Popup),
+            erase(campy_enum_popup),
+            ok
+    end.
+
+%% The popup's chosen option reaches the IDE as the grid's own change event.
+enum_popup_pick(ListId, _CmdInt) ->
+    case get(campy_enum_popup) of
+        undefined ->
+            idle;
+        {Popup, List, GridId, Row, Col, _SX, _SY} ->
+            case wxWindow:getId(List) =:= ListId of
+                true ->
+                    Label =
+                        case catch unicode:characters_to_binary(
+                                       wxControlWithItems:getStringSelection(
+                                           List)) of
+                            {'EXIT', _} -> <<>>;
+                            Text when is_binary(Text) -> Text
+                        end,
+                    enum_popup_dismiss(),
+                    {grid_event, GridId, Row, Col, Label};
+                false ->
+                    idle
+            end
+    end.
 
 editor(Parent, Id) ->
     Editor = wxStyledTextCtrl:new(Parent, [{id, Id}]),
@@ -683,6 +1383,19 @@ editor_connect_jump(_Editor) ->
 editor_get_text(Editor) ->
     unicode:characters_to_binary(wxStyledTextCtrl:getText(Editor)).
 
+%% Explicit clipboard/undo commands on a Scintilla editor: this GTK build
+%% drops the default key bindings when a frame accelerator table is
+%% installed, so the IDE applies them on the key event instead.
+editor_clipboard(Editor, Action) ->
+    case Action of
+        <<"copy">> -> wxStyledTextCtrl:copy(Editor);
+        <<"cut">> -> wxStyledTextCtrl:cut(Editor);
+        <<"paste">> -> wxStyledTextCtrl:paste(Editor);
+        <<"undo">> -> wxStyledTextCtrl:undo(Editor);
+        <<"redo">> -> wxStyledTextCtrl:redo(Editor);
+        _ -> ok
+    end.
+
 %% The caret as a 0-based {Line, Column} pair, the shape the language server
 %% client expects.
 editor_caret(Editor) ->
@@ -786,6 +1499,126 @@ show_message(Frame, Title, Message) ->
     wxMessageDialog:destroy(Dialog),
     ok.
 
+%% ---------------------------------------------------------------------------
+%% Settings dialogs (Settings → Editor…, Settings → Agent…). Each builds a
+%% small modal dialog, blocks in showModal, and returns the accepted values or
+%% {error, nil} on Cancel. Indexes address the caller's option lists, so the
+%% shell never has to trust the dialog's text.
+%% ---------------------------------------------------------------------------
+
+settings_dialog(Frame, Fonts, Sizes, Schemes, FontIdx, SizeIdx, SchemeIdx) ->
+    Dialog = wxDialog:new(Frame, ?wxID_ANY, <<"Editor settings">>, []),
+    Sizer = wxBoxSizer:new(?wxVERTICAL),
+    FontChoice = add_choice(Dialog, Sizer, <<"Font">>, Fonts, FontIdx),
+    SizeChoice = add_choice(Dialog, Sizer, <<"Font size">>, Sizes, SizeIdx),
+    SchemeChoice = add_choice(Dialog, Sizer, <<"Color scheme">>, Schemes, SchemeIdx),
+    Buttons = wxDialog:createStdDialogButtonSizer(Dialog, ?wxOK bor ?wxCANCEL),
+    wxSizer:add(Sizer, Buttons, [{flag, ?wxALL bor ?wxALIGN_CENTRE}, {border, 8}]),
+    wxWindow:setSizerAndFit(Dialog, Sizer),
+    Answer = wxDialog:showModal(Dialog),
+    Result = case Answer =:= ?wxID_OK of
+        true ->
+            {ok, {wxChoice:getSelection(FontChoice),
+                  wxChoice:getSelection(SizeChoice),
+                  wxChoice:getSelection(SchemeChoice)}};
+        false -> {error, nil}
+    end,
+    wxDialog:destroy(Dialog),
+    Result.
+
+agent_dialog(Frame, Enabled, Port, Status, Endpoint) ->
+    Dialog = wxDialog:new(Frame, ?wxID_ANY, <<"Agent settings">>, []),
+    Sizer = wxBoxSizer:new(?wxVERTICAL),
+    Check = wxCheckBox:new(Dialog, ?wxID_ANY, <<"Enable MCP server">>, []),
+    wxCheckBox:setValue(Check, Enabled),
+    wxSizer:add(Sizer, Check, [{flag, ?wxALL}, {border, 8}]),
+    Row = wxBoxSizer:new(?wxHORIZONTAL),
+    wxSizer:add(Row, wxStaticText:new(Dialog, ?wxID_ANY, <<"Port">>, []),
+                [{flag, ?wxALL bor ?wxALIGN_CENTRE_VERTICAL}, {border, 8}]),
+    PortText = wxTextCtrl:new(Dialog, ?wxID_ANY, [{value, Port}]),
+    wxSizer:add(Row, PortText, [{proportion, 1}, {flag, ?wxALL}, {border, 8}]),
+    wxSizer:add(Sizer, Row, [{flag, ?wxEXPAND}]),
+    wxSizer:add(Sizer, wxStaticText:new(Dialog, ?wxID_ANY, Status, []),
+                [{flag, ?wxLEFT bor ?wxRIGHT}, {border, 8}]),
+    wxSizer:add(Sizer, wxStaticText:new(Dialog, ?wxID_ANY, Endpoint, []),
+                [{flag, ?wxLEFT bor ?wxRIGHT bor ?wxBOTTOM}, {border, 8}]),
+    Buttons = wxDialog:createStdDialogButtonSizer(Dialog, ?wxOK bor ?wxCANCEL),
+    wxSizer:add(Sizer, Buttons, [{flag, ?wxALL bor ?wxALIGN_CENTRE}, {border, 8}]),
+    wxWindow:setSizerAndFit(Dialog, Sizer),
+    Answer = wxDialog:showModal(Dialog),
+    Result = case Answer =:= ?wxID_OK of
+        true ->
+            {ok, {wxCheckBox:getValue(Check),
+                  unicode:characters_to_binary(wxTextCtrl:getValue(PortText))}};
+        false -> {error, nil}
+    end,
+    wxDialog:destroy(Dialog),
+    Result.
+
+%% One labelled combo row inside a settings dialog.
+add_choice(Dialog, Sizer, Label, Items, Selected) ->
+    Row = wxBoxSizer:new(?wxHORIZONTAL),
+    wxSizer:add(Row, wxStaticText:new(Dialog, ?wxID_ANY, Label, []),
+                [{flag, ?wxALL bor ?wxALIGN_CENTRE_VERTICAL}, {border, 8}]),
+    Choice = wxChoice:new(Dialog, ?wxID_ANY, []),
+    lists:foreach(fun(Item) -> wxChoice:append(Choice, Item) end, Items),
+    wxChoice:setSelection(Choice, Selected),
+    wxSizer:add(Row, Choice, [{proportion, 1}, {flag, ?wxALL}, {border, 8}]),
+    wxSizer:add(Sizer, Row, [{flag, ?wxEXPAND}]),
+    Choice.
+
+%% Recolor an editor's Scintilla styles from a scheme palette (Gleam sends
+%% [{Key, <<"#rrggbb">>}]). "bg"/"fg" are the default style's background and
+%% foreground; the rest map onto the token styles editor_gleam defines.
+editor_scheme(Editor, Palette) ->
+    lists:foreach(fun({Key, Hex}) -> apply_scheme(Editor, Key, Hex) end, Palette),
+    wxStyledTextCtrl:refresh(Editor, []),
+    ok.
+
+apply_scheme(Editor, <<"bg">>, Hex) ->
+    wxStyledTextCtrl:styleSetBackground(Editor, 0, hex_rgb(Hex, {28, 28, 28}));
+apply_scheme(Editor, <<"fg">>, Hex) ->
+    wxStyledTextCtrl:styleSetForeground(Editor, 0, hex_rgb(Hex, {200, 200, 200}));
+apply_scheme(Editor, <<"keyword">>, Hex) ->
+    wxStyledTextCtrl:styleSetForeground(Editor, 1, hex_rgb(Hex, {158, 33, 116}));
+apply_scheme(Editor, <<"comment">>, Hex) ->
+    wxStyledTextCtrl:styleSetForeground(Editor, 2, hex_rgb(Hex, {104, 128, 104}));
+apply_scheme(Editor, <<"string">>, Hex) ->
+    wxStyledTextCtrl:styleSetForeground(Editor, 3, hex_rgb(Hex, {22, 120, 108}));
+apply_scheme(Editor, <<"number">>, Hex) ->
+    wxStyledTextCtrl:styleSetForeground(Editor, 4, hex_rgb(Hex, {28, 96, 176}));
+apply_scheme(Editor, <<"punct">>, Hex) ->
+    wxStyledTextCtrl:styleSetForeground(Editor, 5, hex_rgb(Hex, {90, 94, 104}));
+apply_scheme(Editor, <<"type">>, Hex) ->
+    wxStyledTextCtrl:styleSetForeground(Editor, 6, hex_rgb(Hex, {140, 76, 24}));
+apply_scheme(_Editor, _Key, _Hex) ->
+    ok.
+
+%% Apply the chosen editor font (Settings → Editor…) to every style the
+%% editors use, so tokens and diagnostics keep the family and size.
+editor_font(Editor, Face, Size) ->
+    lists:foreach(fun(Style) ->
+        wxStyledTextCtrl:styleSetFaceName(Editor, Style, Face),
+        wxStyledTextCtrl:styleSetSize(Editor, Style, Size)
+    end, [0, 1, 2, 3, 4, 5, 6, 21, 22, 23]),
+    wxStyledTextCtrl:refresh(Editor, []),
+    ok.
+
+%% Parse "#rrggbb" (with or without '#', case-insensitive) into an RGB tuple;
+%% anything unparsable falls back to Default.
+hex_rgb(Hex, Default) ->
+    try
+        Digits = case Hex of
+            <<_, Rest/binary>> -> Rest;
+            _ -> Hex
+        end,
+        <<R:2/binary, G:2/binary, B:2/binary>> = Digits,
+        {binary_to_integer(R, 16), binary_to_integer(G, 16),
+         binary_to_integer(B, 16)}
+    catch
+        _:_ -> Default
+    end.
+
 %% Designer canvas
 
 canvas(Parent, Id) ->
@@ -794,61 +1627,17 @@ canvas(Parent, Id) ->
     wxPanel:connect(Panel, paint, []),
     Panel.
 
-%% Paint the design canvas: background, grid, border, then the selection
-%% chrome and the active marquee. The chrome lives in the canvas' own DC, so
-%% there are no extra top-level windows (they appeared as separate taskbar
-%% entries on Wayland) and nothing can swallow pointer input.
-paint_canvas(Canvas, Width, Height, GridStep, Selection, Marquee, Single) ->
+%% Paint the design canvas: background and light grid. The form is a real
+%% widget (the white plate below the controls), not painted chrome, and
+%% selection chrome is native grab strips - so this paint is pure backdrop.
+paint_canvas(Canvas, Width, Height, GridStep, Marquee, Bg, Grid) ->
     DC = wxBufferedPaintDC:new(Canvas),
-    wxDC:setBackground(DC, wxBrush:new({245, 246, 248})),
+    wxDC:setBackground(DC, wxBrush:new(hex_rgb(Bg, {245, 246, 248}))),
     wxDC:clear(DC),
-    wxDC:setPen(DC, wxPen:new({226, 228, 232})),
+    wxDC:setPen(DC, wxPen:new(hex_rgb(Grid, {226, 228, 232}))),
     draw_grid(DC, Width, Height, GridStep),
-    wxDC:setPen(DC, wxPen:new({180, 184, 190})),
-    wxDC:drawLine(DC, {0, 0}, {Width - 1, 0}),
-    wxDC:drawLine(DC, {Width - 1, 0}, {Width - 1, Height - 1}),
-    wxDC:drawLine(DC, {Width - 1, Height - 1}, {0, Height - 1}),
-    wxDC:drawLine(DC, {0, Height - 1}, {0, 0}),
     draw_marquee(DC, Marquee),
-    draw_selection(DC, Selection, Single),
     wxBufferedPaintDC:destroy(DC),
-    ok.
-
-%% #x/y/w/h tuples arrive as {x, y, w, h}; Selection is none | {X, Y, W, H}.
-draw_selection(_DC, none, _Single) ->
-    ok;
-draw_selection(DC, {X, Y, W, H}, Single) ->
-    Blue = {45, 110, 220},
-    wxDC:setBrush(DC, wxBrush:new(Blue)),
-    wxDC:setPen(DC, wxPen:new(Blue)),
-    wxDC:drawRectangle(DC, {X - 2, Y - 2, W + 4, 2}),
-    wxDC:drawRectangle(DC, {X - 2, Y + H, W + 4, 2}),
-    wxDC:drawRectangle(DC, {X - 2, Y - 2, 2, H + 4}),
-    wxDC:drawRectangle(DC, {X + W, Y - 2, 2, H + 4}),
-    case Single of
-        true -> draw_handles(DC, {X, Y, W, H}, Blue);
-        false -> ok
-    end,
-    ok.
-
-draw_handles(DC, {X, Y, W, H}, Blue) ->
-    wxDC:setBrush(DC, wxBrush:new({245, 246, 248})),
-    wxDC:setPen(DC, wxPen:new(Blue)),
-    lists:foreach(
-        fun({HX, HY}) -> wxDC:drawRectangle(DC, {HX - 4, HY - 4, 9, 9}) end,
-        [
-            {X, Y},
-            {X + W div 2, Y},
-            {X + W, Y},
-            {X + W, Y + H div 2},
-            {X + W, Y + H},
-            {X + W div 2, Y + H},
-            {X, Y + H},
-            {X, Y + H div 2}
-        ]
-    ),
-    wxDC:setBrush(DC, wxBrush:new(Blue)),
-    wxDC:drawRectangle(DC, {X + 4, Y + 4, 36, 12}),
     ok.
 
 draw_marquee(_DC, none) ->
@@ -1020,6 +1809,12 @@ release_capture() ->
 
 %% Events
 
+connect(Ref, <<"editor">>) ->
+    %% Key events flow to the IDE so the clipboard/undo keys work
+    %% deterministically on this GTK build; {skip, true} lets Scintilla
+    %% process everything as usual too.
+    wxStyledTextCtrl:connect(Ref, key_down, [{skip, true}]),
+    ok;
 connect(Ref, <<"window">>) ->
     wxFrame:connect(Ref, close_window, []),
     catch wxFrame:connect(Ref, command_menu_selected, []),
@@ -1050,7 +1845,9 @@ connect(Ref, <<"toolbar">>) ->
 connect(Ref, <<"tree">>) ->
     wxTreeCtrl:connect(Ref, command_tree_sel_changed, []);
 connect(Ref, <<"grid">>) ->
-    wxGrid:connect(Ref, grid_cell_changed, []);
+    wxGrid:connect(Ref, grid_cell_changed, []),
+    %% Cell selection drives the enum dropdown popups.
+    catch wxGrid:connect(Ref, grid_select_cell, []);
 connect(Ref, <<"notebook">>) ->
     wxNotebook:connect(Ref, command_notebook_page_changed, []),
     catch wxNotebook:connect(Ref, char_hook, [{skip, true}]);
@@ -1080,18 +1877,37 @@ next_message(Timeout) ->
                     {mouse_event, Id, Type, element(3, Event), element(4, Event),
                      element(8, Event) =:= true};
                 wxGrid ->
-                    % Use the event's row/col, not the grid cursor: Enter moves
-                    % the cursor to the next cell before the app reads it.
-                    % #wxGrid type, row, col, pos, ...
-                    Row = element(3, Event),
-                    Col = element(4, Event),
-                    Text = unicode:characters_to_binary(
-                        wxGrid:getCellValue(Obj, Row, Col)),
-                    {grid_event, Id, Row, Col, Text};
+                    case element(2, Event) of
+                        Type when Type =:= command_grid_select_cell;
+                                  Type =:= grid_select_cell ->
+                            %% An enum dropdown pops open as soon as its cell
+                            %% is selected; other cell selects are swallowed.
+                            maybe_enum_popup(
+                              Obj, element(3, Event), element(4, Event));
+                        _ ->
+                            % Use the event's row/col, not the grid cursor:
+                            % Enter moves the cursor to the next cell before
+                            % the app reads it.
+                            Row = element(3, Event),
+                            Col = element(4, Event),
+                            Text = unicode:characters_to_binary(
+                                wxGrid:getCellValue(Obj, Row, Col)),
+                            {grid_event, Id, Row, Col, Text}
+                    end;
                 wxCommand ->
-                    case shortcut_action(Id) of
-                        false -> {wx_event, Id, event_type(Event)};
-                        Action -> {shortcut_event, Action}
+                    case element(2, Event) of
+                        command_listbox_selected ->
+                            case enum_popup_pick(Id, element(4, Event)) of
+                                idle -> {wx_event, Id, event_type(Event)};
+                                Picked -> Picked
+                            end;
+                        _ ->
+                            case shortcut_action(Id) of
+                                false ->
+                                    {wx_event, Id, event_type(Event)};
+                                Action ->
+                                    {shortcut_event, Action}
+                            end
                     end;
                 _ ->
                     {wx_event, Id, event_type(Event)}

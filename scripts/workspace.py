@@ -87,6 +87,11 @@ def main() -> None:
         clean()
     elif action == "run":
         command(["gleam", "run"], cwd=IDE)
+    elif action == "probe":
+        subprocess.run(
+            ["gleam", "run"], cwd=IDE,
+            env={**environment(), "CAMPY_WX_PROBE": "1"}, check=True,
+        )
     elif action == "smoke":
         subprocess.run(
             ["gleam", "run"], cwd=IDE, env={**environment(), "CAMPY_WX_SMOKE": "1"},

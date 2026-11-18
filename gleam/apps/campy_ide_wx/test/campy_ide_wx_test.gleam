@@ -2,6 +2,7 @@ import campy_ide_model as model
 import campy_ide_wx
 import campy_project
 import campy_view.{VInt, VText}
+import campy_view/codec
 import campy_wx
 import gleam/list
 import gleam/option.{None, Some}
@@ -49,9 +50,11 @@ pub fn inspector_reports_the_active_module_test() {
   rows
   |> should.equal([
     ["title", "greeter"],
+    ["x", "0"],
+    ["y", "0"],
     ["w", "640"],
     ["h", "480"],
-    ["layout", "free"],
+    ["layout", "none"],
     ["module", "greeter"],
     ["undo", "0"],
     ["redo", "0"],
@@ -141,6 +144,7 @@ pub fn inspector_shows_the_parent_of_a_control_test() {
     ["w", "80"],
     ["h", "30"],
     ["text", ""],
+    ["align", "none"],
   ])
 }
 
@@ -191,6 +195,7 @@ pub fn inspector_reports_resolved_geometry_for_column_children_test() {
     ["w", "600"],
     ["h", "20"],
     ["text", "B"],
+    ["align", "none"],
   ])
 }
 
@@ -257,6 +262,7 @@ pub fn inspector_reports_absolute_geometry_for_nested_controls_test() {
     ["w", "80"],
     ["h", "30"],
     ["text", "Go"],
+    ["align", "none"],
   ])
 }
 
@@ -277,6 +283,7 @@ pub fn multi_selection_shows_common_values_and_blanks_the_rest_test() {
     ["w", "80"],
     ["h", "30"],
     ["text", ""],
+    ["align", "none"],
   ])
 }
 
@@ -535,4 +542,153 @@ pub fn canonical_path_collapses_dot_segments_test() {
   campy_ide_wx.canonical_path("/a/b/../c") |> should.equal("/a/c")
   campy_ide_wx.canonical_path("/a/./b/") |> should.equal("/a/b")
   campy_ide_wx.canonical_path("/a/b/c/../../../d") |> should.equal("/d")
+}
+
+// ---------------------------------------------------------------------------
+// Settings (Settings → Editor…, Settings → Agent…)
+// ---------------------------------------------------------------------------
+
+pub fn settings_default_to_the_slint_era_values_test() {
+  let state = model.new(project())
+  let settings = state.settings
+
+  settings.font |> should.equal("monospace")
+  settings.font_size |> should.equal(13)
+  settings.scheme |> should.equal(model.Dark)
+  settings.mcp_enabled |> should.equal(False)
+  settings.mcp_port |> should.equal(7817)
+}
+
+pub fn apply_settings_replaces_the_whole_record_without_undo_test() {
+  let state = model.new(project())
+  let settings =
+    model.Settings(
+      font: "Liberation Mono",
+      font_size: 16,
+      scheme: model.Light,
+      mcp_enabled: True,
+      mcp_port: 9371,
+    )
+  let state = model.update(state, model.ApplySettings(settings))
+
+  state.settings |> should.equal(settings)
+  // Settings are UI state, not a document edit.
+  state.undo |> should.equal([])
+}
+
+pub fn normalize_falls_back_to_the_offered_choices_test() {
+  let settings =
+    model.normalize(model.Settings(
+      font: "Comic Sans",
+      font_size: 42,
+      scheme: model.Solarized,
+      mcp_enabled: True,
+      mcp_port: 80,
+    ))
+
+  settings.font |> should.equal("monospace")
+  settings.font_size |> should.equal(13)
+  settings.mcp_port |> should.equal(7817)
+  settings.scheme |> should.equal(model.Solarized)
+}
+
+pub fn scheme_name_round_trips_test() {
+  model.scheme_name(model.Dark) |> should.equal("Dark")
+  model.scheme_name(model.Light) |> should.equal("Light")
+  model.scheme_name(model.Solarized) |> should.equal("Solarized")
+
+  model.scheme_names()
+  |> should.equal(["Dark", "Light", "Solarized"])
+
+  list.each(model.scheme_names(), fn(name) {
+    model.scheme_name(model.scheme_from_name(name)) |> should.equal(name)
+  })
+}
+
+pub fn scheme_index_addresses_the_dialog_combo_test() {
+  model.scheme_index(model.Dark) |> should.equal(0)
+  model.scheme_index(model.Light) |> should.equal(1)
+  model.scheme_index(model.Solarized) |> should.equal(2)
+}
+
+pub fn font_and_size_indexes_address_the_dialog_combos_test() {
+  model.font_index(model.default_settings()) |> should.equal(0)
+  model.size_index(model.default_settings()) |> should.equal(2)
+
+  let settings =
+    model.Settings(
+      ..model.default_settings(),
+      font: "Noto Sans Mono",
+      font_size: 18,
+    )
+  model.font_index(settings) |> should.equal(4)
+  model.size_index(settings) |> should.equal(5)
+  model.size_index(model.Settings(..model.default_settings(), font_size: 20))
+  |> should.equal(6)
+}
+
+pub fn every_scheme_palette_covers_the_editor_and_canvas_keys_test() {
+  list.each(model.scheme_names(), fn(name) {
+    let palette = model.scheme_palette(model.scheme_from_name(name))
+    let keys = list.map(palette, fn(entry) { entry.0 })
+
+    list.each(
+      [
+        "canvas",
+        "grid",
+        "bg",
+        "fg",
+        "keyword",
+        "comment",
+        "string",
+        "number",
+        "punct",
+        "type",
+      ],
+      fn(key) { list.contains(keys, key) |> should.be_true },
+    )
+  })
+}
+
+pub fn settings_round_trip_through_json_test() {
+  let settings =
+    model.Settings(
+      font: "Liberation Mono",
+      font_size: 18,
+      scheme: model.Solarized,
+      mcp_enabled: True,
+      mcp_port: 9371,
+    )
+
+  let assert Ok(json) =
+    codec.parse_json(codec.write_json(model.settings_to_json(settings)))
+  let assert Ok(decoded) = model.settings_from_json(json)
+
+  decoded |> should.equal(settings)
+}
+
+pub fn damaged_settings_json_falls_back_to_the_defaults_test() {
+  let assert Ok(json) = codec.parse_json("{\"font\": 4, \"scheme\": \"Neon\"}")
+  let assert Ok(settings) = model.settings_from_json(json)
+
+  settings |> should.equal(model.default_settings())
+}
+
+pub fn canvas_colors_follow_the_scheme_test() {
+  let state = model.new(project())
+
+  let #(bg, grid) = campy_ide_wx.canvas_colors(state)
+  bg |> should.equal("#14161a")
+  grid |> should.equal("#2f3540")
+
+  let state =
+    model.update(
+      state,
+      model.ApplySettings(
+        model.Settings(..state.settings, scheme: model.Solarized),
+      ),
+    )
+  let #(bg, grid) = campy_ide_wx.canvas_colors(state)
+  bg |> should.equal("#001f27")
+  grid |> should.equal("#0a3a46")
 }

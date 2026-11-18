@@ -17,9 +17,9 @@ import campy_lsp
 import campy_peer.{type Peer}
 import campy_project.{type Module, type Project}
 import campy_view.{type Node, type Value, VText}
+import campy_view/codec.{type Json, JBool, JInt, JObject, JString}
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -29,6 +29,43 @@ import gleam/string
 pub const console_limit = 500
 
 pub const undo_limit = 100
+
+/// Font family choices offered by Settings → Editor… (same list as the
+/// Slint-era settings dialog).
+pub const fonts = [
+  "monospace", "DejaVu Sans Mono", "Liberation Mono", "Courier New",
+  "Noto Sans Mono",
+]
+
+/// Font size choices offered by Settings → Editor…, in points.
+pub const sizes = [11, 12, 13, 14, 16, 18, 20]
+
+/// The default MCP agent port (the Slint version's default).
+pub const default_mcp_port = 7817
+
+/// Editor color scheme. The scheme recolors the code/source/console editors
+/// and the design canvas; the native shell chrome keeps the GTK colors.
+pub type Scheme {
+  Dark
+  Light
+  Solarized
+}
+
+/// Everything Settings → Editor…/Agent… controls. Not a document field: it
+/// lives outside undo/redo and persists to the user's config directory.
+pub type Settings {
+  Settings(
+    /// Editor font family, one of `fonts`.
+    font: String,
+    /// Editor font size in points, one of `sizes`.
+    font_size: Int,
+    scheme: Scheme,
+    /// The MCP agent server is disabled (and, in this build, not available);
+    /// the option is kept for parity with the Slint version.
+    mcp_enabled: Bool,
+    mcp_port: Int,
+  )
+}
 
 pub type State {
   State(
@@ -79,6 +116,9 @@ pub type State {
     /// has open, the text last pushed to it, and the latest diagnostics so
     /// the editor can re-paint them after a document replacement.
     lsp: Lsp,
+    /// Editor appearance and agent options (Settings menu). UI state, not a
+    /// document edit: no undo entry, persisted to the user's config dir.
+    settings: Settings,
   )
 }
 
@@ -107,17 +147,235 @@ pub fn no_lsp() -> Lsp {
   Lsp(client: None, file: None, text: "", version: 0, diags: [])
 }
 
+// ---------------------------------------------------------------------------
+// Settings (Settings → Editor…, Settings → Agent…)
+// ---------------------------------------------------------------------------
+
+/// The Slint version's defaults: monospace 13 on Dark, agent disabled on
+/// port 7817.
+pub fn default_settings() -> Settings {
+  Settings(
+    font: "monospace",
+    font_size: 13,
+    scheme: Dark,
+    mcp_enabled: False,
+    mcp_port: default_mcp_port,
+  )
+}
+
+/// Replace the settings wholesale. Settings are UI state, not a document
+/// edit, so this does not touch undo/redo.
+pub fn apply_settings(state: State, settings: Settings) -> State {
+  State(..state, settings: normalize(settings))
+}
+
+/// Force a settings value back into the offered choices: unknown fonts and
+/// sizes fall back to the defaults, and the port keeps its bounds.
+pub fn normalize(settings: Settings) -> Settings {
+  let font = case list.contains(fonts, settings.font) {
+    True -> settings.font
+    False -> "monospace"
+  }
+  let font_size = case list.contains(sizes, settings.font_size) {
+    True -> settings.font_size
+    False -> 13
+  }
+  let mcp_port = case settings.mcp_port >= 1024 && settings.mcp_port <= 65_535 {
+    True -> settings.mcp_port
+    False -> default_mcp_port
+  }
+  Settings(..settings, font: font, font_size: font_size, mcp_port: mcp_port)
+}
+
+pub fn scheme_name(scheme: Scheme) -> String {
+  case scheme {
+    Dark -> "Dark"
+    Light -> "Light"
+    Solarized -> "Solarized"
+  }
+}
+
+pub fn scheme_from_name(name: String) -> Scheme {
+  case name {
+    "Light" -> Light
+    "Solarized" -> Solarized
+    _ -> Dark
+  }
+}
+
+/// The scheme combo's entries, in display order.
+pub fn scheme_names() -> List(String) {
+  ["Dark", "Light", "Solarized"]
+}
+
+/// The scheme combo index for the current scheme.
+pub fn scheme_index(scheme: Scheme) -> Int {
+  index_of(scheme_names(), scheme_name(scheme))
+}
+
+/// The font combo index for the current settings (0 when unknown).
+pub fn font_index(settings: Settings) -> Int {
+  case list.contains(fonts, settings.font) {
+    True -> index_of(fonts, settings.font)
+    False -> 0
+  }
+}
+
+/// The size combo index for the current settings (the default's index when
+/// unknown).
+pub fn size_index(settings: Settings) -> Int {
+  case list.contains(sizes, settings.font_size) {
+    True -> index_of(sizes, settings.font_size)
+    False -> index_of(sizes, 13)
+  }
+}
+
+fn index_of(items: List(a), item: a) -> Int {
+  case items {
+    [] -> 0
+    [first, ..rest] ->
+      case first == item {
+        True -> 0
+        False -> 1 + index_of(rest, item)
+      }
+  }
+}
+
+/// Editor and canvas colors for a scheme, as hex strings (the Slint
+/// version's palettes). Keys: "canvas" and "grid" for the design canvas;
+/// "bg" and "fg" for an editor's default style; then the Gleam token styles
+/// "keyword", "comment", "string", "number", "punct", "type".
+pub fn scheme_palette(scheme: Scheme) -> List(#(String, String)) {
+  case scheme {
+    Light -> [
+      #("canvas", "#e6e6e6"),
+      #("grid", "#c6c6c6"),
+      #("bg", "#ffffff"),
+      #("fg", "#202020"),
+      #("keyword", "#a626a4"),
+      #("comment", "#6a737d"),
+      #("string", "#50a14f"),
+      #("number", "#986801"),
+      #("punct", "#0184bc"),
+      #("type", "#c18401"),
+    ]
+    Solarized -> [
+      #("canvas", "#001f27"),
+      #("grid", "#0a3a46"),
+      #("bg", "#002b36"),
+      #("fg", "#93a1a1"),
+      #("keyword", "#859900"),
+      #("comment", "#586e75"),
+      #("string", "#2aa198"),
+      #("number", "#d33682"),
+      #("punct", "#6c71c4"),
+      #("type", "#b58900"),
+    ]
+    Dark -> [
+      #("canvas", "#14161a"),
+      #("grid", "#2f3540"),
+      #("bg", "#282c34"),
+      #("fg", "#abb2bf"),
+      #("keyword", "#c678dd"),
+      #("comment", "#7f848e"),
+      #("string", "#98c379"),
+      #("number", "#d19a66"),
+      #("punct", "#56b6c2"),
+      #("type", "#e5c07b"),
+    ]
+  }
+}
+
+/// The settings document, written to the user's config directory.
+pub fn settings_to_json(settings: Settings) -> Json {
+  JObject([
+    #("schema", JInt(1)),
+    #("font", JString(settings.font)),
+    #("font_size", JInt(settings.font_size)),
+    #("scheme", JString(scheme_name(settings.scheme))),
+    #("mcp_enabled", JBool(settings.mcp_enabled)),
+    #("mcp_port", JInt(settings.mcp_port)),
+  ])
+}
+
+/// Read settings back from a stored document; unknown or invalid fields fall
+/// back to the defaults, so a newer or damaged file cannot break the IDE.
+pub fn settings_from_json(json: Json) -> Result(Settings, String) {
+  case json {
+    JObject(fields) -> {
+      let font = case string_field(fields, "font") {
+        Ok(font) -> font
+        Error(Nil) -> "monospace"
+      }
+      let font_size = case int_field(fields, "font_size") {
+        Ok(size) -> size
+        Error(Nil) -> 13
+      }
+      let scheme = case string_field(fields, "scheme") {
+        Ok(name) -> scheme_from_name(name)
+        Error(Nil) -> Dark
+      }
+      let mcp_enabled = case bool_field(fields, "mcp_enabled") {
+        Ok(enabled) -> enabled
+        Error(Nil) -> False
+      }
+      let mcp_port = case int_field(fields, "mcp_port") {
+        Ok(port) -> port
+        Error(Nil) -> default_mcp_port
+      }
+
+      Ok(
+        normalize(Settings(
+          font: font,
+          font_size: font_size,
+          scheme: scheme,
+          mcp_enabled: mcp_enabled,
+          mcp_port: mcp_port,
+        )),
+      )
+    }
+    _ -> Error("$: expected an object")
+  }
+}
+
+fn string_field(
+  fields: List(#(String, Json)),
+  name: String,
+) -> Result(String, Nil) {
+  case list.find(fields, fn(field) { field.0 == name }) {
+    Ok(#(_, JString(value))) -> Ok(value)
+    _ -> Error(Nil)
+  }
+}
+
+fn int_field(fields: List(#(String, Json)), name: String) -> Result(Int, Nil) {
+  case list.find(fields, fn(field) { field.0 == name }) {
+    Ok(#(_, JInt(value))) -> Ok(value)
+    _ -> Error(Nil)
+  }
+}
+
+fn bool_field(
+  fields: List(#(String, Json)),
+  name: String,
+) -> Result(Bool, Nil) {
+  case list.find(fields, fn(field) { field.0 == name }) {
+    Ok(#(_, JBool(value))) -> Ok(value)
+    _ -> Error(Nil)
+  }
+}
+
 pub type ClipboardItem {
   ClipboardItem(node: Node, rect: campy_design.Rect)
 }
 
 /// The notebook page the user has chosen. Tab clicks and shortcuts set it
 /// explicitly, so the designer can always be reached while an app runs.
+/// The running app shows in its own top-level window, not a notebook page.
 pub type Page {
   DesignPage
   CodePage
   SourcePage
-  RunPage
   NodesPage
   DebugPage
 }
@@ -165,7 +423,6 @@ pub type Command {
   SetNodesName(String)
   ShowNodes
   ShowDebug
-  ShowTabs
   TracingStarted(Dynamic)
   TracingStopped
   SetHandlers(String)
@@ -178,6 +435,8 @@ pub type Command {
   LspPushed(String, Int, String)
   /// The server published diagnostics for a file.
   LspDiagnostics(String, List(Diag))
+  /// Replace all settings at once (one dialog OK). No undo entry.
+  ApplySettings(Settings)
 }
 
 pub fn new(project: Project) -> State {
@@ -205,6 +464,7 @@ pub fn new(project: Project) -> State {
       tracer: None,
       selected_peer: None,
       lsp: no_lsp(),
+      settings: default_settings(),
     )
 
   case project.modules {
@@ -345,17 +605,6 @@ fn clear_special_pages(state: State) -> State {
 }
 
 /// The Run tab (or attaching an app) shows the Run page.
-fn show_run(state: State) -> State {
-  State(
-    ..state,
-    page: RunPage,
-    code_view: False,
-    source_view: False,
-    nodes_view: False,
-    debug_view: False,
-  )
-}
-
 /// Clear the console buffer. This is UI state, not a document edit, so it does
 /// not create an undo entry.
 pub fn clear_console(state: State) -> State {
@@ -1028,25 +1277,31 @@ pub fn open_handler(state: State, control_id: String, event: String) -> State {
         }
       }
 
-      show_code(State(..state)) |> set_status(status)
+      show_code(state) |> set_status(status)
     }
   }
 }
 
 /// Selected controls whose ancestors are not also selected. Deleting or
-/// copying a container already covers its children.
+/// copying a container already covers its children. The form root is not a
+/// component: it is never deleted or copied (it is selected, moved and
+/// resized through the form plate instead).
 fn selected_top(root: Node, ids: List(String)) -> List(Node) {
   list.filter_map(ids, fn(id) {
-    case campy_design.find_node(root, id) {
-      None -> Error(Nil)
-      Some(node) ->
-        case
-          list.any(ids, fn(other) {
-            other != id && campy_design.is_within(root, other, id)
-          })
-        {
-          True -> Error(Nil)
-          False -> Ok(node)
+    case id == root.id {
+      True -> Error(Nil)
+      False ->
+        case campy_design.find_node(root, id) {
+          None -> Error(Nil)
+          Some(node) ->
+            case
+              list.any(ids, fn(other) {
+                other != id && campy_design.is_within(root, other, id)
+              })
+            {
+              True -> Error(Nil)
+              False -> Ok(node)
+            }
         }
     }
   })
@@ -1170,10 +1425,10 @@ fn paste_rect(
   )
 }
 
-/// Record a running app actor and open its Run view.
+/// Record a running app actor. The app publishes into its own top-level
+/// window (the shell opens it); the notebook stays on the user's page.
 pub fn run_started(state: State, running: campy_app.Running) -> State {
   State(..state, running: Some(running), live_view: None)
-  |> show_run
   |> log("Running " <> running.slug)
   |> set_status("")
 }
@@ -1354,9 +1609,6 @@ pub fn update(state: State, command: Command) -> State {
       State(..state, page: NodesPage, nodes_view: True, debug_view: False)
     ShowDebug ->
       State(..state, page: DebugPage, debug_view: True, nodes_view: False)
-    // Form/Run tabs: the natural page — Run when an app is attached, else
-    // the Form. Every explicit flag clears.
-    ShowTabs -> show_run(state)
     TracingStarted(tracer) ->
       State(..state, tracer: Some(tracer))
       |> log("tracing send/receive on the app actor")
@@ -1378,6 +1630,7 @@ pub fn update(state: State, command: Command) -> State {
         True -> State(..state, lsp: Lsp(..state.lsp, diags: rows))
         False -> state
       }
+    ApplySettings(settings) -> apply_settings(state, settings)
   }
 }
 

@@ -168,6 +168,8 @@ fn loop(shell: campy_wx.Shell) {
       campy_wx.paint(shell, id)
       loop(shell)
     }
+    campy_wx.RunEvent(_, _, _) -> loop(shell)
+    campy_wx.RunClosed -> loop(shell)
     campy_wx.Mouse(_, _, _, _, _) -> loop(shell)
     campy_wx.KeyPressed(_) -> loop(shell)
     campy_wx.Accelerator(_) -> loop(shell)

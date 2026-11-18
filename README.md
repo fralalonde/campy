@@ -30,7 +30,20 @@ project directory to open another project.
 - **wx renderer** (`campy_wx`): widget table, sizer/free layout, patch
   application that leaves unchanged values alone, event normalization, and
   shell chrome (menus, toolbar, status, notebook, tree, grid, Scintilla,
-  dialogs). The design and live modes share one renderer.
+  dialogs). The design and live modes share one renderer. Free-layout
+  containers dock their children by an `align` property (top/bottom/left/
+  right/fill, LCL-style band reservation) recomputed on every window resize;
+  containers switch layout (none/vertical/horizontal) at runtime. The design
+  canvas draws a light grey grid; the form is a selectable white plate on it
+  (click/drag/resize it like a control — its recorded position is
+  editor-only chrome, the runtime uses only the size), and selection is four
+  yellow grab strips around each selected control (they never cover it);
+  dragging reads the true pointer, so drags track exactly. The toolbar keeps
+  only pictogram Run/Stop tools followed by the widget palette — one drawn
+  pictogram per widget, labelled by tooltip (edit commands live in the menus
+  and shortcuts) — and enum
+  properties in the inspector pop their dropdown open as soon as the cell is
+  selected.
 - **Project format** (`campy_project`): a project is a directory with canonical
   `campy.json`, `modules/<slug>/form.json`, and `handlers.gleam`; unknown fields
   survive a round trip.
@@ -66,6 +79,16 @@ project directory to open another project.
   configuration.
 - **Console**: app replies stream into the IDE console immediately, and the
   header tracks what is running and where.
+- **Run window**: Run starts the active form's app and shows its live view in
+  its own top-level window — generations update in place (no reload, no
+  focus loss), events route from the window to the app actor, and closing
+  the window stops the app. Reports stream into the same console.
+- **Settings** (in `campy_ide_wx`): the Settings menu brings back the Slint
+  era's dialogs — Editor… (font family, font size, and the Dark/Light/
+  Solarized scheme that recolors the code/source/console editors and the
+  design canvas) and Agent… (the MCP enable/port options; the agent server
+  itself is not in this build). Settings are UI state outside undo/redo and
+  persist to `~/.config/campy/settings.json`.
 - **Debug v1** (in `campy_ide_wx`): the Debug page — process list of the
   app's node, state snapshot dumps, and a send/receive trace whose lines
   stream into the console.
