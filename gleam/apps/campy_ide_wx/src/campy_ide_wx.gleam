@@ -1949,12 +1949,19 @@ fn help_text() -> String {
   <> "Ctrl+D            Duplicate (Form page)\n"
   <> "Delete            Delete selection (Form page)\n"
   <> "Escape            Cancel placement or drag\n"
-  <> "Ctrl+1/2/3        Form, Code, Source\n\n"
+  <> "Ctrl+1/2/3        Form, Code, Source\n"
+  <> "Ctrl+Space        Completions at the caret (Code page)\n"
+  <> "F12               Jump to the declaration under the caret\n"
+  <> "Ctrl+F12          Document outline (jump to a symbol)\n"
+  <> "F1                This shortcut list\n\n"
   <> "Design: click a pictogram in the toolbar palette, then click or drag\n"
   <> "on the canvas. Drag a control's body to move it; drag the yellow grab\n"
   <> "strips around the selection to resize. Click the form's body to select\n"
   <> "the form itself (move/resizes it on the canvas). With several controls\n"
-  <> "selected each gets its own grab strips and the group moves."
+  <> "selected each gets its own grab strips and the group moves.\n\n"
+  <> "Run: press the green triangle. Handler effects can update the running\n"
+  <> "app live: Log lines reach the console, Notify raises a report, and\n"
+  <> "SetProp(id, prop, value) changes a control without reloading."
 }
 
 fn begin_body_move(
@@ -3448,7 +3455,9 @@ fn complete_at_caret(
     Some(client), Some(file) -> {
       let #(line, column) = campy_wx.editor_caret(shell, "code")
       io.println(
-        "[lsp] completions requested at " <> int.to_string(line) <> ":"
+        "[lsp] completions requested at "
+        <> int.to_string(line)
+        <> ":"
         <> int.to_string(column),
       )
       campy_lsp.completion(client, file, line, column)
@@ -3498,9 +3507,7 @@ fn handle_lsp(
   let state = case message {
     DiagnosticsMsg(file, rows) -> {
       // stdout evidence: diagnostics are important enough to see in the log.
-      io.println(
-        "[lsp] " <> file <> ": " <> int.to_string(list.length(rows)),
-      )
+      io.println("[lsp] " <> file <> ": " <> int.to_string(list.length(rows)))
       let state =
         model.update(state, model.LspDiagnostics(file, to_diags(rows)))
       // Console evidence: one line per diagnostic of the open document.
