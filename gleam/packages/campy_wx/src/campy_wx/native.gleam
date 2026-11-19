@@ -582,6 +582,9 @@ pub fn editor_autocomplete(editor: Dynamic, labels: List(String)) -> Nil
 @external(erlang, "campy_wx_native", "open_dialog")
 pub fn open_dialog(frame: Dynamic, wildcard: String) -> String
 
+@external(erlang, "campy_wx_native", "dir_dialog")
+pub fn dir_dialog(frame: Dynamic, message: String) -> String
+
 @external(erlang, "campy_wx_native", "save_dialog")
 pub fn save_dialog(frame: Dynamic, wildcard: String, default: String) -> String
 

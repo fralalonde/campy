@@ -879,6 +879,7 @@ pub fn accelerator_shortcut(action: String) -> Shortcut {
   case action {
     "save" -> Save
     "quit" -> Quit
+    "open" -> OpenProject
     "undo" -> Undo
     "redo" -> Redo
     "cut" -> Cut
@@ -959,6 +960,7 @@ fn apply_shortcut(
 ) -> model.State {
   case action {
     Save -> save(shell, state, dir)
+    OpenProject -> open_project(shell, state, dir)
     Complete -> complete_at_caret(shell, state, dir)
     JumpToDefinition -> jump_to_definition(shell, state, dir)
     Undo -> model.update(state, model.Undo)
@@ -988,9 +990,13 @@ fn cancel_drag(
 ) -> model.State {
   case drag {
     NoDrag -> state
+    PendingDrag(_, _, _, _, _) -> state
     PlacementDrag(_, _, _) | MarqueeDrag(_, _) -> {
       campy_wx.release_canvas(shell)
       campy_wx.show_marquee(shell, None)
+      // A marquee sets no cursor itself, but the hover cursor may still be
+      // showing a resize arrow from the pre-press hover: restore the arrow.
+      campy_wx.set_canvas_cursor(shell, 99)
       state
     }
     MoveDrag(items, _, _, _, _, origins) -> {
@@ -1031,6 +1037,8 @@ fn drop_drag(shell: campy_wx.Shell, state: model.State, drag: Drag) -> Nil {
 pub type Shortcut {
   Save
   Quit
+  /// File menu: open a project through a directory picker (Ctrl+O).
+  OpenProject
   Undo
   Redo
   Copy
@@ -1061,6 +1069,7 @@ pub fn shortcut(state: model.State, key: campy_wx.Key) -> Shortcut {
   case key.control, key.alt, key.shift, key.code {
     True, False, _, "q" -> Quit
     True, False, _, "s" -> Save
+    True, False, _, "o" -> OpenProject
     True, False, _, "1" -> ShowFormPage
     True, False, _, "2" -> ShowCodePage
     True, False, _, "3" -> ShowSourcePage
@@ -1580,7 +1589,12 @@ fn load_settings(state: model.State) -> model.State {
         Error(_) -> state
         Ok(json) ->
           case model.settings_from_json(json) {
-            Ok(settings) -> model.update(state, model.ApplySettings(settings))
+            Ok(settings) ->
+              state
+              // Recents ride in the settings document: apply them to the
+              // model so the Projects list starts populated.
+              |> model.update(model.ApplySettings(settings))
+              |> model.update(model.SetRecents(settings.recent_paths))
             Error(_) -> state
           }
       }
@@ -2102,56 +2116,55 @@ fn handle_design_mouse(
               case id {
                 "canvas" ->
                   case hit_target(state, x, y) {
-                    Some(target) ->
-                      case control {
-                        True -> {
-                          let previous = state
-                          let state = toggle_selection(state, target)
-                          let next = view(state)
-                          let shell = rebind(shell, current, next)
-                          refresh(shell, Some(previous), state)
-                          campy_wx.focus(shell, "canvas")
-                          loop(shell, state, next, dir, NoDrag)
-                        }
-                        False -> {
-                          let previous = state
-                          let state = case
-                            list.contains(state.selection, target)
-                          {
-                            True -> state
-                            False -> model.select_controls(state, [target])
-                          }
-                          let next = view(state)
-                          let shell = rebind(shell, current, next)
-                          refresh(shell, Some(previous), state)
-                          campy_wx.focus(shell, "canvas")
-                          begin_body_move(shell, state, next, dir, ax, ay)
-                        }
-                      }
+                    Some(target) -> {
+                      // The press is deferred: selection commits on release,
+                      // and motion past the threshold becomes a move (the
+                      // target was already selected) or a marquee.
+                      campy_wx.focus(shell, "canvas")
+                      loop(
+                        shell,
+                        state,
+                        current,
+                        dir,
+                        PendingDrag(
+                          Some(target),
+                          control,
+                          list.contains(state.selection, target),
+                          ax,
+                          ay,
+                        ),
+                      )
+                    }
                     None -> {
-                      let previous = state
-                      let state = model.select_controls(state, [])
-                      campy_wx.show_selection(shell, [])
-                      campy_wx.capture_canvas(shell)
-                      refresh(shell, Some(previous), state)
-                      loop(shell, state, current, dir, MarqueeDrag(ax, ay))
+                      // Empty canvas: same deferral — a plain click selects
+                      // the form root on release; a drag draws the marquee.
+                      campy_wx.focus(shell, "canvas")
+                      loop(
+                        shell,
+                        state,
+                        current,
+                        dir,
+                        PendingDrag(None, control, False, ax, ay),
+                      )
                     }
                   }
                 _ -> {
-                  let previous = state
-                  let state = case control {
-                    True -> toggle_widget_selection(state, id)
-                    False ->
-                      case list.contains(state.selection, id) {
-                        True -> state
-                        False -> select_control(state, id, "select")
-                      }
-                  }
-                  let next = view(state)
-                  let shell = rebind(shell, current, next)
-                  refresh(shell, Some(previous), state)
+                  // A press reported by a control widget itself (the plate
+                  // reports as the form root).
                   campy_wx.focus(shell, "canvas")
-                  begin_body_move(shell, state, next, dir, ax, ay)
+                  loop(
+                    shell,
+                    state,
+                    current,
+                    dir,
+                    PendingDrag(
+                      Some(id),
+                      control,
+                      list.contains(state.selection, id),
+                      ax,
+                      ay,
+                    ),
+                  )
                 }
               }
           }
@@ -2175,6 +2188,39 @@ fn handle_design_mouse(
             }
             Error(_) -> loop(shell, state, current, dir, drag)
           }
+        PendingDrag(target, control, was_selected, start_x, start_y) -> {
+          // Motion past the threshold turns the pending press into a
+          // gesture: a move of the (already selected) pressed control, or
+          // a marquee from anywhere else. Read the TRUE pointer in canvas
+          // coordinates — the pressed widget moves under the pointer, so
+          // its event coordinates are unstable.
+          let #(px, py) = campy_wx.canvas_pointer(shell)
+          let moved =
+            px - start_x > 4
+            || start_x - px > 4
+            || py - start_y > 4
+            || start_y - py > 4
+          case moved {
+            False -> loop(shell, state, current, dir, drag)
+            True ->
+              case target, was_selected, control {
+                Some(_id), True, False ->
+                  // The press was on a selected control: move the group.
+                  begin_body_move(shell, state, current, dir, start_x, start_y)
+                _, _, _ -> {
+                  // Unselected control, Ctrl held, or empty canvas: marquee.
+                  campy_wx.capture_canvas(shell)
+                  loop(
+                    shell,
+                    state,
+                    current,
+                    dir,
+                    MarqueeDrag(start_x, start_y),
+                  )
+                }
+              }
+          }
+        }
         PlacementDrag(_kind, start_x, start_y) -> {
           campy_wx.show_marquee(
             shell,
@@ -2196,6 +2242,30 @@ fn handle_design_mouse(
       }
     "left_up" ->
       case drag {
+        PendingDrag(target, control, _was_selected, _sx, _sy) -> {
+          // A click (press + release, no drag): selection commits here.
+          // Ctrl-click toggles; a plain click selects one control; a click
+          // on the empty canvas selects the form root (the window itself).
+          let previous = state
+          let state = case target {
+            Some(id) ->
+              case control {
+                True -> toggle_widget_selection(state, id)
+                False -> select_control(state, id, "select")
+              }
+            None ->
+              case model.active_module(state) {
+                Ok(module) ->
+                  model.select_controls(state, [module.form.view.id])
+                Error(_) -> state
+              }
+          }
+          let next = view(state)
+          let shell = rebind(shell, current, next)
+          refresh(shell, Some(previous), state)
+          campy_wx.focus(shell, "canvas")
+          loop(shell, state, next, dir, NoDrag)
+        }
         MoveDrag(_, _, _, _, _, _) ->
           handle_mouse(shell, state, current, dir, drag, kind, ax, ay)
         ResizeDrag(_, _, _, _, _, _, _) -> {
@@ -2563,6 +2633,7 @@ fn drag_previews(
 ) -> List(#(String, #(Int, Int, Int, Int))) {
   case drag {
     NoDrag -> []
+    PendingDrag(_, _, _, _, _) -> []
     PlacementDrag(_, _, _) -> []
     MarqueeDrag(_, _) -> []
     MoveDrag(items, start_x, start_y, _follow, _current, _) ->
@@ -2620,6 +2691,19 @@ fn drag_previews(
 
 type Drag {
   NoDrag
+  /// A press that has not yet become a gesture. Selection commits on
+  /// RELEASE (a click selects when the button is released — the original
+  /// form-builder directive), and motion past the threshold turns into a
+  /// move when the pressed control was already selected (a group move
+  /// when several are), or a marquee otherwise — so drag-to-select works
+  /// even when the gesture starts on top of a control.
+  PendingDrag(
+    target: Option(String),
+    control: Bool,
+    was_selected: Bool,
+    start_x: Int,
+    start_y: Int,
+  )
   PlacementDrag(kind: String, start_x: Int, start_y: Int)
   MarqueeDrag(start_x: Int, start_y: Int)
   MoveDrag(
@@ -2650,6 +2734,7 @@ fn handle(
   value: campy_view.Value,
 ) -> model.State {
   case id {
+    "menu-open" -> open_project(shell, state, dir)
     "menu-save" | "tool-save" -> save(shell, state, dir)
     "menu-undo" | "tool-undo" -> model.update(state, model.Undo)
     "menu-redo" | "tool-redo" -> model.update(state, model.Redo)
@@ -2686,6 +2771,61 @@ fn handle(
       event_selected(state, value)
     }
     "modules" -> module_selected(state, value)
+    "projects" ->
+      // Selecting a Projects row: record the selection (the trash button
+      // acts on it). Clicking a row of a project that is not open opens it.
+      // A list event delivers the row INDEX.
+      case value {
+        campy_view.VInt(index) ->
+          case list_at(project_items(state), index, "") {
+            "" -> state
+            title ->
+              case recent_path_of(state, title) {
+                Ok(path) ->
+                  case path == dir {
+                    True -> model.update(state, model.ProjectSelected(path))
+                    False -> open_project_path(shell, state, path, dir)
+                  }
+                Error(_) -> state
+              }
+          }
+        campy_view.VText(title) ->
+          case recent_path_of(state, title) {
+            Ok(path) ->
+              case path == dir {
+                True -> model.update(state, model.ProjectSelected(path))
+                False -> open_project_path(shell, state, path, dir)
+              }
+            Error(_) -> state
+          }
+        _ -> state
+      }
+    "project-remove" -> {
+      // Remove the selected row from the Projects list — the list only,
+      // never the files on disk.
+      case state.selected_project {
+        Some(path) ->
+          case path == dir {
+            True ->
+              model.update(
+                state,
+                model.SetStatus("Cannot remove the open project"),
+              )
+            False -> {
+              let state = model.update(state, model.RemoveRecent)
+              persist_recents(state)
+              state
+            }
+          }
+        None -> model.update(state, model.SetStatus("Select a project first"))
+      }
+    }
+    "module-new" -> model.update(state, model.NewModule)
+    "module-remove" ->
+      case state.active {
+        Some(slug) -> model.update(state, model.RemoveModule(slug))
+        None -> model.update(state, model.SetStatus("No active module"))
+      }
     "nodes-name" ->
       case value {
         campy_view.VText(name) -> model.update(state, model.SetNodesName(name))
@@ -3123,6 +3263,14 @@ fn refresh(
       case previous.peers == state.peers {
         False -> set_nodes(shell, state)
         True -> Nil
+      }
+      // The Projects list follows the recents; a project switch re-opens the
+      // active module, so the module list is refreshed through set_code.
+      case
+        previous.recent == state.recent && previous.project == state.project
+      {
+        True -> Nil
+        False -> campy_wx.set_items(shell, "projects", project_items(state))
       }
       case previous.debug_view == state.debug_view {
         False -> set_debug(shell, state)
@@ -3720,8 +3868,87 @@ pub fn module_items(state: model.State) -> List(String) {
   list.map(state.project.modules, fn(module) { module.slug })
 }
 
+/// The Projects list: the open project first, then the recent ones (most
+/// recent first) that are not already open.
 pub fn project_items(state: model.State) -> List(String) {
   [state.project.title]
+  |> list.append(
+    state.recent
+    |> list.filter(fn(entry) { entry.1 != "" })
+    |> list.map(fn(entry) { entry.0 }),
+  )
+  |> list.unique
+}
+
+/// The path behind a Projects-list row, by title.
+fn recent_path_of(state: model.State, title: String) -> Result(String, Nil) {
+  case list.find(state.recent, fn(entry) { entry.0 == title }) {
+    Ok(#(_title, path)) -> Ok(path)
+    Error(_) -> Error(Nil)
+  }
+}
+
+/// Open a project through a directory picker; record it in the recents.
+fn open_project(
+  shell: campy_wx.Shell,
+  state: model.State,
+  from: String,
+) -> model.State {
+  let path = campy_wx.dir_dialog(shell, "Open Campy project")
+  case path {
+    "" -> state
+    _ -> open_project_path(shell, state, path, from)
+  }
+}
+
+/// Load and switch to the project at `path`, recording it in the recents
+/// (head, capped) and persisting those to the settings document. `from` is
+/// the project being left; it becomes a recent so switching is reversible.
+fn open_project_path(
+  shell: campy_wx.Shell,
+  state: model.State,
+  path: String,
+  from: String,
+) -> model.State {
+  case campy_project.load(path) {
+    Error(error) -> {
+      campy_wx.show_message(
+        shell,
+        "Open project",
+        path <> " is not a Campy project: " <> error,
+      )
+      model.update(state, model.Log("open failed: " <> error))
+    }
+    Ok(project) -> {
+      // Recents: the opened project at the head, older duplicates of the
+      // same path dropped, and the project being left records its own
+      // place (switching is reversible), capped at the model's limit.
+      let outgoing = case from == path {
+        True -> []
+        False -> [#(state.project.title, from)]
+      }
+      let recents =
+        list.append(
+          [#(project.title, path)],
+          list.filter(list.append(outgoing, state.recent), fn(entry) {
+            entry.1 != path
+          }),
+        )
+        |> list.take(model.recent_limit)
+      let state =
+        state
+        |> model.update(model.SetRecents(recents))
+        |> model.update(model.ReplaceProject(project))
+      persist_recents(state)
+      model.update(state, model.Log("Opened " <> path))
+    }
+  }
+}
+
+/// Recents live in the settings document; keep it in sync after every change.
+fn persist_recents(state: model.State) -> Nil {
+  let settings = model.Settings(..state.settings, recent_paths: state.recent)
+  save_settings(model.update(state, model.ApplySettings(settings)))
 }
 
 pub fn module_index(state: model.State) -> Int {
@@ -4054,6 +4281,7 @@ fn menubar() -> Node {
   campy_view.node("menubar", "menubar")
   |> campy_view.with_children([
     menu("file-menu", "File", [
+      menu_item("menu-open", "Open Project…    Ctrl+O"),
       menu_item("menu-save", "Save            Ctrl+S"),
       menu_item("menu-quit", "Quit            Ctrl+Q"),
     ]),
@@ -4140,7 +4368,9 @@ fn body(state: model.State) -> Node {
 }
 
 /// Left navigator: project and module lists only. The widget palette lives in
-/// the strip under the toolbar, not here.
+/// the strip under the toolbar, not here. The Projects row keeps a trash
+/// button (removes the selected entry from the list, never deletes files);
+/// the Modules row keeps +/trash for creating and removing modules.
 fn navigator(state: model.State) -> Node {
   campy_view.node("panel", "nav")
   |> campy_view.with_props([
@@ -4150,16 +4380,63 @@ fn navigator(state: model.State) -> Node {
     #("align", VText("left")),
   ])
   |> campy_view.with_children([
-    campy_view.node("label", "projects-title")
-      |> campy_view.with_props([#("text", VText("Projects"))]),
+    campy_view.node("panel", "projects-head")
+      |> campy_view.with_props([
+        #("layout", VText("row")),
+        #("border", VInt(0)),
+        #("h", VInt(26)),
+      ])
+      |> campy_view.with_children([
+        campy_view.node("label", "projects-title")
+          |> campy_view.with_props([
+            #("text", VText("Projects")),
+            #("grow", VBool(True)),
+          ]),
+        campy_view.node("button", "project-remove")
+          |> campy_view.with_props([
+            #("text", VText("✕")),
+            #("w", VInt(24)),
+            #("h", VInt(24)),
+            #("tooltip", VText("Remove this project from the list")),
+          ])
+          |> campy_view.with_events(["click"]),
+      ]),
     campy_view.node("list", "projects")
       |> campy_view.with_props([
-        #("h", VInt(52)),
+        #("h", VInt(76)),
         #("items", VList(list.map(project_items(state), VText))),
         #("selection", VInt(0)),
+      ])
+      |> campy_view.with_events(["change"]),
+    campy_view.node("panel", "modules-head")
+      |> campy_view.with_props([
+        #("layout", VText("row")),
+        #("border", VInt(0)),
+        #("h", VInt(26)),
+      ])
+      |> campy_view.with_children([
+        campy_view.node("label", "modules-title")
+          |> campy_view.with_props([
+            #("text", VText("Modules")),
+            #("grow", VBool(True)),
+          ]),
+        campy_view.node("button", "module-new")
+          |> campy_view.with_props([
+            #("text", VText("+")),
+            #("w", VInt(24)),
+            #("h", VInt(24)),
+            #("tooltip", VText("New module")),
+          ])
+          |> campy_view.with_events(["click"]),
+        campy_view.node("button", "module-remove")
+          |> campy_view.with_props([
+            #("text", VText("✕")),
+            #("w", VInt(24)),
+            #("h", VInt(24)),
+            #("tooltip", VText("Delete the active module")),
+          ])
+          |> campy_view.with_events(["click"]),
       ]),
-    campy_view.node("label", "modules-title")
-      |> campy_view.with_props([#("text", VText("Modules"))]),
     campy_view.node("list", "modules")
       |> campy_view.with_props([
         #("grow", VBool(True)),

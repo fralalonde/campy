@@ -16,8 +16,8 @@ import campy_design
 import campy_lsp
 import campy_peer.{type Peer}
 import campy_project.{type Module, type Project}
-import campy_view.{type Node, type Value, VText}
-import campy_view/codec.{type Json, JBool, JInt, JObject, JString}
+import campy_view.{type Node, type Value, VInt, VText}
+import campy_view/codec.{type Json, JArray, JBool, JInt, JObject, JString}
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/int
@@ -29,6 +29,9 @@ import gleam/string
 pub const console_limit = 500
 
 pub const undo_limit = 100
+
+/// How many recently opened projects the projects list remembers.
+pub const recent_limit = 8
 
 /// Font family choices offered by Settings → Editor… (same list as the
 /// Slint-era settings dialog).
@@ -64,6 +67,10 @@ pub type Settings {
     /// the option is kept for parity with the Slint version.
     mcp_enabled: Bool,
     mcp_port: Int,
+    /// Recently opened projects (title, path), newest first. The shell shows
+    /// them on the welcome/projects list; they persist with the settings
+    /// because the list must survive restarts.
+    recent_paths: List(#(String, String)),
   )
 }
 
@@ -119,6 +126,14 @@ pub type State {
     /// Editor appearance and agent options (Settings menu). UI state, not a
     /// document edit: no undo entry, persisted to the user's config dir.
     settings: Settings,
+    /// Recently opened projects (title, path), newest first, capped at
+    /// `recent_limit`. The shell mirrors this from the settings file and
+    /// updates it after a successful open, so it is UI state, not a document
+    /// field: no undo entry.
+    recent: List(#(String, String)),
+    /// The projects-list row the user highlighted, by path. UI state; the
+    /// shell needs it to enable Open/Remove for exactly that row.
+    selected_project: Option(String),
   )
 }
 
@@ -160,6 +175,7 @@ pub fn default_settings() -> Settings {
     scheme: Dark,
     mcp_enabled: False,
     mcp_port: default_mcp_port,
+    recent_paths: [],
   )
 }
 
@@ -184,7 +200,13 @@ pub fn normalize(settings: Settings) -> Settings {
     True -> settings.mcp_port
     False -> default_mcp_port
   }
-  Settings(..settings, font: font, font_size: font_size, mcp_port: mcp_port)
+  Settings(
+    ..settings,
+    font: font,
+    font_size: font_size,
+    mcp_port: mcp_port,
+    recent_paths: list.take(settings.recent_paths, recent_limit),
+  )
 }
 
 pub fn scheme_name(scheme: Scheme) -> String {
@@ -295,6 +317,15 @@ pub fn settings_to_json(settings: Settings) -> Json {
     #("scheme", JString(scheme_name(settings.scheme))),
     #("mcp_enabled", JBool(settings.mcp_enabled)),
     #("mcp_port", JInt(settings.mcp_port)),
+    #(
+      "recent_projects",
+      JArray(
+        list.map(settings.recent_paths, fn(entry) {
+          let #(title, path) = entry
+          JObject([#("title", JString(title)), #("path", JString(path))])
+        }),
+      ),
+    ),
   ])
 }
 
@@ -323,6 +354,7 @@ pub fn settings_from_json(json: Json) -> Result(Settings, String) {
         Ok(port) -> port
         Error(Nil) -> default_mcp_port
       }
+      let recent_paths = recent_field(fields, "recent_projects")
 
       Ok(
         normalize(Settings(
@@ -331,6 +363,7 @@ pub fn settings_from_json(json: Json) -> Result(Settings, String) {
           scheme: scheme,
           mcp_enabled: mcp_enabled,
           mcp_port: mcp_port,
+          recent_paths: recent_paths,
         )),
       )
     }
@@ -365,6 +398,30 @@ fn bool_field(
   }
 }
 
+/// The stored projects list. Anything unexpected (missing field, wrong type,
+/// a row without both strings) contributes nothing, so an older or damaged
+/// settings file still loads: the list is a convenience, not the document.
+fn recent_field(
+  fields: List(#(String, Json)),
+  name: String,
+) -> List(#(String, String)) {
+  case list.find(fields, fn(field) { field.0 == name }) {
+    Ok(#(_, JArray(items))) -> list.filter_map(items, recent_entry)
+    _ -> []
+  }
+}
+
+fn recent_entry(item: Json) -> Result(#(String, String), Nil) {
+  case item {
+    JObject(fields) ->
+      case string_field(fields, "title"), string_field(fields, "path") {
+        Ok(title), Ok(path) -> Ok(#(title, path))
+        _, _ -> Error(Nil)
+      }
+    _ -> Error(Nil)
+  }
+}
+
 pub type ClipboardItem {
   ClipboardItem(node: Node, rect: campy_design.Rect)
 }
@@ -383,6 +440,19 @@ pub type Page {
 pub type Command {
   OpenModule(String)
   CloseModule(String)
+  /// Add a module with the first free `module_N` slug, then open it.
+  NewModule
+  /// Delete a module and close its tab. Undoable.
+  RemoveModule(String)
+  /// Swap in a whole project (Open/New). Not undoable: the history belongs to
+  /// the previous document, so it is dropped instead of replayed elsewhere.
+  ReplaceProject(Project)
+  /// Replace the projects list (the shell mirrors it after load/save).
+  SetRecents(List(#(String, String)))
+  /// Highlight a projects-list row, by path.
+  ProjectSelected(String)
+  /// Forget the highlighted projects-list row.
+  RemoveRecent
   SelectControls(List(String))
   Commit(Project)
   Undo
@@ -470,6 +540,8 @@ pub fn new(project: Project) -> State {
       selected_peer: None,
       lsp: no_lsp(),
       settings: default_settings(),
+      recent: [],
+      selected_project: None,
     )
 
   case project.modules {
@@ -520,6 +592,145 @@ pub fn close_module(state: State, slug: String) -> State {
     selection: [],
     armed: None,
   )
+}
+
+/// A new module, created and opened in one gesture. The form is the blank
+/// 640x480 free-layout form a new project starts with, and the handler source
+/// carries the ABI v2 header so the Code editor opens on something meaningful.
+/// One undo entry covers the project change; the open tab is UI state.
+pub fn new_module(state: State) -> State {
+  let taken = list.map(state.project.modules, fn(module) { module.slug })
+  let slug = fresh_slug(taken, 1)
+
+  let module =
+    campy_project.Module(
+      slug: slug,
+      form: default_form(),
+      handlers: "//// " <> slug <> " handlers (ABI v2).\n\n",
+    )
+
+  let project =
+    campy_project.Project(
+      ..state.project,
+      modules: list.append(state.project.modules, [module]),
+    )
+
+  let state = commit(state, project)
+  case open_module(state, slug) {
+    Ok(state) -> set_status(state, "Added " <> slug)
+    Error(error) -> set_status(state, error)
+  }
+}
+
+fn fresh_slug(taken: List(String), index: Int) -> String {
+  let candidate = "module_" <> int.to_string(index)
+  case list.contains(taken, candidate) {
+    True -> fresh_slug(taken, index + 1)
+    False -> candidate
+  }
+}
+
+/// The blank form for a new module (the same defaults as a fresh project's
+/// form), so NewModule does not depend on any imported project file.
+fn default_form() -> campy_view.Document {
+  campy_view.Document(
+    schema: 1,
+    view: campy_view.node("form", "root")
+      |> campy_view.with_props([
+        #("title", VText("Form")),
+        #("w", VInt(640)),
+        #("h", VInt(480)),
+        #("layout", VText("free")),
+      ]),
+    extra: [],
+  )
+}
+
+/// Delete a module and its tab. `close_module` handles the tab, but it picks
+/// the next open tab; removing the active module is a project-level change, so
+/// the first remaining module becomes active (opening it if it had no tab).
+/// One undo entry restores the module, so this is a real delete, not a shelf.
+pub fn remove_module(state: State, slug: String) -> State {
+  case list.find(state.project.modules, fn(module) { module.slug == slug }) {
+    Error(Nil) -> set_status(state, "No such module: " <> slug)
+    Ok(_) -> {
+      let modules =
+        list.filter(state.project.modules, fn(module) { module.slug != slug })
+
+      let project = campy_project.Project(..state.project, modules: modules)
+      let was_active = state.active == Some(slug)
+      let state = commit(state, project) |> close_module(slug)
+
+      let state = case was_active, modules {
+        True, [first, ..] ->
+          case open_module(state, first.slug) {
+            Ok(state) -> state
+            Error(_) -> State(..state, active: None, selection: [])
+          }
+        True, [] -> State(..state, active: None, selection: [])
+        False, _ -> state
+      }
+
+      set_status(state, "Removed " <> slug)
+    }
+  }
+}
+
+/// Swap the whole project (Open/New). History belongs to the previous
+/// document, so undo/redo are cleared rather than replayed against unrelated
+/// modules; tabs, selection and the armed palette kind are reset the same way.
+/// The first module of the new project is opened, so the shell never shows an
+/// empty designer after a successful open.
+pub fn replace_project(state: State, project: Project) -> State {
+  let state =
+    State(
+      ..state,
+      project: project,
+      open_tabs: [],
+      active: None,
+      selection: [],
+      armed: None,
+      undo: [],
+      redo: [],
+    )
+
+  let state = case project.modules {
+    [] -> state
+    [first, ..] ->
+      case open_module(state, first.slug) {
+        Ok(state) -> state
+        Error(_) -> state
+      }
+  }
+
+  set_status(state, "Opened " <> project.title)
+}
+
+/// Replace the projects list wholesale. UI state (persisted with settings),
+/// not a document edit: no undo entry, and the cap keeps the stored JSON
+/// bounded even if the shell sends more.
+pub fn set_recents(state: State, items: List(#(String, String))) -> State {
+  State(..state, recent: list.take(items, recent_limit))
+}
+
+/// Highlight one projects-list row. UI state, not a document edit.
+pub fn project_selected(state: State, path: String) -> State {
+  State(..state, selected_project: Some(path))
+}
+
+/// Forget the highlighted projects-list row. Removal is keyed by path, so two
+/// entries with the same title are unambiguous. With no row selected there is
+/// nothing to do (the shell's Remove button should be disabled anyway).
+pub fn remove_recent(state: State) -> State {
+  case state.selected_project {
+    None -> state
+    Some(path) ->
+      State(
+        ..state,
+        recent: list.filter(state.recent, fn(entry) { entry.1 != path }),
+        selected_project: None,
+      )
+  }
 }
 
 pub fn select_controls(state: State, ids: List(String)) -> State {
@@ -1629,6 +1840,12 @@ pub fn update(state: State, command: Command) -> State {
         Error(error) -> set_status(state, error)
       }
     CloseModule(slug) -> close_module(state, slug)
+    NewModule -> new_module(state)
+    RemoveModule(slug) -> remove_module(state, slug)
+    ReplaceProject(project) -> replace_project(state, project)
+    SetRecents(items) -> set_recents(state, items)
+    ProjectSelected(path) -> project_selected(state, path)
+    RemoveRecent -> remove_recent(state)
     SelectControls(ids) -> select_controls(state, ids)
     Commit(project) -> commit(state, project)
     Undo -> undo(state)

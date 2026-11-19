@@ -565,6 +565,7 @@ pub fn apply_settings_replaces_the_whole_record_without_undo_test() {
   let settings =
     model.Settings(
       font: "Liberation Mono",
+      recent_paths: [],
       font_size: 16,
       scheme: model.Light,
       mcp_enabled: True,
@@ -581,6 +582,7 @@ pub fn normalize_falls_back_to_the_offered_choices_test() {
   let settings =
     model.normalize(model.Settings(
       font: "Comic Sans",
+      recent_paths: [],
       font_size: 42,
       scheme: model.Solarized,
       mcp_enabled: True,
@@ -620,6 +622,7 @@ pub fn font_and_size_indexes_address_the_dialog_combos_test() {
     model.Settings(
       ..model.default_settings(),
       font: "Noto Sans Mono",
+      recent_paths: [],
       font_size: 18,
     )
   model.font_index(settings) |> should.equal(4)
@@ -655,6 +658,7 @@ pub fn settings_round_trip_through_json_test() {
   let settings =
     model.Settings(
       font: "Liberation Mono",
+      recent_paths: [],
       font_size: 18,
       scheme: model.Solarized,
       mcp_enabled: True,

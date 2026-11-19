@@ -1848,6 +1848,11 @@ pub fn show_message(shell: Shell, title: String, message: String) -> Nil {
   native.show_message(shell.frame, title, message)
 }
 
+/// Ask for a project directory. Empty string = cancelled.
+pub fn dir_dialog(shell: Shell, message: String) -> String {
+  native.dir_dialog(shell.frame, message)
+}
+
 /// Apply the scheme palette to a text editor's Scintilla styles.
 pub fn apply_scheme(
   shell: Shell,

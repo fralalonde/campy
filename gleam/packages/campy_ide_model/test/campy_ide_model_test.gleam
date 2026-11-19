@@ -2,6 +2,7 @@ import campy_design
 import campy_ide_model
 import campy_project
 import campy_view.{VInt, VText}
+import campy_view/codec.{JArray, JObject, JString}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -1023,4 +1024,177 @@ pub fn paste_converts_the_source_origin_into_the_target_parent_test() {
   prop(state, "button_1", "y") |> should.equal(Ok(VInt(26)))
   campy_design.absolute(form_view(state), "button_1")
   |> should.equal(Some(campy_design.Rect(126, 76, 40, 20)))
+}
+
+// --- Projects list and module management ----------------------------------
+
+pub fn new_module_adds_and_opens_a_blank_form_test() {
+  let state = campy_ide_model.update(state(), campy_ide_model.NewModule)
+
+  state.project.modules
+  |> list.map(fn(module) { module.slug })
+  |> should.equal(["a", "b", "module_1"])
+  state.open_tabs |> should.equal(["a", "module_1"])
+  state.active |> should.equal(Some("module_1"))
+  state.selection |> should.equal([])
+  state.status |> should.equal("Added module_1")
+  list.length(state.undo) |> should.equal(1)
+
+  let assert Ok(module) = campy_ide_model.active_module(state)
+  module.form.view.id |> should.equal("root")
+  campy_view.prop(module.form.view, "title") |> should.equal(Ok(VText("Form")))
+  campy_view.prop(module.form.view, "w") |> should.equal(Ok(VInt(640)))
+  campy_view.prop(module.form.view, "h") |> should.equal(Ok(VInt(480)))
+  campy_view.prop(module.form.view, "layout") |> should.equal(Ok(VText("free")))
+  module.handlers
+  |> should.equal("//// module_1 handlers (ABI v2).\n\n")
+
+  let state = campy_ide_model.update(state, campy_ide_model.Undo)
+  state.project.modules
+  |> list.map(fn(module) { module.slug })
+  |> should.equal(["a", "b"])
+}
+
+pub fn new_module_skips_taken_slugs_test() {
+  let state =
+    state()
+    |> campy_ide_model.update(campy_ide_model.NewModule)
+    |> campy_ide_model.update(campy_ide_model.NewModule)
+
+  state.project.modules
+  |> list.map(fn(module) { module.slug })
+  |> should.equal(["a", "b", "module_1", "module_2"])
+  state.active |> should.equal(Some("module_2"))
+}
+
+pub fn remove_module_closes_its_tab_and_undo_restores_test() {
+  let state =
+    state()
+    |> campy_ide_model.update(campy_ide_model.OpenModule("b"))
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["root"]))
+  state.active |> should.equal(Some("b"))
+
+  let state = campy_ide_model.update(state, campy_ide_model.RemoveModule("b"))
+
+  state.project.modules
+  |> list.map(fn(module) { module.slug })
+  |> should.equal(["a"])
+  state.open_tabs |> should.equal(["a"])
+  state.active |> should.equal(Some("a"))
+  state.selection |> should.equal([])
+  state.status |> should.equal("Removed b")
+  list.length(state.undo) |> should.equal(1)
+
+  let state = campy_ide_model.update(state, campy_ide_model.Undo)
+  state.project.modules
+  |> list.map(fn(module) { module.slug })
+  |> should.equal(["a", "b"])
+}
+
+pub fn remove_unknown_module_is_an_error_without_undo_test() {
+  let state =
+    campy_ide_model.update(state(), campy_ide_model.RemoveModule("nope"))
+  state.status |> should.equal("No such module: nope")
+  state.undo |> should.equal([])
+}
+
+pub fn recents_are_replaced_selected_and_removed_test() {
+  let recents = [
+    #("First", "/projects/first"),
+    #("Second", "/projects/second"),
+  ]
+
+  let state =
+    state()
+    |> campy_ide_model.update(campy_ide_model.SetRecents(recents))
+    |> campy_ide_model.update(campy_ide_model.ProjectSelected(
+      "/projects/second",
+    ))
+
+  state.recent |> should.equal(recents)
+  state.selected_project |> should.equal(Some("/projects/second"))
+  state.undo |> should.equal([])
+
+  let state = campy_ide_model.update(state, campy_ide_model.RemoveRecent)
+  state.recent |> should.equal([#("First", "/projects/first")])
+  state.selected_project |> should.equal(None)
+
+  // Nothing selected: RemoveRecent is a no-op.
+  campy_ide_model.update(state, campy_ide_model.RemoveRecent).recent
+  |> should.equal([#("First", "/projects/first")])
+}
+
+pub fn set_recents_caps_the_list_test() {
+  let items =
+    list.map(from(1, 9), fn(index) {
+      #(
+        "Project " <> int.to_string(index),
+        "/projects/" <> int.to_string(index),
+      )
+    })
+
+  let state = campy_ide_model.update(state(), campy_ide_model.SetRecents(items))
+  list.length(state.recent) |> should.equal(campy_ide_model.recent_limit)
+  state.recent |> list.first |> should.equal(Ok(#("Project 1", "/projects/1")))
+}
+
+pub fn replace_project_resets_state_and_is_not_undoable_test() {
+  let state =
+    state()
+    |> campy_ide_model.update(campy_ide_model.SelectControls(["root"]))
+    |> campy_ide_model.update(campy_ide_model.Commit(project("Second")))
+    |> campy_ide_model.update(campy_ide_model.Arm("button"))
+  list.length(state.undo) |> should.equal(1)
+
+  let replacement =
+    campy_project.Project(
+      title: "Other",
+      modules: [module("main", "Main")],
+      extra: [],
+    )
+
+  let state =
+    campy_ide_model.update(state, campy_ide_model.ReplaceProject(replacement))
+
+  state.project |> should.equal(replacement)
+  state.open_tabs |> should.equal(["main"])
+  state.active |> should.equal(Some("main"))
+  state.selection |> should.equal([])
+  state.armed |> should.equal(None)
+  state.undo |> should.equal([])
+  state.redo |> should.equal([])
+  state.status |> should.equal("Opened Other")
+}
+
+pub fn settings_persist_recent_projects_test() {
+  let base = campy_ide_model.default_settings()
+  let settings =
+    campy_ide_model.Settings(..base, recent_paths: [
+      #("First", "/projects/first"),
+      #("Second", "/projects/second"),
+    ])
+
+  campy_ide_model.settings_to_json(settings)
+  |> campy_ide_model.settings_from_json
+  |> should.equal(Ok(settings))
+}
+
+pub fn settings_skip_malformed_recent_entries_test() {
+  let json =
+    JObject([
+      #(
+        "recent_projects",
+        JArray([
+          JObject([#("title", JString("A")), #("path", JString("/a"))]),
+          JObject([#("title", JString("B"))]),
+          JString("nope"),
+        ]),
+      ),
+    ])
+
+  let assert Ok(settings) = campy_ide_model.settings_from_json(json)
+  settings.recent_paths |> should.equal([#("A", "/a")])
+
+  let assert Ok(missing) = campy_ide_model.settings_from_json(JObject([]))
+  missing.recent_paths |> should.equal([])
 }

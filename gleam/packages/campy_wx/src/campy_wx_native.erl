@@ -30,7 +30,7 @@
     inject_strip_press/3, inject_plate_press/3, inject_tool_press/1, snapshot/2,
     inject_list_pick/4,
     grid_choice_cell/4,
-    open_dialog/2, save_dialog/3, show_message/3,
+    open_dialog/2, save_dialog/3, dir_dialog/2, show_message/3,
     set_tooltip/2,
     canvas/2, paint_canvas/7, connect_design/2,
     capture/1, release/1, release_capture/0, set_cursor/2, set_shortcuts/2,
@@ -401,13 +401,13 @@ plate_wx_id(ViewId) ->
 
 enum_popup_list() ->
     case get(campy_enum_popup) of
-        {_, List, _, _, _, _, _} -> {ok, List};
+        {_, List, _, _, _, _, _, _} -> {ok, List};
         undefined -> {error, nil}
     end.
 
 enum_popup_select(Index) ->
     case get(campy_enum_popup) of
-        {_, List, _, _, _, _, _} ->
+        {_, List, _, _, _, _, _, _} ->
             wxListBox:select(List, Index),
             ok;
         undefined ->
@@ -420,9 +420,18 @@ debug_str(Term) ->
 
 enum_popup_anchored() ->
     case get(campy_enum_popup) of
-        {Popup, _, _, _, _, SX, SY} ->
+        {Popup, _, _, _, _, SX, _SY, SYCH} ->
+            %% Anchored = the popup's top sits just below the cell and its
+            %% width overlaps the cell. A dropdown never goes off-screen: a
+            %% popup too close to the display's right edge slides left, so
+            %% X may differ from the cell's by the clamp amount.
             case wxWindow:getScreenPosition(Popup) of
-                {SX, SY} -> {ok, true};
+                {X, Y} when Y =:= SYCH ->
+                    {PW, _} = wxWindow:getSize(Popup),
+                    case X =< SX andalso X + PW > SX + 8 of
+                        true -> {ok, true};
+                        false -> {ok, {X, Y}}
+                    end;
                 {X, Y} -> {ok, {X, Y}}
             end;
         undefined ->
@@ -431,7 +440,7 @@ enum_popup_anchored() ->
 
 enum_popup_wx_id() ->
     case get(campy_enum_popup) of
-        {_, List, _, _, _, _, _} -> {ok, wxWindow:getId(List)};
+        {_, List, _, _, _, _, _, _} -> {ok, wxWindow:getId(List)};
         undefined -> {error, nil}
     end.
 
@@ -1201,7 +1210,8 @@ enum_popup(Grid, Row, Col, Options) ->
     {CX, CY, CW, CH} = wxGrid:cellToRect(Grid, Row, Col),
     {SX, SY} = wxWindow:clientToScreen(Grid, {CX, CY}),
     Frame = toplevel(Grid),
-    Popup = wxPopupTransientWindow:new(Frame, []),
+    Popup = wxPopupTransientWindow:new(Frame,
+                                       [{style, ?wxBORDER_SIMPLE}]),
     ListId = palette_next_id(),
     List = wxListBox:new(Popup, ListId, [{style, ?wxLB_SINGLE}]),
     lists:foreach(fun(Option) -> wxListBox:append(List, Option) end, Options),
@@ -1215,8 +1225,10 @@ enum_popup(Grid, Row, Col, Options) ->
             ok
     end,
     wxListBox:connect(List, command_listbox_selected, []),
-    Height = 6 + 22 * erlang:min(length(Options), 8),
-    Width = erlang:max(CW, 120),
+    Height = 10 + 24 * erlang:min(length(Options), 12),
+    %% A real dropdown is at least as wide as a column value editor, plus
+    %% the arrow: CW alone is the bare cell width and looks pinched.
+    Width = erlang:max(CW + 48, 200),
     wxWindow:setClientSize(Popup, Width, Height),
     %% The popup is an override-redirect GTK window, so move() takes SCREEN
     %% coordinates directly — not frame-relative ones. Drop it just below
@@ -1228,10 +1240,18 @@ enum_popup(Grid, Row, Col, Options) ->
              false -> erlang:max(SY - Height, DB)
          end,
     PX = erlang:min(erlang:max(SX, DA), DA + DW - Width),
+    case os:getenv("CAMPY_DUMP") of
+        "1" ->
+            io:format("[dump] enum popup display ~p; cell ~p; "
+                      "requested ~p; size ~p~n",
+                      [{DA, DB, DW, DH}, {SX, SY, CH}, {PX, PY},
+                       {Width, Height}]);
+        _ -> ok
+    end,
     wxWindow:move(Popup, {PX, PY}),
     wxPopupTransientWindow:popup(Popup),
     put(campy_enum_popup,
-        {Popup, List, wxWindow:getId(Grid), Row, Col, SX, SY + CH}),
+        {Popup, List, wxWindow:getId(Grid), Row, Col, SX, SY, SY + CH}),
     ok.
 
 %% The work area of the display the window is on.
@@ -1256,7 +1276,7 @@ enum_popup_dismiss() ->
     case get(campy_enum_popup) of
         undefined ->
             ok;
-        {Popup, _List, _GridId, _Row, _Col, _SX, _SY} ->
+        {Popup, _List, _GridId, _Row, _Col, _SX, _SY, _SYCH} ->
             catch wxPopupTransientWindow:dismiss(Popup),
             catch wxPopupTransientWindow:destroy(Popup),
             erase(campy_enum_popup),
@@ -1268,7 +1288,7 @@ enum_popup_pick(ListId, _CmdInt) ->
     case get(campy_enum_popup) of
         undefined ->
             idle;
-        {_Popup, List, GridId, Row, Col, _SX, _SY} ->
+        {_Popup, List, GridId, Row, Col, _SX, _SY, _SYCH} ->
             case wxWindow:getId(List) =:= ListId of
                 true ->
                     Label =
@@ -1689,6 +1709,17 @@ open_dialog(Frame, Wildcard) ->
     wxFileDialog:destroy(Dialog),
     Result.
 
+%% A project is a directory (campy.json + modules/): pick it with a
+%% wxDirDialog. Empty binary = cancelled.
+dir_dialog(Frame, Message) ->
+    Dialog = wxDirDialog:new(Frame, [{title, Message}]),
+    Result = case wxDirDialog:showModal(Dialog) of
+        ?wxID_OK -> unicode:characters_to_binary(wxDirDialog:getPath(Dialog));
+        _ -> <<>>
+    end,
+    wxDirDialog:destroy(Dialog),
+    Result.
+
 save_dialog(Frame, Wildcard, Default) ->
     Dialog = wxFileDialog:new(Frame, [
         {wildcard, Wildcard},
@@ -2085,6 +2116,7 @@ accelerator_entries(_Editing) ->
     [
         accel(?wxACCEL_CTRL, $S, 9101),
         accel(?wxACCEL_CTRL, $Q, 9102),
+        accel(?wxACCEL_CTRL, $O, 9117),
         accel(?wxACCEL_CTRL, $1, 9111),
         accel(?wxACCEL_CTRL, $2, 9112),
         accel(?wxACCEL_CTRL, $3, 9113),
@@ -2118,6 +2150,7 @@ shortcut_action(9113) -> <<"source">>;
 shortcut_action(9114) -> <<"escape">>;
 shortcut_action(9115) -> <<"definition">>;
 shortcut_action(9116) -> <<"complete">>;
+shortcut_action(9117) -> <<"open">>;
 shortcut_action(_) -> false.
 
 capture(Ref) ->
@@ -2219,7 +2252,11 @@ connect(Ref, <<"grid">>) ->
     catch wxGrid:connect(Ref, grid_select_cell, []);
 connect(Ref, <<"notebook">>) ->
     wxNotebook:connect(Ref, command_notebook_page_changed, []),
-    catch wxNotebook:connect(Ref, char_hook, [{skip, true}]);
+    catch wxNotebook:connect(Ref, char_hook, [{skip, true}]),
+    %% Swallow the wheel over notebooks: GTK3 switches pages on wheel
+    %% scroll, which "evicts" the form from its pane without any command
+    %% event the IDE can veto. skip=false consumes it.
+    catch wxNotebook:connect(Ref, mousewheel, [{skip, false}]);
 connect(Ref, <<"list">>) ->
     wxListBox:connect(Ref, command_listbox_selected, []),
     catch wxListBox:connect(Ref, char_hook, [{skip, true}]);
@@ -2272,10 +2309,17 @@ next_message(Timeout) ->
                             Text = jump_pick(Obj, Event),
                             {stc_jump, Id, Text};
                         stc_change ->
-                            %% A text change in any Scintilla editor. Routed
-                            %% as a plain change event on the editor's view
-                            %% id; the IDE adopts Code-page typing from it.
-                            {wx_event, Id, <<"change">>};
+                            %% A text change in any Scintilla editor. Read-only
+                            %% editors (console, generated source) only
+                            %% change programmatically: dispatching those
+                            %% would echo every console append back as an
+                            %% event and flood the log. Editable editors
+                            %% (the Code page) route a change event on their
+                            %% view id.
+                            case wxStyledTextCtrl:getReadOnly(Obj) of
+                                true -> idle;
+                                false -> {wx_event, Id, <<"change">>}
+                            end;
                         _ ->
                             {wx_event, Id, event_type(Event)}
                     end;
