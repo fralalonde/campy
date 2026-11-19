@@ -35,7 +35,7 @@
           },
           {
             "kind": "label",
-            "id": "status",
+            "id": "cat_status",
             "props": {
               "x": 244,
               "y": 36,

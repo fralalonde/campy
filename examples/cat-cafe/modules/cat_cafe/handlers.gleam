@@ -26,7 +26,7 @@ pub fn feed_click(state: State, _event: Event) -> #(State, List(Effect)) {
       VText("Served " <> int_text(state.snacks) <> " snacks"),
     ),
     SetProp("happiness", "value", VInt(snack_happiness(state))),
-    SetProp("status", "text", VText("Mochi is eating.")),
+    SetProp("cat_status", "text", VText("Mochi is eating.")),
     Log("served snack " <> int_text(state.snacks)),
     Notify("Mochi enjoyed the snack!"),
   ])
@@ -37,7 +37,7 @@ pub fn pet_click(state: State, _event: Event) -> #(State, List(Effect)) {
   let state = State(..state, pets: state.pets + 1)
   #(state, [
     SetProp(
-      "status",
+      "cat_status",
       "text",
       VText(case state.pets {
         1 -> "Mochi purred."
@@ -56,7 +56,7 @@ pub fn name_change(state: State, event: Event) -> #(State, List(Effect)) {
     _ -> "(unnamed)"
   }
   #(state, [
-    SetProp("status", "text", VText(guest <> " is visiting.")),
+    SetProp("cat_status", "text", VText(guest <> " is visiting.")),
     Log("guest is now " <> guest),
   ])
 }

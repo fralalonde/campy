@@ -24,8 +24,8 @@ pub fn navigator_select(state: State, event: Event) -> #(State, List(Effect)) {
   }
   let state = State(..state, file: file, opened: state.opened + 1)
   #(state, [
-    SetProp("code", "text", VText(file_body(file))),
-    SetProp("status", "text", VText("opened " <> file)),
+    SetProp("src_view", "text", VText(file_body(file))),
+    SetProp("footline", "text", VText("opened " <> file)),
     Log("navigator -> " <> file),
   ])
 }
@@ -34,7 +34,7 @@ pub fn navigator_select(state: State, event: Event) -> #(State, List(Effect)) {
 pub fn code_change(state: State, _event: Event) -> #(State, List(Effect)) {
   #(state, [
     Notify("code change on " <> state.file),
-    SetProp("console", "text", VText("editing " <> state.file)),
+    SetProp("out_view", "text", VText("editing " <> state.file)),
   ])
 }
 

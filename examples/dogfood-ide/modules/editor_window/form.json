@@ -30,7 +30,7 @@
       },
       {
         "kind": "notebook",
-        "id": "centre",
+        "id": "workarea",
         "props": {
           "x": 196,
           "y": 8,
@@ -41,7 +41,7 @@
         "children": [
           {
             "kind": "page",
-            "id": "code-page",
+            "id": "src-page",
             "props": {
               "x": 0,
               "y": 0,
@@ -53,7 +53,7 @@
             "children": [
               {
                 "kind": "editor",
-                "id": "code",
+                "id": "src_view",
                 "props": {
                   "x": 4,
                   "y": 4,
@@ -65,7 +65,7 @@
           },
           {
             "kind": "page",
-            "id": "console-page",
+            "id": "out-page",
             "props": {
               "x": 0,
               "y": 0,
@@ -77,7 +77,7 @@
             "children": [
               {
                 "kind": "memo",
-                "id": "console",
+                "id": "out_view",
                 "props": {
                   "x": 4,
                   "y": 4,
@@ -92,7 +92,7 @@
       },
       {
         "kind": "label",
-        "id": "status",
+        "id": "footline",
         "props": {
           "x": 8,
           "y": 470,
