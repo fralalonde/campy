@@ -153,7 +153,9 @@ fn split_doc(source: String) -> #(List(String), String) {
 }
 
 /// Import lines are hoisted from the handler body (comments stay where they
-/// are) so they can be merged into the generated import block.
+/// are) so they can be merged into the generated import block. A braced
+/// import may span several lines; its continuation lines are folded into the
+/// single hoisted line so the body never sees a dangling member list.
 fn split_imports(
   source: String,
   hoisted: List(String),
@@ -162,13 +164,36 @@ fn split_imports(
     Error(_) -> #(hoisted, source)
     Ok(#(line, tail)) ->
       case is_import(line) {
-        True -> split_imports(tail, list.append(hoisted, [line]))
+        True -> {
+          let #(import_line, rest) = complete_import(line, tail)
+          split_imports(rest, list.append(hoisted, [import_line]))
+        }
         False -> {
           let #(hoisted, body) = split_imports(tail, hoisted)
           #(hoisted, line <> "\n" <> body)
         }
       }
   }
+}
+
+/// Consume a multi-line braced import: join continuation lines until the
+/// braces balance.
+fn complete_import(line: String, rest: String) -> #(String, String) {
+  case braces_open(line) {
+    False -> #(line, rest)
+    True ->
+      case string.split_once(rest, "\n") {
+        Error(_) -> #(line <> " " <> rest, "")
+        Ok(#(next, tail)) ->
+          complete_import(line <> " " <> string.trim(next), tail)
+      }
+  }
+}
+
+fn braces_open(line: String) -> Bool {
+  let opens = list.length(string.split(line, "{"))
+  let closes = list.length(string.split(line, "}"))
+  opens > closes
 }
 
 fn is_import(line: String) -> Bool {
