@@ -716,6 +716,12 @@ set_items(Ref, <<"list">>, Items) ->
     %% would otherwise open a handler just because its page became visible.
     catch wxListBox:setSelection(Ref, -1),
     ok;
+set_items(Ref, <<"tree">>, Items) ->
+    %% The tree uses its own structured setter ({tree_item, key, label,
+    %% children}); plain strings become keyed rows.
+    tree_set(Ref, lists:map(fun(Item) -> {tree_item, Item, Item, []} end,
+                            Items)),
+    ok;
 set_items(_Ref, _Kind, _Items) ->
     ok.
 
