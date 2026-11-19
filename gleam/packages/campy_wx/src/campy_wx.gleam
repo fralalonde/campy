@@ -733,6 +733,9 @@ fn apply_text(widget: Widget) -> Nil {
       native.set_label(widget.ref, text)
     "status" -> native.set_status(widget.ref, text)
     "text" | "memo" -> native.set_text(widget.ref, text)
+    // A published text change reaches Scintilla editors the same way: the
+    // run window's live SetProp on an editor would otherwise no-op.
+    "editor" -> native.editor_set(widget.ref, text, False)
     _ -> Nil
   }
 }
