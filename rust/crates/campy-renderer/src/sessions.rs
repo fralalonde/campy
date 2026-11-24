@@ -264,7 +264,10 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
         // cancels it cleanly.
         {
             let drain_host = host.clone();
-            let timer = set_interval(DRAIN_TICK, move || drain_session(&drain_host));
+            let timer = set_interval(DRAIN_TICK, move || {
+                apply_fullscreen(&drain_host);
+                drain_session(&drain_host);
+            });
             *host.drain_timer.borrow_mut() = Some(timer);
         }
         if host.window.borrow().is_none() {
@@ -436,6 +439,25 @@ fn swap_load(
 
 /// Adopts newly registered sessions, applies queued commands, reaps
 /// closed ones.
+/// A validation run needs a surface whose origin is known: a fullscreen
+/// toplevel covers the output exactly, so a pointer coordinate in device pixels
+/// follows from the layout's CSS pixels without asking the compositor where the
+/// window is. Applied from the drain rather than the build because the surface
+/// has to be mapped before the request lands.
+fn apply_fullscreen(host: &Rc<Host>) {
+    if host.fullscreen_done.get() {
+        return;
+    }
+    if std::env::var_os("CAMPY_UI_FULLSCREEN").is_none() {
+        host.fullscreen_done.set(true);
+        return;
+    }
+    if let Some(window) = host.window.borrow().as_ref() {
+        window.set_fullscreen(Some(zgui::platform::FullscreenMode::Borderless));
+        host.fullscreen_done.set(true);
+    }
+}
+
 fn drain(ui: &Rc<ThreadState>) {
     adopt_registrations(ui);
     apply_commands(ui);

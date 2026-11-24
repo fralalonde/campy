@@ -573,6 +573,36 @@ G1/Wave 4: gap 2 (`menu` popups need zgui-ui's DropdownMenu+Menu
 children convention; keyboard mitigations hold), gaps 6/7 (hover,
 console-goto), and Z4.1 (smoke-native PNG removal).
 
+**Visual pass (live window, first look):** the shell now renders as a
+dark IDE rather than a wall of blue buttons. Four causes, all fixed:
+the emitter's `class` prop was never applied (so no shell rule matched);
+the hand-placed panels declared `row`/`column` layout (so their
+coordinates were ignored and children stacked); the window was 1200×800
+while the shell is laid out at 1280×860 (Run/Stop off-screen); and the
+workspace/project terms were decoded with `binary_to_term(…, [safe])`,
+which rejects every file the codec writes (the terms carry the form
+model's own atoms, and a Gleam program holds those as binaries) — every
+boot silently reset the workspace. Tabs are one button per open module,
+list rows mark their active item, inspector choice rows cycle their
+options (zgui-ui's `Select` binds two-way and writes back on mount,
+which drove the IDE loop one generation per tick).
+
+Screenshots for this work come from `CAMPY_UI_SNAPSHOT=<path>.png`: the
+window's own renderer copies the composed frame out once, and
+`CAMPY_UI_SNAPSHOT_TRIGGER=<path>` takes one on demand (the debug knob
+watches for the file and consumes it). On Wayland nothing outside a
+client may read its pixels — KWin's `ScreenShot2` answers only
+`xdg-desktop-portal-kde`, the portal prompts a human, and `grim` is not
+installed — so reading the composed frame is both cheaper and exactly
+what the user sees.
+
+Live pointer injection was attempted through `/dev/uinput` (writable
+here; a virtual absolute pointer is visible to KWin like a real
+device). It works when the pointer is on the window's output, but this
+desktop has two outputs and an absolute device follows the output the
+pointer is on, so automated clicks are not reliable across them. The
+scripted `ui-testing` driver remains the way to test clicks and keys.
+
 **G1 manual-pass checklist** (run `just run` on a live desktop; every
 line must pass or become a filed punch item):
 

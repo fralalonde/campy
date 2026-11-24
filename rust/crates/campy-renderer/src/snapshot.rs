@@ -27,6 +27,12 @@ use zgui_render_wgpu::{GroupPrecision, Pixels, PresentPacing, SharedGraphics};
 
 /// The environment variable naming the PNG to write.
 pub const ENV: &str = "CAMPY_UI_SNAPSHOT";
+/// A file whose existence asks for one more frame to be written, then removed.
+///
+/// The timed frame above catches the settled startup state; this catches
+/// states that only exist after an interaction, without making an interactive
+/// session write a frame every tick.
+const TRIGGER_ENV: &str = "CAMPY_UI_SNAPSHOT_TRIGGER";
 /// How long a window may settle before its frame is taken.
 const DELAY_ENV: &str = "CAMPY_UI_SNAPSHOT_DELAY_MS";
 const DEFAULT_DELAY: Duration = Duration::from_millis(2500);
@@ -34,6 +40,11 @@ const DEFAULT_DELAY: Duration = Duration::from_millis(2500);
 /// The requested screenshot path, if screenshots are on.
 pub fn path() -> Option<PathBuf> {
     std::env::var_os(ENV).map(PathBuf::from)
+}
+
+/// The on-demand trigger, if one was configured.
+fn trigger() -> Option<PathBuf> {
+    std::env::var_os(TRIGGER_ENV).map(PathBuf::from)
 }
 
 fn delay() -> Duration {
@@ -79,6 +90,8 @@ pub fn factory(path: PathBuf) -> zgui::runtime::RendererFactory {
             path: numbered(&path, index),
             due: Instant::now() + delay(),
             taken: false,
+            trigger: trigger(),
+            asked: 0,
         }))
     })
 }
@@ -105,6 +118,10 @@ struct Snapshot {
     path: PathBuf,
     due: Instant,
     taken: bool,
+    /// Watched for between frames: what asks for a frame *now*.
+    trigger: Option<PathBuf>,
+    /// How many frames the trigger has asked for.
+    asked: u32,
 }
 
 impl Renderer for Snapshot {
@@ -128,19 +145,24 @@ impl Renderer for Snapshot {
         let outcome = self.inner.draw(scene, damage);
         if !self.taken && Instant::now() >= self.due {
             self.taken = true;
-            let pixels = self.inner.read_composed();
-            match write_png(&self.path, &pixels) {
-                Ok(()) => eprintln!(
-                    "Campy UI snapshot: {} ({}x{})",
-                    self.path.display(),
-                    pixels.size().width,
-                    pixels.size().height
-                ),
-                Err(error) => eprintln!(
-                    "Campy UI snapshot failed for {}: {error}",
-                    self.path.display()
-                ),
-            }
+            self.capture(&self.path.clone());
+        }
+        if let Some(trigger) = &self.trigger
+            && trigger.exists()
+        {
+            // Consumed first: a frame that is written because the file existed
+            // must not be written twice if the removal is slow.
+            let _ = std::fs::remove_file(trigger);
+            self.asked += 1;
+            let path = self.path.with_file_name(format!(
+                "{}-shot{}.png",
+                self.path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "campy-ui".to_owned()),
+                self.asked
+            ));
+            self.capture(&path);
         }
         outcome
     }
@@ -190,6 +212,22 @@ impl Renderer for Snapshot {
 
     fn release_cached_targets(&mut self) -> u64 {
         self.inner.release_cached_targets()
+    }
+}
+
+impl Snapshot {
+    /// Copies the frame the window just composed out to `path`.
+    fn capture(&self, path: &Path) {
+        let pixels = self.inner.read_composed();
+        match write_png(path, &pixels) {
+            Ok(()) => eprintln!(
+                "Campy UI snapshot: {} ({}x{})",
+                path.display(),
+                pixels.size().width,
+                pixels.size().height
+            ),
+            Err(error) => eprintln!("Campy UI snapshot failed for {}: {error}", path.display()),
+        }
     }
 }
 

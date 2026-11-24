@@ -52,6 +52,8 @@ pub struct Host {
     pub live_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// This window's handle once the view is running (`use_window`).
     pub window: RefCell<Option<zgui::runtime::windows::WindowHandle>>,
+    /// Whether the debug fullscreen request was made (`CAMPY_UI_FULLSCREEN`).
+    pub fullscreen_done: Cell<bool>,
     /// The command-drain interval for this session's window. Re-created
     /// on every document rebuild: the reactive hole cleans the scope a
     /// run's timer lives in, so each run arms its own (the chain is
@@ -76,6 +78,7 @@ impl Host {
             deferred_window: Cell::new(false),
             live_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             window: RefCell::new(None),
+            fullscreen_done: Cell::new(false),
             drain_timer: RefCell::new(None),
             control: RefCell::new(None),
         })
@@ -338,6 +341,12 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
                         let position: Point<CssPx, Css> = cx.position;
                         let event: &zgui::vocab::PointerEvent = cx;
                         let button = event.button;
+                        if pointer_log() {
+                            eprintln!(
+                                "pointer down at {:.0},{:.0} button {:?}",
+                                position.x.0, position.y.0, button
+                            );
+                        }
                         down_host.emit_raw(
                             &format!("pointer:{surface_id}:down"),
                             pointer_payload(position, button, cx.modifiers),
@@ -345,6 +354,9 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
                     })
                     .on(events::POINTER_MOVE, move |cx| {
                         let position: Point<CssPx, Css> = cx.position;
+                        if pointer_log() {
+                            eprintln!("pointer at {:.0},{:.0}", position.x.0, position.y.0);
+                        }
                         move_host.emit_raw(
                             &format!("pointer:{surface_id}:move"),
                             pointer_payload(position, None, cx.modifiers),
@@ -379,6 +391,12 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
         }
         _ => AnyView::new(wrapper.child(widget(desc, host, &signals))),
     }
+}
+
+/// Whether pointer phases are logged (`CAMPY_POINTER_LOG`), read once.
+fn pointer_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("CAMPY_POINTER_LOG").is_some())
 }
 
 fn wheel_delta(event: &zgui::vocab::WheelEvent) -> (f64, f64) {
