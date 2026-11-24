@@ -23,7 +23,7 @@ import gleam/result
 //   combo        -> zgui-ui `Combobox` (`model`, `current-index`; selected)
 //   list         -> `VirtualList` rows of `label` (`model`; selected)
 //   slider       -> zgui-ui `Slider` (`minimum`, `maximum`, `value`; changed)
-//   progress     -> zgui-ui `Progress` (`value`, `maximum`; changed)
+//   progress     -> zgui-ui `Progress` (`value`, `maximum`; display-only)
 //   picture      -> `image` (`source`, `fit`, `transparency`)
 //   panel, group -> `box` containers (`layout`, `border`; children at geometry)
 //   code_editor  -> zgui-editor `Editor` (`language`, `read-only`,
@@ -295,7 +295,7 @@ pub fn all() -> List(Component) {
         Property(value_key, "Value", Number, "60"),
         Property(maximum_key, "Maximum", Number, "100"),
       ],
-      [Event("changed", "OnChange")],
+      [],
     ),
     // zgui `box` container; children position at their geometry.
     Component(

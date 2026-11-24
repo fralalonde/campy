@@ -118,7 +118,6 @@ pub fn required_events_per_kind_test() {
     #("combo", ["selected"]),
     #("list", ["selected"]),
     #("slider", ["changed"]),
-    #("progress", ["changed"]),
     #("panel", []),
     #("group", []),
     #("picture", []),
