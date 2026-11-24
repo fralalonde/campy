@@ -71,9 +71,11 @@ pub fn slug(name: String) -> String {
 
 // Write the standalone app tree for one project module into `out_dir`,
 // creating directories as needed. `Ok` carries the output directory. An
-// unknown module id is an error; nothing is written in that case. Emitted
-// dependency paths assume `out_dir` is `<repo-root>/generated/apps/<slug>`
-// (the broker's build location), so `../../../` reaches the repo root.
+// unknown module id is an error; nothing is written in that case. An external
+// module owns its source in a file on disk, which the pure generator does not
+// read, so generation is an explicit error for it. Emitted dependency paths
+// assume `out_dir` is `<repo-root>/generated/apps/<slug>` (the broker's build
+// location), so `../../../` reaches the repo root.
 pub fn generate(
   project: project_codec.Project,
   module_id: String,
@@ -82,20 +84,26 @@ pub fn generate(
   case project_codec.find_module(project, module_id) {
     None -> Error("unknown module: " <> module_id)
     Some(module) -> {
-      let module_slug = slug(module.name)
-      let entry_module = "campy_app_" <> module_slug
-      let handlers_module = "handlers_" <> module_slug
-      let files = [
-        #(out_dir <> "/gleam.toml", gleam_toml(module_slug)),
-        #(
-          out_dir <> "/src/" <> entry_module <> ".gleam",
-          entry_source(module_slug, module),
-        ),
-        #(out_dir <> "/src/" <> handlers_module <> ".gleam", module.source),
-      ]
-      case write_files(files) {
-        Ok(Nil) -> Ok(out_dir)
-        Error(error) -> Error(error)
+      case module.source_origin {
+        project_codec.Embedded(source) -> {
+          let module_slug = slug(module.name)
+          let entry_module = "campy_app_" <> module_slug
+          let handlers_module = "handlers_" <> module_slug
+          let files = [
+            #(out_dir <> "/gleam.toml", gleam_toml(module_slug)),
+            #(
+              out_dir <> "/src/" <> entry_module <> ".gleam",
+              entry_source(module_slug, module),
+            ),
+            #(out_dir <> "/src/" <> handlers_module <> ".gleam", source),
+          ]
+          case write_files(files) {
+            Ok(Nil) -> Ok(out_dir)
+            Error(error) -> Error(error)
+          }
+        }
+        project_codec.External(path) ->
+          Error("module " <> module_id <> " has an external source: " <> path)
       }
     }
   }

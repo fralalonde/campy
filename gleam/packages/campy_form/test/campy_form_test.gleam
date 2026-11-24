@@ -431,7 +431,7 @@ pub fn project_roundtrip_preserves_modules_test() {
   let assert Ok(saved) = project.save(original, path)
   saved.path |> should.equal(path)
   let assert Ok(loaded) = project.load(path)
-  loaded.version |> should.equal(11)
+  loaded.version |> should.equal(12)
   loaded.icon |> should.equal("assets/camping-tent.png")
   loaded.title |> should.equal("Campy")
   loaded.modules
@@ -444,7 +444,8 @@ pub fn project_roundtrip_preserves_modules_test() {
   second.form.title |> should.equal("Widgets")
   list.length(second.form.controls) |> should.equal(12)
   list.length(second.form.aligns) |> should.equal(2)
-  string.contains(third.source, "button1_clicked") |> should.be_true
+  let assert project.Embedded(third_source) = third.source_origin
+  string.contains(third_source, "button1_clicked") |> should.be_true
   fourth.form.title |> should.equal("Search box")
   list.length(fourth.form.controls) |> should.equal(3)
 }
@@ -470,7 +471,7 @@ pub fn project_module_operations_test() {
         "extra",
         "Extra",
         campy_form.new_form(),
-        campy_form.default_source(),
+        project.Embedded(campy_form.default_source()),
       ),
     )
   list.length(added.modules) |> should.equal(5)
@@ -956,7 +957,7 @@ fn overlapping_form() -> campy_form.Form {
   )
 }
 
-// Transparency survives a save/load roundtrip through the v9 codec.
+// Transparency survives a save/load roundtrip through the project codec.
 pub fn transparency_roundtrip_test() {
   let path = "/tmp/campy-form-transparency-test.campy"
   let assert [first, ..] = project.campy().modules
@@ -972,21 +973,109 @@ pub fn transparency_roundtrip_test() {
   campy_form.transparency_of(first.form, "picture-1") |> should.equal(45)
 }
 
-@external(erlang, "campy_form_upgrade_ffi", "write_v8_project")
-fn write_v8_project(path: String) -> Nil
+// --- v12 source origins -----------------------------------------------------
 
-// A v8 project (11-element form tuples, no transparency map) upgrades on load,
-// and the upgraded forms render through the current emitter. This is the exact
-// call that crashed while a stale pre-upgrade form reached preview.to_slint.
-pub fn v8_project_upgrades_and_renders_test() {
-  let path = "/tmp/campy-v8-upgrade-test.campy"
-  write_v8_project(path)
+fn external_project(path: String) -> project.Project {
+  project.Project(
+    project.version,
+    "External",
+    [
+      project.Module(
+        "handlers",
+        "Handlers",
+        campy_form.new_form(),
+        project.External(path),
+      ),
+    ],
+    "/tmp/external.campy",
+    "",
+  )
+}
+
+// An External module stores only its path: loading never reads the file (this
+// path does not exist), just like the IDE reads it later on open.
+pub fn external_module_roundtrip_stores_only_the_path_test() {
+  let path = "/tmp/campy-form-external-test.campy"
+  let original = external_project("src/handlers_cat_cafe.gleam")
+  let assert Ok(_saved) = project.save(original, path)
   let assert Ok(loaded) = project.load(path)
-  loaded.version |> should.equal(11)
   let assert [module] = loaded.modules
-  let assert Ok(source) = preview.to_slint(module.form)
-  string.contains(source, "@image-url") |> should.be_true
-  campy_form.transparency_of(module.form, "pic-1") |> should.equal(0)
-  let set = campy_form.set_transparency_for(module.form, "pic-1", 40)
-  campy_form.transparency_of(set, "pic-1") |> should.equal(40)
+  module.source_origin
+  |> should.equal(project.External("src/handlers_cat_cafe.gleam"))
+}
+
+pub fn external_module_keeps_absolute_paths_test() {
+  let path = "/tmp/campy-form-external-absolute-test.campy"
+  let absolute = "/workspace/campy/src/handlers.gleam"
+  let assert Ok(_saved) = project.save(external_project(absolute), path)
+  let assert Ok(loaded) = project.load(path)
+  let assert [module] = loaded.modules
+  module.source_origin |> should.equal(project.External(absolute))
+}
+
+// A project mixes embedded sources (the demo) and external ones (dogfood);
+// both origins survive the round trip unchanged.
+pub fn mixed_source_origins_roundtrip_test() {
+  let path = "/tmp/campy-form-mixed-origins-test.campy"
+  let original =
+    project.add_module(
+      project.campy(),
+      project.Module(
+        "dogfood",
+        "Dogfood",
+        campy_form.new_form(),
+        project.External("gleam/apps/campy_ide/src/campy_ide.gleam"),
+      ),
+    )
+  let assert Ok(_saved) = project.save(original, path)
+  let assert Ok(loaded) = project.load(path)
+  let assert project.External(dogfood_path) = module_origin(loaded, "dogfood")
+  dogfood_path
+  |> should.equal("gleam/apps/campy_ide/src/campy_ide.gleam")
+  let assert project.Embedded(cat_source) = module_origin(loaded, "cat-cafe")
+  string.contains(cat_source, "pet_button_clicked") |> should.be_true
+}
+
+fn module_origin(loaded: project.Project, id: String) -> project.SourceOrigin {
+  let assert Some(module) = project.find_module(loaded, id)
+  module.source_origin
+}
+
+pub fn empty_external_source_path_is_rejected_test() {
+  let path = "/tmp/campy-form-empty-external-test.campy"
+  let assert Ok(_saved) = project.save(external_project(""), path)
+  case project.load(path) {
+    Ok(_) -> should.fail()
+    Error(message) ->
+      string.contains(message, "has an empty external source path")
+      |> should.be_true()
+  }
+}
+
+// Codec v12 has no upgrade chain: an older version tag is an explicit error.
+pub fn legacy_project_version_is_rejected_test() {
+  let path = "/tmp/campy-form-legacy-version-test.campy"
+  let legacy = project.Project(..project.campy(), version: 11)
+  let assert Ok(_saved) = project.save(legacy, path)
+  project.load(path)
+  |> should.equal(Error("Unsupported project version"))
+}
+
+// The checked-in demo is the codec's reference file: it loads at v12 and is
+// exactly what `project.campy()` builds (path aside).
+pub fn checked_in_campy_project_is_the_v12_demo_test() {
+  let loaded = case project.load("campy.campy") {
+    Ok(loaded) -> loaded
+    Error(_) ->
+      case project.load("../../../campy.campy") {
+        Ok(loaded) -> loaded
+        Error(error) -> panic as { "cannot load campy.campy: " <> error }
+      }
+  }
+  loaded.version |> should.equal(12)
+  project.Project(..loaded, path: project.default_path)
+  |> should.equal(project.campy())
+  let assert [first, ..] = loaded.modules
+  let assert project.Embedded(source) = first.source_origin
+  string.contains(source, "pet_button_clicked") |> should.be_true
 }

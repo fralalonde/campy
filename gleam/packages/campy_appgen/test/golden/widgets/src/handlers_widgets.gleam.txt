@@ -4,11 +4,11 @@ pub fn checkbox1_toggled() -> Nil {
   Nil
 }
 
-pub fn radio1_clicked() -> Nil {
+pub fn radio1_toggled() -> Nil {
   Nil
 }
 
-pub fn radio2_clicked() -> Nil {
+pub fn radio2_toggled() -> Nil {
   Nil
 }
 
@@ -20,7 +20,7 @@ pub fn slider1_changed() -> Nil {
   Nil
 }
 
-pub fn memo1_changed() -> Nil {
+pub fn memo1_edited() -> Nil {
   Nil
 }
 
