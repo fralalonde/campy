@@ -524,9 +524,18 @@ fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
             feed.send(bytes.clone().into_bytes())
                 .map_err(|_| "The console feed is closed".to_string())?;
         }
-        Op::SetMarks { control, .. } => {
-            // Editor mark layers arrive with the editor integration (Z3.1).
-            return Err(format!("SetMarks is not wired yet (control {control})"));
+        Op::SetMarks {
+            control,
+            layer,
+            items,
+        } => {
+            let handle = host
+                .editors
+                .borrow()
+                .get(control)
+                .cloned()
+                .ok_or_else(|| format!("Control {control} is not an editor"))?;
+            controls::set_editor_marks(&handle, layer, items);
         }
         Op::ReadText { control, key } => {
             let signals = control_of(control)?;

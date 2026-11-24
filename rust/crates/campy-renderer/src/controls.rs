@@ -14,7 +14,10 @@ use zgui::elements::{r#box, text};
 use zgui::geom::{Css, CssPx, Point};
 use zgui::prelude::*;
 use zgui::view::{AnyView, AttrName, ClassName, events};
-use zgui_editor::{EditorEvent, EditorHandle, EditorProps, LanguageConfig, LanguageRegistry};
+use zgui_editor::{
+    Decoration, EditorEvent, EditorHandle, EditorProps, LanguageConfig, LanguageRegistry,
+    UnderlineStyle,
+};
 use zgui_terminal::TerminalProps;
 use zgui_ui::prelude::*;
 
@@ -560,4 +563,38 @@ fn gleam_registry() -> Option<LanguageRegistry> {
             .clone()
             .expect("the registry is always built"),
     )
+}
+
+/// The paint a mark class draws with (theme-independent diagnostic colors;
+/// the sheet's palette cannot reach editor decorations, so these mirror
+/// the standard shadcn diagnostic hues).
+fn mark_paint(class: &str) -> &'static str {
+    match class {
+        "error" => "#ef4444",
+        "warning" => "#f59e0b",
+        "info" => "#3b82f6",
+        "hint" => "#64748b",
+        "search" => "#fde047",
+        _ => "#94a3b8",
+    }
+}
+
+/// Applies a marks layer to an editor: squiggle underlines per span, the
+/// conventional diagnostics look. An empty layer clears it.
+pub fn set_editor_marks(handle: &EditorHandle, layer: &str, items: &[(u64, u64, String)]) {
+    if items.is_empty() {
+        handle.clear_decorations(layer);
+        return;
+    }
+    let decorations = items
+        .iter()
+        .map(|(start, end, class)| {
+            Decoration::underline(
+                *start as usize..*end as usize,
+                UnderlineStyle::Squiggly,
+                mark_paint(class),
+            )
+        })
+        .collect();
+    handle.set_decorations(layer, decorations);
 }
