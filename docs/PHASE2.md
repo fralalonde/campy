@@ -361,12 +361,21 @@ the form model; layout Free/Column/Row honored; window root becomes the
 tree root). `campy_app`/`campy_ide` preview paths consume it. Golden
 test: Cat Café form → expected ControlDesc tree (checked-in fixture).
 
-**Files.** `gleam/packages/campy_form/src/campy_form/live_preview.gleam`
-(rewritten), its test + fixture, call-site adaptation in
-`gleam/packages/campy_app/**` and `campy_ide/live_preview_ui.gleam`
-(thin: derive → LoadUi → SetModel-free).
+**Additions from Z1.1's review.** The form model grows with this task:
+`campy_form.Kind` and `kind_from_key` gain `code_editor` and `console`
+(they are palette kinds now), including default geometry/props wiring
+and `campy_form`'s own validation adjustments. `preview.gleam` (the
+static generated-source view) may be deleted if nothing but tests use
+it — check first, report if the IDE still imports it.
 
-**Do not.** Keep any Slint emission. Change the form model itself.
+**Files.** `gleam/packages/campy_form/**` (form model kinds +
+`live_preview.gleam` rewritten, tests + fixture), call-site adaptation in
+`gleam/packages/campy_app/**` and the thin `campy_ide/live_preview_ui`
+shim (derive → LoadUi).
+
+**Do not.** Keep any Slint emission. Touch the project codec (Z1.2
+owns it, and may be merging concurrently — rebase on `zgui-migration`
+if it lands first).
 
 ### Z2.2 — IDE shell v2: `campy_ide/ide_ui/shell.gleam` becomes a ControlDesc emitter
 
@@ -385,6 +394,14 @@ CCL), the code view (`code_editor`), generated-source view, console
 ops (`SetText`/`SetModel` per section id) — same data-driven discipline
 as today, no LoadUi for ordinary edits. The shell description is loaded
 once; F6 re-LoadUi's it.
+
+**Note from Z1.1.** `campy_ccl` declares `text` as a universal property
+row; the inspector's unknown-key routing (`set_control_prop`) would
+shadow the `text` FIELD edit, so the shell's inspector rows must treat
+`text` specially (route it to the same editor the field edit uses).
+`progress` declares `changed` (the renderer does not emit it yet);
+disable or hide the inspector's event wiring for it until the renderer
+grows it.
 
 **Files.** `gleam/apps/campy_ide/src/campy_ide/ide_ui.gleam`,
 `ide_ui/shell.gleam` (rewritten), `campy_ide_snapshot.gleam` (port the
