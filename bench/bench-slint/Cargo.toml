@@ -1,0 +1,24 @@
+[package]
+name = "bench-slint"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+# Same pins as campy's rust/Cargo.toml, with the headless testing backend
+# instead of backend-winit so the benchmark runs without a display.
+[dependencies]
+slint = { version = "=1.18.1", default-features = false, features = [
+    "std",
+    "compat-1-2",
+] }
+slint-interpreter = { version = "=1.18.1", default-features = false, features = [
+    "compat-1-2",
+    "std",
+] }
+i-slint-core = { version = "=1.18.1", default-features = false, features = [
+    "std",
+] }
+i-slint-backend-testing = { version = "=1.18.1", features = [
+    "renderer-software",
+] }
+spin_on = "0.1"

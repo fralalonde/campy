@@ -1,4 +1,6 @@
 /rust/target/
+/bench/target/
+/bench/results/
 /gleam/**/build/
 /gleam/**/priv/native/*
 !/gleam/**/priv/native/.gitkeep

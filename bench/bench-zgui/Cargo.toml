@@ -1,0 +1,11 @@
+[package]
+name = "bench-zgui"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zgui = "0.1"
+zgui-ui = "0.1"
+zgui-platform-headless = "0.1"
+zgui-testkit-scene = "0.1"
