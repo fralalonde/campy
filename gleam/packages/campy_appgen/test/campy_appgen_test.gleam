@@ -171,8 +171,26 @@ pub fn toml_name_matches_entry_module_test() {
 pub fn handlers_source_is_verbatim_test() {
   let #(loaded, module_slug, out_dir) = generate_module("widgets")
   let module = module_of(loaded, "widgets")
+  let assert project.Embedded(source) = module.source_origin
   unwrap_file(read_file(out_dir <> "/src/handlers_" <> module_slug <> ".gleam"))
-  |> should.equal(module.source)
+  |> should.equal(source)
+}
+
+// External modules keep their source on disk; the pure generator does not read
+// it, so it reports the path instead of emitting an empty handler file.
+pub fn external_module_generation_is_an_error_test() {
+  let loaded = load_project()
+  let assert Some(module) = project.find_module(loaded, "widgets")
+  let external =
+    project.Module(
+      ..module,
+      source_origin: project.External("src/widgets.gleam"),
+    )
+  let updated = project.update_module(loaded, external)
+  campy_appgen.generate(updated, "widgets", scratch_root <> "/external")
+  |> should.equal(Error(
+    "module widgets has an external source: src/widgets.gleam",
+  ))
 }
 
 pub fn unknown_module_test() {

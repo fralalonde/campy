@@ -1,4 +1,6 @@
+import campy_form/project
 import campy_manifest
+import gleam/int
 import gleam/option.{None, Some}
 import gleam/string
 import gleeunit
@@ -32,7 +34,7 @@ fn sample() -> campy_manifest.Manifest {
     modules: ["campy_app_cat_cafe", "handlers_cat_cafe"],
     project_path: "campy.campy",
     module_id: "cat-cafe",
-    schema: 11,
+    schema: project.version,
     migration: [
       campy_manifest.Step(9, 10, "control colors"),
       campy_manifest.Step(10, 11, "property values"),
@@ -73,7 +75,9 @@ pub fn rejects_unsupported_version_tag_test() {
 
 pub fn to_summary_renders_exact_line_test() {
   campy_manifest.to_summary(sample())
-  |> should.equal("cat_cafe v3 schema11 digest01234567")
+  |> should.equal(
+    "cat_cafe v3 schema" <> int.to_string(project.version) <> " digest01234567",
+  )
 }
 
 pub fn default_has_phase_one_capabilities_test() {

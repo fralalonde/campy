@@ -6,10 +6,19 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 
+// Where a module's handler source lives. `Embedded` keeps the source verbatim
+// in the project term file; `External` keeps only a path to a `.gleam` file on
+// disk (relative to the project file when possible, absolute allowed). The
+// codec never reads an external file: the IDE loads it over its own FS.
+pub type SourceOrigin {
+  Embedded(String)
+  External(path: String)
+}
+
 // A Campy project is a set of modules. Each module owns one form and its
 // handler source, the way a Delphi/Lazarus unit owns a form and its code.
 pub type Module {
-  Module(id: String, name: String, form: Form, source: String)
+  Module(id: String, name: String, form: Form, source_origin: SourceOrigin)
 }
 
 pub type Project {
@@ -22,7 +31,9 @@ pub type Project {
   )
 }
 
-pub const version = 11
+// Codec version: bump on every on-disk shape change. There is no upgrade
+// chain; a file from an older codec is an explicit version error on load.
+pub const version = 12
 
 pub const camping_icon = "assets/camping-tent.png"
 
@@ -37,16 +48,27 @@ fn write_project(path: String, project: Project) -> Result(Nil, String)
 fn read_project(path: String) -> Result(Project, String)
 
 // Campy opens itself: the default project is the IDE's own project file with
-// its first demo application (a tiny cat café).
+// its first demo application (a tiny cat café). The demo keeps its handler
+// sources embedded.
 pub fn campy() -> Project {
   Project(
     version,
     "Campy",
     [
-      Module("cat-cafe", "Cat Café", cat_cafe_form(), cat_cafe_source()),
-      Module("widgets", "Widgets", widgets_form(), widgets_source()),
-      Module("welcome", "Welcome", welcome_form(), welcome_source()),
-      Module("search-box", "Search box", search_form(), search_source()),
+      Module(
+        "cat-cafe",
+        "Cat Café",
+        cat_cafe_form(),
+        Embedded(cat_cafe_source()),
+      ),
+      Module("widgets", "Widgets", widgets_form(), Embedded(widgets_source())),
+      Module("welcome", "Welcome", welcome_form(), Embedded(welcome_source())),
+      Module(
+        "search-box",
+        "Search box",
+        search_form(),
+        Embedded(search_source()),
+      ),
     ],
     default_path,
     camping_icon,
@@ -501,7 +523,9 @@ pub fn new_project(title: String, path: String) -> Project {
   Project(
     version,
     title,
-    [Module("main", "Main", form, campy_form.default_source())],
+    [
+      Module("main", "Main", form, Embedded(campy_form.default_source())),
+    ],
     path,
     "",
   )
@@ -571,13 +595,36 @@ fn validate(project: Project) -> Result(Project, String) {
           case list.length(names) == list.length(list.unique(names)) {
             False -> Error("Module names must be unique")
             True ->
-              case validate_forms(modules) {
-                Ok(forms) -> Ok(Project(..project, modules: forms))
+              case validate_sources(modules) {
                 Error(error) -> Error(error)
+                Ok(Nil) ->
+                  case validate_forms(modules) {
+                    Ok(forms) -> Ok(Project(..project, modules: forms))
+                    Error(error) -> Error(error)
+                  }
               }
           }
       }
     }
+  }
+}
+
+// External modules keep only a path; an empty path could never resolve.
+fn validate_sources(modules: List(Module)) -> Result(Nil, String) {
+  case modules {
+    [] -> Ok(Nil)
+    [module, ..rest] ->
+      case module.source_origin {
+        Embedded(_) -> validate_sources(rest)
+        External(path) ->
+          case path == "" {
+            True ->
+              Error(
+                "Module " <> module.id <> " has an empty external source path",
+              )
+            False -> validate_sources(rest)
+          }
+      }
   }
 }
 
