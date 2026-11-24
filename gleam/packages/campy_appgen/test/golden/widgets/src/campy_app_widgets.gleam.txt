@@ -10,7 +10,6 @@
 ////   radio-2 toggled -> radio2_toggled
 ////   combo-1 selected -> combo1_selected
 ////   slider-1 changed -> slider1_changed
-////   progress-1 changed -> progress1_changed
 ////   memo-1 edited -> memo1_edited
 ////   button-1 clicked -> button1_clicked
 
