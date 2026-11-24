@@ -158,7 +158,12 @@ fn prop_bool(desc: &ControlDesc, key: &str) -> Option<bool> {
 }
 
 fn prop_string(desc: &ControlDesc, key: &str) -> Option<String> {
-    desc.prop(key).and_then(PropValue::text).map(str::to_owned)
+    // `source` arrives as `WireImage` from the Gleam emitter (protocol
+    // §1.4) and as plain text from older descriptions; accept either.
+    desc.prop(key).and_then(|value| match value {
+        PropValue::Image(path) => Some(path.clone()),
+        other => other.text().map(str::to_owned),
+    })
 }
 
 fn prop_model(desc: &ControlDesc) -> Vec<PropValue> {
