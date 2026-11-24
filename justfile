@@ -54,8 +54,15 @@ generate: build
 snapshot-ide: build
     python scripts/workspace.py snapshot-ide
 
+# The Rust half of the suite — green now. The ui-testing feature builds
+# the headless zgui driver the bridge integration test rides.
+test-rust:
+    ./scripts/cargo.sh test --manifest-path rust/Cargo.toml --locked --features campy-renderer/ui-testing
+
+# Full suite; red during the protocol-v2 transition window until Z2.3
+# (see docs/PHASE2.md §1.5).
 test: stage-nif
-    ./scripts/cargo.sh test --manifest-path rust/Cargo.toml --locked
+    just test-rust
     python scripts/workspace.py gleam test
 
 fmt:
