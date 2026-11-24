@@ -522,10 +522,20 @@ keeps the real-window path for manual passes.
 
 - Depends: G1 · Size: S · Branch: `z2/z4.2-package`
 
-**Spec.** `scripts/workspace.py` export bundles the wgpu/Vello native
-set (vulkan loader + friends) alongside the X11 libs into
-`generated/native-deps`; `just package` stays one command; doctor
-checks the GPU libs.
+**Spec.** `scripts/workspace.py` export bundles the wgpu native set
+alongside the X11 libs into `generated/native-deps`; `just package`
+stays one command; doctor checks the GPU libs.
+
+**Empirically verified on this machine** (strace of the real-window
+smoke): the new runtime dlopens **`libvulkan.so.1`** and
+**`libdrm.so.2`** (plus the system's own Vulkan ICD drivers and
+`libdisplay-info` — those are the target machine's GPU stack and must
+NOT be bundled). Extend the existing `generated/native-deps` RPM
+extraction to include those two; `doctor` gains a check for
+`libvulkan.so.1` on the library path the NIF uses. Document in
+README's requirements that a desktop GPU stack (any Vulkan-capable
+driver) is now required, replacing the old "software renderer, GPU
+optional" note.
 
 ### Z4.3 — docs sync
 
