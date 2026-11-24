@@ -34,7 +34,14 @@ pub type ControlDesc {
 }
 
 pub type Command {
-  LoadUi(generation: Int, title: String, width: Int, height: Int, theme: String, controls: List(ControlDesc))
+  LoadUi(
+    generation: Int,
+    title: String,
+    width: Int,
+    height: Int,
+    theme: String,
+    controls: List(ControlDesc),
+  )
   SetText(generation: Int, control: Int, value: String)
   SetBool(generation: Int, control: Int, key: String, value: Bool)
   SetInt(generation: Int, control: Int, key: String, value: Int)
@@ -43,7 +50,12 @@ pub type Command {
   SetGeometry(generation: Int, control: Int, x: Int, y: Int, w: Int, h: Int)
   SetCode(generation: Int, control: Int, source: String)
   AppendConsole(generation: Int, control: Int, bytes: String)
-  SetMarks(generation: Int, control: Int, layer: String, items: List(#(Int, Int, String)))
+  SetMarks(
+    generation: Int,
+    control: Int,
+    layer: String,
+    items: List(#(Int, Int, String)),
+  )
   ReadText(generation: Int, control: Int, key: String)
   Resize(generation: Int, width: Int, height: Int)
 }

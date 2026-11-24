@@ -145,6 +145,7 @@ pub fn snapshot(model: State) -> Snapshot {
     controls: controls(model),
     canvas: canvas(model),
     canvas_selection: canvas_selection(model),
+    canvas_marquee: canvas_marquee(model),
     props: prop_items(model),
     events: event_items(model),
     completions: completions(model),
@@ -160,6 +161,15 @@ pub fn snapshot(model: State) -> Snapshot {
 /// The diff baseline (everything empty).
 pub fn empty_snapshot() -> Snapshot {
   shell.empty_view()
+}
+
+/// The diff baseline right after a `LoadUi` of `view`: the document carries
+/// every control (text, geometry, visibility, models), except the content the
+/// granular ops feed — the console scrollback, the editor buffer, and the
+/// diagnostic marks. Diffing the next snapshot against this baseline replays
+/// exactly those, which is what a fresh document needs.
+pub fn without_content(view: Snapshot) -> Snapshot {
+  shell.ShellView(..view, code_source: "", diagnostics: [], console_lines: [])
 }
 
 fn projects(model: State) -> List(ProjectItem) {
@@ -273,6 +283,14 @@ fn union_boxes(boxes: List(#(Int, Int, Int, Int))) -> #(Int, Int, Int, Int) {
     [] -> #(0, 0, 0, 0)
     [first, ..rest] -> list.fold(rest, first, union_box)
   }
+}
+
+// The marquee/placement rectangle in canvas coordinates (form-local + window
+// offset + the module window's title bar).
+fn canvas_marquee(model: State) -> #(Bool, Int, Int, Int, Int) {
+  let #(active, x, y, w, h) = state.marquee_rect(model)
+  let #(window_x, window_y) = state.window_position(model)
+  #(active, window_x + x, window_y + shell.form_title_height + y, w, h)
 }
 
 fn union_box(
@@ -669,13 +687,22 @@ fn code_source(model: State) -> String {
   }
 }
 
-// An `External` module's text lives on disk; the IDE loop reads it (Z2.3's
-// seam). Pure `ide_ui` can only see embedded sources.
+/// The active module's source as the shell displays it (public for the loop's
+/// editor-diff baseline).
+pub fn code_source_of(model: State) -> String {
+  code_source(model)
+}
+
+/// Move a diff baseline's editor content without touching the document: used
+/// after an `editor:<id>:changed` event, whose buffer the editor already owns.
+pub fn with_source(view: Snapshot, source: String) -> Snapshot {
+  shell.ShellView(..view, code_source: source)
+}
+
+// An `External` module's text lives on disk: `state.module_source` reads it
+// over the IDE's FS FFI (the codec only stores the path).
 fn module_text(module: project.Module) -> String {
-  case module.source_origin {
-    project.Embedded(text) -> text
-    project.External(_) -> ""
-  }
+  state.module_source(module)
 }
 
 fn code(model: State) -> List(LineItem) {

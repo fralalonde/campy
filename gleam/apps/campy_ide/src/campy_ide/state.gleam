@@ -69,7 +69,27 @@ pub type Clipboard {
 }
 
 pub type Preview {
-  Preview(session: bridge.Session, id: Int, module: String)
+  Preview(session: bridge.Session, id: Int, module: String, generation: Int)
+}
+
+// The designer's pointer gesture, driven by the canvas surface's raw
+// `pointer:<id>:<phase>` events. Coordinates are form-local (the canvas and
+// module-window offsets are subtracted by the loop).
+pub type Gesture {
+  Idle
+  /// A button is down on `target` ("" = the canvas background) and the pointer
+  /// has not moved past the drag threshold yet.
+  Pressing(press: #(Int, Int), target: String)
+  /// Dragging the selection; `last` is the previous move point.
+  Moving(last: #(Int, Int))
+  /// Dragging a marquee from `origin` (state `rect` holds its live size).
+  Marqueing(origin: #(Int, Int))
+  /// Dragging a pending palette control to its placement rectangle.
+  Placing(origin: #(Int, Int))
+  /// Dragging the module window by its title bar.
+  MovingWindow(last: #(Int, Int))
+  /// Dragging one edge (or corner) of the primary selection or the window.
+  Resizing(mode: String, last: #(Int, Int), window: Bool)
 }
 
 pub type Editing {
@@ -151,6 +171,8 @@ pub type State {
     nav_context_open: Bool,
     nav_kind: String,
     nav_id: String,
+    gesture: Gesture,
+    last_pointer: #(Int, Int),
     status: String,
   )
 }
@@ -249,6 +271,8 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     nav_context_open: False,
     nav_kind: "",
     nav_id: "",
+    gesture: Idle,
+    last_pointer: #(0, 0),
     status: "Ready",
   )
 }
@@ -588,7 +612,7 @@ pub fn new_module(state: State) -> State {
       id,
       "Module " <> int.to_string(suffix),
       campy_form.new_form(),
-      campy_form.default_source(),
+      project.Embedded(campy_form.default_source()),
     )
   let next = State(..state, project: project.add_module(state.project, module))
   commit(
@@ -985,6 +1009,10 @@ fn commit_form_field(
       update_active_form(state, fn(_) { campy_form.Form(..form, title: value) })
     "width" -> update_form_size(state, form, value, True)
     "height" -> update_form_size(state, form, value, False)
+    "layout" ->
+      update_active_form(state, fn(_) {
+        campy_form.set_layout_for(form, "", layout_from_name(value))
+      })
     "border" -> commit_border(state, "", value)
     _ -> state
   }
@@ -1471,6 +1499,9 @@ fn apply_control_prop(
         True -> commit_control_field(state, form, id, "name", value)
         False -> status(state, "Name applies to a single component")
       }
+    // `text` is also a universal CCL property; the inspector's text row must
+    // route to the control's text field (Z1.1 note), never to the prop store.
+    "text" -> commit_control_field(state, form, id, "text", value)
     "color" ->
       update_active_form(state, fn(_) {
         campy_form.set_color_for(form, id, value)
@@ -1822,8 +1853,9 @@ pub fn open_event(state: State, event_key: String) -> State {
           let handler = campy_form.handler_name(control, event_key)
           // The handler's stub is ensured, but the editor always edits
           // the module's whole source (ready for LSP and search).
-          let #(source, _) = campy_form.ensure_handler(module.source, handler)
-          let module = project.Module(..module, source: source)
+          let #(source, _) =
+            campy_form.ensure_handler(module_source(module), handler)
+          let module = set_module_source(module, source)
           commit(
             state,
             State(
@@ -1875,17 +1907,7 @@ pub fn code_edit(state: State, payload: String) -> State {
         Error(_) -> state
         Ok(#(col_text, text)) -> {
           let caret = #(int_or(line_text, 0), int_or(col_text, 0))
-          let state = case active_module(state) {
-            Some(module) ->
-              State(
-                ..state,
-                project: project.update_module(
-                  state.project,
-                  project.Module(..module, source: text),
-                ),
-              )
-            None -> state
-          }
+          let state = commit_source(state, text)
           let state =
             State(
               ..state,
@@ -1908,6 +1930,32 @@ pub fn code_edit(state: State, payload: String) -> State {
           }
         }
       }
+  }
+}
+
+// A whole-buffer edit from a protocol-v2 `editor:<id>:changed` event (the
+// editor owns the caret, so none crosses with the text yet).
+pub fn code_changed(state: State, text: String) -> State {
+  State(
+    ..commit_source(state, text),
+    lsp_uri: lsp_document_uri(state),
+    code_version: state.code_version + 1,
+  )
+}
+
+// Commit a buffer into the active module: embedded modules keep the text in
+// the term, external modules write their file (the codec stores only a path).
+fn commit_source(state: State, text: String) -> State {
+  case active_module(state) {
+    Some(module) ->
+      State(
+        ..state,
+        project: project.update_module(
+          state.project,
+          set_module_source(module, text),
+        ),
+      )
+    None -> state
   }
 }
 
@@ -1949,7 +1997,7 @@ pub fn completion_move(state: State, delta: Int) -> State {
 
 fn buffer_text(state: State) -> String {
   case active_module(state) {
-    Some(module) -> module.source
+    Some(module) -> module_source(module)
     None -> ""
   }
 }
@@ -2007,17 +2055,7 @@ pub fn completion_accept(state: State) -> State {
       let segment = segment_of_run(run_at_caret(state))
       let new_text =
         splice_insert(buffer_text(state), state.caret, segment, selected.insert)
-      let state = case active_module(state) {
-        Some(module) ->
-          State(
-            ..state,
-            project: project.update_module(
-              state.project,
-              project.Module(..module, source: new_text),
-            ),
-          )
-        None -> state
-      }
+      let state = commit_source(state, new_text)
       State(
         ..state,
         caret: #(
@@ -2210,6 +2248,49 @@ pub type FileFilter {
 @external(erlang, "campy_fs_ffi", "list_dir")
 fn fs_list_dir(path: String) -> Result(List(#(String, Bool)), Nil)
 
+@external(erlang, "campy_fs_ffi", "read_file")
+fn fs_read_file(path: String) -> Result(String, String)
+
+@external(erlang, "campy_fs_ffi", "write_file")
+fn fs_write_file(path: String, text: String) -> Result(Nil, String)
+
+// ---------------------------------------------------------------------------
+// Module source (codec v12: embedded text or an external file)
+// ---------------------------------------------------------------------------
+
+/// A module's handler source. Embedded modules carry it in the term; external
+/// modules store only a path, so the IDE reads the file (the codec never does).
+pub fn module_source(module: Module) -> String {
+  case module.source_origin {
+    project.Embedded(text) -> text
+    project.External(path) ->
+      case fs_read_file(path) {
+        Ok(text) -> text
+        Error(_) -> ""
+      }
+  }
+}
+
+/// Commit edited source back to the module: embedded keeps the text, external
+/// writes the file and keeps the path.
+pub fn set_module_source(module: Module, text: String) -> Module {
+  case module.source_origin {
+    project.Embedded(_) ->
+      project.Module(..module, source_origin: project.Embedded(text))
+    project.External(_) -> {
+      let _ = fs_write_file(external_path(module), text)
+      module
+    }
+  }
+}
+
+fn external_path(module: Module) -> String {
+  case module.source_origin {
+    project.Embedded(_) -> ""
+    project.External(path) -> path
+  }
+}
+
 @external(erlang, "campy_fs_ffi", "home")
 fn fs_home() -> String
 
@@ -2337,6 +2418,15 @@ pub fn browser_close(state: State) -> State {
   State(..state, browser: None)
 }
 
+// The Name field of the in-app browser (a folder to create, or a path to open).
+pub fn browser_set_name(state: State, name: String) -> State {
+  case state.browser {
+    Some(browser) ->
+      State(..state, browser: Some(Browser(..browser, name: name)))
+    None -> state
+  }
+}
+
 pub fn browser_path(state: State) -> String {
   case state.browser {
     Some(browser) -> join_path(browser.dir, browser.name)
@@ -2444,6 +2534,47 @@ pub fn set_popup(state: State, popup: Popup) -> State {
 
 pub fn set_preview(state: State, preview: Option(Preview)) -> State {
   State(..state, preview: preview)
+}
+
+// Cycle the open tabs (the renderer's list rows cannot be clicked yet, so the
+// loop offers a keyboard path; see the Z2.3 report).
+pub fn cycle_tab(state: State, step: Int) -> State {
+  case state.opened {
+    [] -> state
+    ids -> {
+      let count = list.length(ids)
+      let current = index_of_id(ids, state.active, 0)
+      let target = modulo(current + step, count)
+      case list.drop(ids, target) {
+        [id, ..] -> activate_module(state, id)
+        [] -> state
+      }
+    }
+  }
+}
+
+fn index_of_id(ids: List(String), id: String, index: Int) -> Int {
+  case ids {
+    [] -> 0
+    [first, ..rest] ->
+      case first == id {
+        True -> index
+        False -> index_of_id(rest, id, index + 1)
+      }
+  }
+}
+
+fn modulo(value: Int, modulus: Int) -> Int {
+  case modulus <= 0 {
+    True -> 0
+    False -> {
+      let remainder = value % modulus
+      case remainder < 0 {
+        True -> remainder + modulus
+        False -> remainder
+      }
+    }
+  }
 }
 
 pub fn selection_roots(state: State, form: Form) -> List(String) {
@@ -2673,6 +2804,332 @@ fn dragging_control(state: State) -> Option(Control) {
   case state.drag_control, active_form(state) {
     Some(id), Some(form) -> campy_form.find_control(form, id)
     _, _ -> selected_control(state)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Canvas pointer gestures (`pointer:<canvas>:down/move/up`, form-local px)
+// ---------------------------------------------------------------------------
+//
+// The protocol-v2 surface forwards raw pointer phases instead of per-control
+// touch areas, so the BEAM hit-tests from the form model. The contract is the
+// old designer's hybrid one: a press selects on release, a drag past the
+// threshold moves an already-selected control and draws a marquee from
+// anything else, the title bar moves the module window, the bottom-right grip
+// resizes it, and the primary selection's edges resize the control. Previews
+// are ordinary model edits, so every move already produces the `SetGeometry`
+// ops the loaded document needs.
+
+pub const drag_threshold = 2
+
+pub const resize_grip = 6
+
+pub const window_grip = 14
+
+/// The topmost designed control whose rendered bounds contain the point
+/// (render order is container-then-children, so a later hit wins).
+pub fn control_at(form: Form, x: Int, y: Int) -> Option(Control) {
+  list.fold(campy_form.render_controls(form), None, fn(best, control) {
+    let #(bx, by, bw, bh) = campy_form.bounds(form, control)
+    case x >= bx && x <= bx + bw && y >= by && y <= by + bh {
+      True -> Some(control)
+      False -> best
+    }
+  })
+}
+
+pub fn pointer_down(state: State, x: Int, y: Int) -> State {
+  let state =
+    State(
+      ..state,
+      last_pointer: #(x, y),
+      context_open: False,
+      context_align: False,
+      nav_context_open: False,
+    )
+  case state.pending_kind {
+    Some(_) -> State(..state, gesture: Placing(#(x, y)), rect: #(x, y, 0, 0))
+    None ->
+      case active_form(state) {
+        None -> State(..state, gesture: Idle)
+        // The module window's title bar: drag to move the window.
+        Some(form) if y < 0 && y >= -28 && x >= 0 && x <= form.width ->
+          State(..state, gesture: MovingWindow(#(x, y)))
+        Some(form) ->
+          case grip_at(state, form, x, y) {
+            Some(#(mode, window)) ->
+              State(..state, gesture: Resizing(mode, #(x, y), window))
+            None -> {
+              let target = case control_at(form, x, y) {
+                Some(control) -> control.id
+                None -> ""
+              }
+              State(..state, gesture: Pressing(#(x, y), target))
+            }
+          }
+      }
+  }
+}
+
+// Which resize grip (if any) the press landed on: the primary selection's edge
+// while it is selected, or the module window's bottom-right corner when
+// nothing is selected. `#(mode, is_window)`.
+fn grip_at(
+  state: State,
+  form: Form,
+  x: Int,
+  y: Int,
+) -> Option(#(String, Bool)) {
+  case state.selected, state.selection {
+    Some(_), [_, ..] ->
+      case selected_control(state) {
+        Some(control) ->
+          case
+            campy_form.layout_of(form, campy_form.parent_of(form, control.id))
+          {
+            campy_form.Free ->
+              control_grip(campy_form.bounds(form, control), x, y)
+            _ -> None
+          }
+        None -> None
+      }
+    _, _ -> window_grip_hit(form, x, y)
+  }
+}
+
+fn window_grip_hit(form: Form, x: Int, y: Int) -> Option(#(String, Bool)) {
+  let #(left, top, width, height) = #(0, 0, form.width, form.height)
+  let near_right = x >= left + width - window_grip && x <= left + width
+  let near_bottom = y >= top + height - window_grip && y <= top + height
+  case near_right && near_bottom {
+    True -> Some(#("se", True))
+    False -> None
+  }
+}
+
+// Is the press within one of the eight 10×10 handles drawn around the
+// primary selection (corners and edge midpoints, like the old designer)?
+fn control_grip(
+  bounds: #(Int, Int, Int, Int),
+  x: Int,
+  y: Int,
+) -> Option(#(String, Bool)) {
+  let #(left, top, width, height) = bounds
+  let right = left + width
+  let bottom = top + height
+  let middle_x = left + width / 2
+  let middle_y = top + height / 2
+  let handles = [
+    #("nw", left, top),
+    #("n", middle_x, top),
+    #("ne", right, top),
+    #("w", left, middle_y),
+    #("e", right, middle_y),
+    #("sw", left, bottom),
+    #("s", middle_x, bottom),
+    #("se", right, bottom),
+  ]
+  case
+    list.find(handles, fn(handle) {
+      let #(_, cx, cy) = handle
+      x >= cx - resize_grip / 2
+      && x <= cx + resize_grip / 2
+      && y >= cy - resize_grip / 2
+      && y <= cy + resize_grip / 2
+    })
+  {
+    Ok(#(mode, _, _)) -> Some(#(mode, False))
+    Error(_) -> None
+  }
+}
+
+pub fn pointer_move(state: State, x: Int, y: Int) -> State {
+  case state.gesture {
+    Idle -> State(..state, last_pointer: #(x, y))
+    Pressing(press, target) ->
+      case distance_over_threshold(press, #(x, y)) {
+        False -> State(..state, last_pointer: #(x, y))
+        True -> start_drag(state, press, target, x, y)
+      }
+    Moving(last) -> dragged(state, last, x, y)
+    Marqueing(origin) -> marquee_to(state, origin, x, y)
+    Placing(origin) -> marquee_to(state, origin, x, y)
+    MovingWindow(last) -> {
+      let next = move_window(state, x - last.0, y - last.1)
+      State(..next, gesture: MovingWindow(#(x, y)))
+    }
+    Resizing(mode, last, window) -> resized(state, mode, last, x, y, window)
+  }
+}
+
+fn distance_over_threshold(a: #(Int, Int), b: #(Int, Int)) -> Bool {
+  let dx = a.0 - b.0
+  let dy = a.1 - b.1
+  dx * dx + dy * dy > drag_threshold * drag_threshold
+}
+
+fn start_drag(
+  state: State,
+  press: #(Int, Int),
+  target: String,
+  x: Int,
+  y: Int,
+) -> State {
+  case target != "" && list.contains(state.selection, target) {
+    True -> {
+      let next =
+        state
+        |> begin_gesture
+        |> begin_drag(target)
+        |> set_drop_x(x)
+        |> update_drop(y)
+      dragged(next, press, x, y)
+    }
+    False -> marquee_to(State(..state, gesture: Marqueing(press)), press, x, y)
+  }
+}
+
+fn dragged(state: State, last: #(Int, Int), x: Int, y: Int) -> State {
+  let dx = x - last.0
+  let dy = y - last.1
+  let next = State(..state, last_pointer: #(x, y))
+  case dx == 0 && dy == 0 {
+    True -> next
+    False -> {
+      let next =
+        next
+        |> set_drop_x(x)
+        |> update_drop(y)
+        |> move_gesture_x(dx)
+        |> move_gesture_y(dy)
+      State(..next, gesture: Moving(#(x, y)))
+    }
+  }
+}
+
+fn marquee_to(state: State, origin: #(Int, Int), x: Int, y: Int) -> State {
+  State(..state, last_pointer: #(x, y), rect: #(
+    origin.0,
+    origin.1,
+    x - origin.0,
+    y - origin.1,
+  ))
+}
+
+fn resized(
+  state: State,
+  mode: String,
+  last: #(Int, Int),
+  x: Int,
+  y: Int,
+  window: Bool,
+) -> State {
+  let dx = x - last.0
+  let dy = y - last.1
+  let next = State(..state, last_pointer: #(x, y))
+  let next = case window {
+    True -> resize_window(next, dx, dy)
+    False -> resize_control(next, mode, dx, dy)
+  }
+  State(..next, gesture: Resizing(mode, #(x, y), window))
+}
+
+fn resize_window(state: State, dx: Int, dy: Int) -> State {
+  let state = case dx == 0 {
+    True -> state
+    False -> resize_window_w(state, dx)
+  }
+  case dy == 0 {
+    True -> state
+    False -> resize_window_h(state, dy)
+  }
+}
+
+fn resize_control(state: State, mode: String, dx: Int, dy: Int) -> State {
+  let state = case string.contains(mode, "w") && dx != 0 {
+    True -> resize_left(state, dx)
+    False ->
+      case string.contains(mode, "e") && dx != 0 {
+        True -> resize_right(state, dx)
+        False -> state
+      }
+  }
+  case string.contains(mode, "n") && dy != 0 {
+    True -> resize_top(state, dy)
+    False ->
+      case string.contains(mode, "s") && dy != 0 {
+        True -> resize_bottom(state, dy)
+        False -> state
+      }
+  }
+}
+
+pub fn pointer_up(state: State, x: Int, y: Int) -> State {
+  case state.gesture {
+    Idle -> State(..state, last_pointer: #(x, y))
+    Pressing(_, target) -> {
+      let released = State(..state, gesture: Idle, last_pointer: #(x, y))
+      select(released, target)
+    }
+    Moving(_) -> State(..end_gesture(state), gesture: Idle)
+    Marqueing(_) | Placing(_) -> {
+      let #(left, top, width, height) = normal_rect(state.rect)
+      let released =
+        State(
+          ..state,
+          rect: #(left, top, width, height),
+          gesture: Idle,
+          last_pointer: #(x, y),
+        )
+      case state.gesture {
+        Placing(_) -> place_component(released)
+        _ ->
+          case width > 2 || height > 2 {
+            True -> select_frame(released)
+            False -> select(released, "")
+          }
+      }
+    }
+    MovingWindow(_) -> State(..select(state, ""), gesture: Idle)
+    Resizing(_, _, _) -> State(..end_gesture(state), gesture: Idle)
+  }
+}
+
+// Escape, a window switch, or a lost pointer: drop the gesture without
+// committing anything half-finished.
+pub fn pointer_cancel(state: State) -> State {
+  case state.gesture {
+    Idle -> state
+    Pressing(_, _) -> State(..state, gesture: Idle)
+    Moving(_) -> State(..end_gesture(state), gesture: Idle)
+    Marqueing(_) | Placing(_) ->
+      State(..state, gesture: Idle, rect: #(0, 0, 0, 0))
+    MovingWindow(_) -> State(..state, gesture: Idle)
+    Resizing(_, _, _) -> State(..end_gesture(state), gesture: Idle)
+  }
+}
+
+fn normal_rect(rect: #(Int, Int, Int, Int)) -> #(Int, Int, Int, Int) {
+  let #(x, y, w, h) = rect
+  #(int.min(x, x + w), int.min(y, y + h), absolute(w), absolute(h))
+}
+
+fn absolute(value: Int) -> Int {
+  case value < 0 {
+    True -> -value
+    False -> value
+  }
+}
+
+/// The marquee/placement rectangle to draw inside the canvas: active, then
+/// normalized form-local x/y/w/h.
+pub fn marquee_rect(state: State) -> #(Bool, Int, Int, Int, Int) {
+  case state.gesture {
+    Marqueing(_) | Placing(_) -> {
+      let #(x, y, w, h) = normal_rect(state.rect)
+      #(True, x, y, w, h)
+    }
+    _ -> #(False, 0, 0, 0, 0)
   }
 }
 

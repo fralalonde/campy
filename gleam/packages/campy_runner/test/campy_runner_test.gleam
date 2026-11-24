@@ -224,10 +224,17 @@ fn with_handler_comment(
   comment: String,
 ) -> project_codec.Project {
   let assert Some(module) = project_codec.find_module(project, "widgets")
+  let source = case module.source_origin {
+    project_codec.Embedded(text) -> text
+    // The fixture project embeds its sources; the runner never edits files.
+    project_codec.External(_) -> panic as "fixture expects an embedded module"
+  }
   let module =
     project_codec.Module(
       ..module,
-      source: module.source <> "\n// " <> comment <> "\n",
+      source_origin: project_codec.Embedded(
+        source <> "\n// " <> comment <> "\n",
+      ),
     )
   let project = project_codec.update_module(project, module)
   let assert Ok(saved) = project_codec.save(project, fixture_project_path())

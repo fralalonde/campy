@@ -1,277 +1,180 @@
+// `just snapshot-ide`: drive the live IDE shell through its states with the
+// protocol-v2 op layer and verify every step against the real renderer.
+//
+// The shell is loaded once; each state change is applied as the granular ops
+// `ide_ui.ops` derives from the previous view (a `Reload` re-loads the whole
+// document at the next generation, exactly like F6). Each step ends with a
+// `ReadText` barrier on the status line, so a rejected op fails the run
+// instead of going unnoticed.
+//
+// Protocol v2 has no snapshot command (the renderer's headless scene dump is
+// Z4.1), so this harness asserts state flow rather than writing PNGs.
+
 import campy_bridge as bridge
 import campy_form
-import campy_form/live_preview
-import campy_form/preview
 import campy_form/project
 import campy_ide/ide_ui
-import campy_ide/live_preview_ui
+import campy_ide/shell
 import campy_ide/state
+import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{Some}
-import gleam/string
 
-@external(erlang, "campy_host_ffi", "generated_path")
-fn generated_path(name: String) -> String
+@external(erlang, "campy_host_ffi", "now_ms")
+fn now_ms() -> Int
 
-// `just snapshot-ide` loads the IDE shell exactly once, then renders every
-// state by updating properties and models on that same live instance. No
-// screenshot after the first one involves a LoadUi, which also demonstrates
-// that structural changes (add control, new tab, code) no longer reload.
+type Step {
+  Step(name: String, model: state.State)
+}
+
 pub fn main() {
   let model = state.initial(project.campy())
-  let assert Ok(shell) = ide_ui.to_slint(model)
+  let view = ide_ui.snapshot(model)
 
   let assert Ok(session) = bridge.open_session()
-  let assert Ok(_) = bridge.submit(session, bridge.LoadUi(1, shell))
+  submit_commands(session, ide_ui.commands(1, [ide_ui.Reload(view)]))
   wait_for(1, "ui-loaded", "shell")
 
-  let last =
-    apply(
-      session,
-      ide_ui.snapshot(model),
-      ide_ui.without_models(ide_ui.snapshot(model)),
-    )
-  snapshot(session, "ide-smoke.png")
+  // The first sync replays the content a document cannot carry (console,
+  // marks, the editor buffer).
+  let start = ide_ui.without_content(view)
+  let steps = [
+    Step("shell", model),
+    Step("widgets", state.open_module(model, "widgets")),
+    Step("code view", state.set_view(model, state.CodeView)),
+    Step(
+      "handler editor",
+      model
+        |> state.select("pet-button")
+        |> state.open_event("clicked"),
+    ),
+    Step("file dialog", state.set_popup(model, state.OpenFile)),
+    Step("settings", state.set_settings_open(model, True)),
+    Step(
+      "light theme",
+      state.set_scheme(state.set_settings_open(model, False), state.Light),
+    ),
+    Step("selection", state.select(model, "pet-button")),
+    // Structural edit: adding a control changes the canvas subtree.
+    Step("structure", state.add(model, campy_form.Button)),
+    Step(
+      "components",
+      model
+        |> state.new_module()
+        |> state.add(campy_form.ListBox)
+        |> state.add(campy_form.Panel)
+        |> state.move_selected(326, 0),
+    ),
+    Step("layout", state.set_layout(model, campy_form.Column)),
+    Step(
+      "multiselect",
+      model
+        |> state.select("pet-button")
+        |> state.toggle_select("feed-button"),
+    ),
+    // A live marquee: the rectangle moves with SetGeometry while the pointer
+    // is down, and the release commits the frame selection.
+    Step(
+      "marquee",
+      model
+        |> state.pointer_down(100, 100)
+        |> state.pointer_move(300, 300),
+    ),
+    Step(
+      "drop target",
+      model
+        |> state.select("pet-button")
+        |> state.begin_drag("pet-button")
+        |> state.set_drop_x(700)
+        |> state.update_drop(10),
+    ),
+    Step("placement", state.arm_component(model, "button")),
+    Step(
+      "console",
+      model
+        |> state.log_console("$ campy demo")
+        |> state.log_console("App ready")
+        |> state.log_console("Event: pet_button_clicked"),
+    ),
+    Step("project", state.switch_project(model, model.project.path)),
+    Step(
+      "container",
+      model
+        |> state.select("panel-1")
+        |> state.commit_field("border", "12"),
+    ),
+    Step("context menu", state.open_context_menu(model, "pet-button;200;200")),
+    Step("project dialog", state.set_project_dialog_open(model, True)),
+    Step("welcome", state.open_module(model, "welcome")),
+    Step("agent", state.set_agent_open(model, True)),
+    Step("workspace", state.create_project(model)),
+  ]
 
-  let widgets = state.open_module(model, "widgets")
-  let last = apply(session, ide_ui.snapshot(widgets), last)
-  snapshot(session, "ide-widgets.png")
-  let last = apply(session, ide_ui.snapshot(model), last)
-
-  let code = state.set_view(model, state.CodeView)
-  let last = apply(session, ide_ui.snapshot(code), last)
-  snapshot(session, "ide-code.png")
-
-  let editing =
-    model
-    |> state.select("pet-button")
-    |> state.open_event("clicked")
-  let last = apply(session, ide_ui.snapshot(editing), last)
-  snapshot(session, "ide-edit.png")
-
-  let opening = state.set_popup(model, state.OpenFile)
-  let last = apply(session, ide_ui.snapshot(opening), last)
-  snapshot(session, "ide-open.png")
-
-  let settings = state.set_settings_open(model, True)
-  let last = apply(session, ide_ui.snapshot(settings), last)
-  snapshot(session, "ide-settings.png")
-
-  let slint = state.set_slint_tab(model, True)
-  let last = apply(session, ide_ui.snapshot(slint), last)
-  snapshot(session, "ide-slint.png")
-
-  let light =
-    state.set_scheme(state.set_settings_open(model, False), state.Light)
-  let last = apply(session, ide_ui.snapshot(light), last)
-  snapshot(session, "ide-light.png")
-
-  let selected = state.select(model, "pet-button")
-  let last = apply(session, ide_ui.snapshot(selected), last)
-  snapshot(session, "ide-updated.png")
-
-  // Structural edit: add a control. Still just a model update (no reload).
-  let added = state.add(model, campy_form.Button)
-  let last = apply(session, ide_ui.snapshot(added), last)
-  snapshot(session, "ide-structure.png")
-
-  // New components: a list and a panel on a fresh module.
-  let showcase =
-    model
-    |> state.new_module()
-    |> state.add(campy_form.ListBox)
-    |> state.add(campy_form.Panel)
-    |> state.move_selected(326, 0)
-  let last = apply(session, ide_ui.snapshot(showcase), last)
-  snapshot(session, "ide-components.png")
-
-  // Column layout: Slint places the controls; the host sends no geometry.
-  let column = state.set_layout(model, campy_form.Column)
-  let last = apply(session, ide_ui.snapshot(column), last)
-  snapshot(session, "ide-layout.png")
-
-  let multi =
-    model
-    |> state.select("pet-button")
-    |> state.toggle_select("feed-button")
-  let last = apply(session, ide_ui.snapshot(multi), last)
-  snapshot(session, "ide-multiselect.png")
-
-  let dropping =
-    model
-    |> state.select("pet-button")
-    |> state.begin_drag("pet-button")
-    |> state.set_drop_x(700)
-    |> state.update_drop(10)
-  let last = apply(session, ide_ui.snapshot(dropping), last)
-  snapshot(session, "ide-drop-target.png")
-
-  let placing = state.arm_component(model, "button")
-  let last = apply(session, ide_ui.snapshot(placing), last)
-  snapshot(session, "ide-place.png")
-
-  let console =
-    model
-    |> state.log_console("$ campy demo")
-    |> state.log_console("App ready")
-    |> state.log_console("Event: pet_button_clicked")
-  let last = apply(session, ide_ui.snapshot(console), last)
-  snapshot(session, "ide-console.png")
-
-  let project_properties = state.switch_project(model, model.project.path)
-  let last = apply(session, ide_ui.snapshot(project_properties), last)
-  snapshot(session, "ide-project.png")
-
-  let container =
-    model
-    |> state.select("panel-1")
-    |> state.commit_field("border", "12")
-  let last = apply(session, ide_ui.snapshot(container), last)
-  snapshot(session, "ide-container.png")
-
-  let context = state.open_context_menu(model, "pet-button")
-  let last = apply(session, ide_ui.snapshot(context), last)
-  snapshot(session, "ide-context.png")
-
-  let project_dialog = state.set_project_dialog_open(model, True)
-  let last = apply(session, ide_ui.snapshot(project_dialog), last)
-  snapshot(session, "ide-project-dialog.png")
-
-  let welcome = state.open_module(model, "welcome")
-  let last = apply(session, ide_ui.snapshot(welcome), last)
-  snapshot(session, "ide-welcome.png")
-
-  let agent = state.set_agent_open(model, True)
-  let last = apply(session, ide_ui.snapshot(agent), last)
-  snapshot(session, "ide-agent.png")
-
-  let two_projects = state.create_project(model)
-  let _last = apply(session, ide_ui.snapshot(two_projects), last)
-  snapshot(session, "ide-workspace.png")
+  let #(_last, _generation) =
+    list.fold(steps, #(start, 1), fn(acc, step) {
+      let #(last, generation) = acc
+      apply(session, generation, step.model, last, step.name)
+    })
 
   let _ = bridge.close_session(session)
-
-  let assert Some(form) = state.active_form(model)
-  let assert Ok(form_source) = preview.to_slint(form)
-  let path = generated_path("ide-form.png")
-  let assert Ok(preview_session) = bridge.open_session()
-  let assert Ok(_) =
-    bridge.submit(preview_session, bridge.LoadUi(1, form_source))
-  wait_for(1, "ui-loaded", "ide-form.png")
-  let assert Ok(_) = bridge.submit(preview_session, bridge.Snapshot(1, path))
-  wait_for(1, "snapshot-saved", "ide-form.png")
-  let _ = bridge.close_session(preview_session)
-
-  // Live app: load the shell once, then update the same window (the F6 path).
-  let assert Ok(app_session) = bridge.open_session()
-  let assert Ok(_) =
-    bridge.submit(app_session, bridge.LoadUi(1, live_preview.to_slint()))
-  wait_for(1, "ui-loaded", "app-live.png")
-  let assert Ok(_) =
-    live_preview_ui.apply(app_session, live_preview.snapshot(form))
-  let assert Ok(_) = bridge.submit(app_session, bridge.ReadText(1, "app-title"))
-  wait_for(1, "property:app-title", "app-live barrier")
-  snapshot(app_session, "app-live.png")
-
-  let updated =
-    campy_form.update_selected(form, "pet-button", fn(control) {
-      campy_form.Control(..control, text: "Purr!", y: 280)
-    })
-  let assert Ok(_) =
-    live_preview_ui.apply(app_session, live_preview.snapshot(updated))
-  let assert Ok(_) = bridge.submit(app_session, bridge.ReadText(1, "app-title"))
-  wait_for(1, "property:app-title", "app-updated barrier")
-  snapshot(app_session, "app-updated.png")
-  let _ = bridge.close_session(app_session)
-
   io.println("IDE snapshots written")
 }
 
+// Apply `model`'s ops against the live document at `generation`, ending with a
+// status-line barrier. A `Reload` re-loads the document (generation + 1).
 fn apply(
   session: bridge.Session,
-  next: ide_ui.Snapshot,
+  generation: Int,
+  model: state.State,
   last: ide_ui.Snapshot,
-) -> ide_ui.Snapshot {
-  list.each(ide_ui.diff(last.scalars, next.scalars), fn(change) {
-    let command = case change {
-      ide_ui.TextUpdate(name, value) -> bridge.SetText(1, name, value)
-      ide_ui.BoolUpdate(name, value) -> bridge.SetBool(1, name, value)
-      ide_ui.IntUpdate(name, value) -> bridge.SetInt(1, name, value)
-      ide_ui.ScalarIntUpdate(name, value) -> bridge.SetInt(1, name, value)
-      ide_ui.ColorUpdate(name, value) -> bridge.SetColor(1, name, value)
+  name: String,
+) -> #(ide_ui.Snapshot, Int) {
+  let next = ide_ui.snapshot(model)
+  let ops = ide_ui.ops(last, next)
+  case has_reload(ops) {
+    True -> apply_reload(session, generation, next, name)
+    False -> {
+      submit_commands(session, ide_ui.commands(generation, ops))
+      barrier(session, generation, name)
+      #(next, generation)
     }
-    submit_retry(session, command)
+  }
+}
+
+fn apply_reload(
+  session: bridge.Session,
+  generation: Int,
+  next: ide_ui.Snapshot,
+  name: String,
+) -> #(ide_ui.Snapshot, Int) {
+  let generation = generation + 1
+  submit_commands(session, ide_ui.commands(generation, [ide_ui.Reload(next)]))
+  wait_for(generation, "ui-loaded", name)
+  // Replay the content the new document cannot carry.
+  let baseline = ide_ui.without_content(next)
+  submit_commands(
+    session,
+    ide_ui.commands(generation, ide_ui.ops(baseline, next)),
+  )
+  barrier(session, generation, name)
+  #(next, generation)
+}
+
+fn has_reload(ops: List(ide_ui.UiOp)) -> Bool {
+  list.any(ops, fn(op) {
+    case op {
+      ide_ui.Reload(_) -> True
+      _ -> False
+    }
   })
-  case next.projects == last.projects {
-    False ->
-      submit_retry(
-        session,
-        bridge.SetModel(1, "project-items", ide_ui.projects_wire(next.projects)),
-      )
-    True -> Nil
-  }
-  case next.modules == last.modules {
-    False ->
-      submit_retry(
-        session,
-        bridge.SetModel(1, "module-items", ide_ui.modules_wire(next.modules)),
-      )
-    True -> Nil
-  }
-  case next.tabs == last.tabs {
-    False ->
-      submit_retry(
-        session,
-        bridge.SetModel(1, "tab-items", ide_ui.tabs_wire(next.tabs)),
-      )
-    True -> Nil
-  }
-  case next.controls == last.controls {
-    False ->
-      submit_retry(
-        session,
-        bridge.SetModel(1, "control-items", ide_ui.controls_wire(next.controls)),
-      )
-    True -> Nil
-  }
-  // The code editor's buffer: pushed when the editor surface first appears
-  // or when the active module changes. The source is reconstructed from the
-  // token model, which mirrors the module source.
-  case
-    next.code_view != last.code_view || next.code_module != last.code_module
-  {
-    True -> {
-      let source =
-        next.code
-        |> list.map(fn(line) {
-          line.tokens |> list.map(fn(token) { token.text }) |> string.concat
-        })
-        |> string.join("\n")
-      submit_retry(session, bridge.SetText(1, "code-text", source))
-      submit_retry(session, bridge.SetCode(1, source))
-    }
-    False -> Nil
-  }
-  case next.props == last.props {
-    False ->
-      submit_retry(
-        session,
-        bridge.SetModel(1, "prop-items", ide_ui.props_wire(next.props)),
-      )
-    True -> Nil
-  }
-  case next.events == last.events {
-    False ->
-      submit_retry(
-        session,
-        bridge.SetModel(1, "event-items", ide_ui.props_wire(next.events)),
-      )
-    True -> Nil
-  }
-  submit_retry(session, bridge.ReadText(1, "status"))
-  wait_for(1, "property:status", "barrier")
-  next
+}
+
+fn submit_commands(
+  session: bridge.Session,
+  commands: List(bridge.Command),
+) -> Nil {
+  list.each(commands, fn(command) { submit_retry(session, command) })
 }
 
 fn submit_retry(session: bridge.Session, command: bridge.Command) -> Nil {
@@ -284,15 +187,13 @@ fn submit_retry(session: bridge.Session, command: bridge.Command) -> Nil {
   }
 }
 
-fn snapshot(session: bridge.Session, name: String) -> Nil {
-  io.println("snapshot " <> name)
-  let path = generated_path(name)
-  submit_retry(session, bridge.Snapshot(1, path))
-  wait_for(1, "snapshot-saved", name)
+// The status line is a plain label: reading it proves every op before it
+// applied, and surfaces a `command-failed` as a hard failure.
+fn barrier(session: bridge.Session, generation: Int, name: String) -> Nil {
+  let id = shell.section_id("status")
+  submit_retry(session, bridge.ReadText(generation, id, "text"))
+  wait_for(generation, "read:" <> int.to_string(id) <> ":text", name)
 }
-
-@external(erlang, "campy_host_ffi", "now_ms")
-fn now_ms() -> Int
 
 fn wait_for(generation: Int, kind: String, name: String) -> Nil {
   wait_for_loop(generation, kind, name, now_ms())
