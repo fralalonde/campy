@@ -77,7 +77,7 @@ pub fn snapshot(form: Form) -> Snapshot {
         control_value(control),
         campy_form.transparency_of(form, control.id),
         prop(control, "checked") == "true",
-        prop(control, "placeholder-text"),
+        prop(control, "placeholder"),
         prop(control, "read-only") == "true",
         int.to_float(prop_int(control, "minimum", 0)),
         int.to_float(prop_int(control, "maximum", 100)),

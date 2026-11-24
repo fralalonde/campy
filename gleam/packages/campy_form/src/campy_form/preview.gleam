@@ -159,8 +159,8 @@ fn outer_inner(form: Form, control: Control) -> String {
       <> "; placeholder-text: "
       <> quote(campy_form.control_prop(
         control,
-        "placeholder-text",
-        campy_ccl.prop_default(kind_of(control), "placeholder-text"),
+        "placeholder",
+        campy_ccl.prop_default(kind_of(control), "placeholder"),
       ))
       <> "; read-only: "
       <> bool(
@@ -263,9 +263,6 @@ fn outer_inner(form: Form, control: Control) -> String {
       <> int.to_string(value_of(control))
       <> ".0; changed => { root."
       <> handler_or(control, "changed")
-      <> "(); }"
-      <> " released => { root."
-      <> handler_or(control, "released")
       <> "(); } }\n"
     Progress ->
       "      ProgressIndicator { x: 0; y: (parent.height - 6px) / 2; width: parent.width; height: 6px; progress: "
