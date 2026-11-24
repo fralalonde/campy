@@ -14,6 +14,7 @@ use zgui::elements::{r#box, text};
 use zgui::geom::{Css, CssPx, Point};
 use zgui::prelude::*;
 use zgui::view::{AnyView, AttrName, ClassName, events};
+use zgui::vocab::{Key, KeyEvent, Modifiers, NamedKey};
 use zgui_editor::{
     Decoration, EditorEvent, EditorHandle, EditorProps, LanguageConfig, LanguageRegistry,
     UnderlineStyle,
@@ -209,9 +210,16 @@ pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
         .iter()
         .map(|desc| AnyView::new(build_control(desc, host)))
         .collect();
+    let key_host = host.clone();
     let root = r#box()
         .class("campy-root")
         .class("campy-free")
+        .on(events::KEY_DOWN, move |cx| {
+            let event: &KeyEvent = cx;
+            if let Some(combo) = key_combo(&event.key_without_modifiers, cx.modifiers) {
+                key_host.emit_raw("key", combo);
+            }
+        })
         .class(if doc.theme == "dark" {
             "campy-dark"
         } else {
@@ -602,4 +610,63 @@ pub fn set_editor_marks(handle: &EditorHandle, layer: &str, items: &[(u64, u64, 
         })
         .collect();
     handle.set_decorations(layer, decorations);
+}
+
+/// The keyboard combos the BEAM sees: `key` events with payloads like
+/// `ctrl+s`, `shift+ctrl+z`, `f6`, `delete`. Plain typing stays with the
+/// focused editor; only modified or special keys cross the bridge (the
+/// shell's global bindings live on these, like the old shell's root
+/// FocusScope).
+fn key_combo(key: &Key, modifiers: Modifiers) -> Option<String> {
+    let locks = Modifiers::LOCKS.bits();
+    let bits = modifiers.bits() & !locks;
+    let mut combo = String::new();
+    if bits & Modifiers::CONTROL.bits() != 0 {
+        combo.push_str("ctrl+");
+    }
+    if bits & Modifiers::SHIFT.bits() != 0 {
+        combo.push_str("shift+");
+    }
+    if bits & Modifiers::ALT.bits() != 0 {
+        combo.push_str("alt+");
+    }
+    if bits & Modifiers::META.bits() != 0 {
+        combo.push_str("meta+");
+    }
+    match key {
+        Key::Named(named) => {
+            let name = named.as_str().to_ascii_lowercase();
+            if bits == 0 && !forwardable_named(&name) {
+                return None;
+            }
+            combo.push_str(&name);
+        }
+        Key::Character(text) => {
+            if bits == 0 {
+                return None;
+            }
+            combo.push_str(&text.to_lowercase());
+        }
+        _ => return None,
+    }
+    Some(combo)
+}
+
+fn forwardable_named(name: &str) -> bool {
+    matches!(
+        name,
+        "enter"
+            | "escape"
+            | "delete"
+            | "backspace"
+            | "tab"
+            | "home"
+            | "end"
+            | "pageup"
+            | "pagedown"
+            | "arrowup"
+            | "arrowdown"
+            | "arrowleft"
+            | "arrowright"
+    ) || (name.len() <= 3 && name.starts_with('f') && name[1..].chars().all(|c| c.is_ascii_digit()))
 }

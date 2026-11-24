@@ -19,7 +19,10 @@ use std::time::Duration;
 use zgui::geom::{Css, CssPx, DevicePx, Point, Size};
 use zgui::platform::{SurfaceEvent, SurfaceId};
 use zgui::prelude::*;
-use zgui::vocab::{Modifiers, PointerAction, PointerEvent, PointerId, PointerKind, Timestamp};
+use zgui::vocab::{
+    Key, KeyEvent, KeyState, Modifiers, PhysicalKey, PointerAction, PointerEvent, PointerId,
+    PointerKind, Timestamp,
+};
 use zgui_platform_headless::Harness;
 
 use crate::sessions::ThreadState;
@@ -29,6 +32,8 @@ enum TestOp {
     Pump(u64),
     Pointer(String, f32, f32),
     Resize(f32, f32),
+    /// A key press: name (named key or single character), modifiers.
+    Key(String, bool, bool),
     /// The window's rendered rows, as stable text (one per surface).
     Dump,
 }
@@ -185,6 +190,47 @@ pub fn drive_headless(_ui: Rc<ThreadState>, runtime: zgui::runtime::Runtime) -> 
                     dump: Vec::new(),
                 }
             }
+            TestOp::Key(name, control, shift) => {
+                event_time += Duration::from_millis(16);
+                let timestamp = Timestamp::ORIGIN + event_time;
+                let mut modifiers = Modifiers::NONE;
+                if control {
+                    modifiers = Modifiers::CONTROL;
+                }
+                if shift {
+                    modifiers =
+                        Modifiers::from_bits_truncate(modifiers.bits() | Modifiers::SHIFT.bits());
+                }
+                let key = match name.as_str() {
+                    "enter" => Key::Named(NamedKey::Enter),
+                    "escape" => Key::Named(NamedKey::Escape),
+                    "delete" => Key::Named(NamedKey::Delete),
+                    "f4" => Key::Named(NamedKey::F4),
+                    "f6" => Key::Named(NamedKey::F6),
+                    "f7" => Key::Named(NamedKey::F7),
+                    "f10" => Key::Named(NamedKey::F10),
+                    other => Key::Character(other.to_owned().into()),
+                };
+                let key_without_modifiers = key.clone();
+                let event = KeyEvent {
+                    key: key.clone(),
+                    key_without_modifiers,
+                    physical: PhysicalKey::Unidentified(0),
+                    location: zgui::vocab::KeyLocation::Standard,
+                    repeat: false,
+                };
+                harness.deliver_to_first(SurfaceEvent::Key {
+                    state: KeyState::Pressed,
+                    event,
+                    modifiers,
+                    timestamp,
+                });
+                harness.settle(8);
+                Reply {
+                    pump_surfaces: 0,
+                    dump: Vec::new(),
+                }
+            }
             TestOp::Dump => {
                 let lines: Vec<String> = harness
                     .app()
@@ -281,6 +327,12 @@ pub fn test_pointer(action: &str, x: f32, y: f32) -> Result<(), String> {
         return Ok(());
     }
     enqueue(TestOp::Pointer(action.into(), x, y))
+}
+
+/// Asks the UI thread to deliver a key press (`"s"`, `"f6"`, `"delete"`)
+/// with optional control/shift modifiers.
+pub fn test_key(name: &str, control: bool, shift: bool) -> Result<(), String> {
+    enqueue(TestOp::Key(name.into(), control, shift))
 }
 
 /// Asks the UI thread to deliver a window resize.
