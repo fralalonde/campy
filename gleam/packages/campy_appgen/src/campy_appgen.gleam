@@ -421,5 +421,7 @@ fn kind_name(kind: campy_form.Kind) -> String {
     campy_form.GroupBox -> "GroupBox"
     campy_form.Picture -> "Picture"
     campy_form.Menu -> "Menu"
+    campy_form.CodeEditor -> "CodeEditor"
+    campy_form.Console -> "Console"
   }
 }
