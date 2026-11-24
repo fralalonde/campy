@@ -82,7 +82,7 @@ fn main() {
         })
         .expect("LoadUi enqueues");
     // The production drain rides the real clock; give it real time.
-    std::thread::sleep(Duration::from_millis(600));
+    std::thread::sleep(Duration::from_millis(4000));
     assert!(
         events
             .lock()
@@ -109,7 +109,7 @@ fn main() {
             op: Op::LoadUi(form("dark")),
         })
         .expect("reload enqueues");
-    std::thread::sleep(Duration::from_millis(600));
+    std::thread::sleep(Duration::from_millis(4000));
     let loaded = events.lock().unwrap().len();
     assert!(
         loaded >= 2,

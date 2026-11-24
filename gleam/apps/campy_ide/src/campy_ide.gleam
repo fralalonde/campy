@@ -675,7 +675,7 @@ fn section_names() -> List(String) {
     "menu-bar", "menu-rule", "menu-file", "menu-edit", "menu-settings",
     "palette", "run", "stop", "nav", "nav-projects-title", "project-delete",
     "project-add", "projects-nav", "nav-rule", "nav-modules-title", "module-add",
-    "modules-nav", "module-tabs", "tab-close", "canvas", "canvas-title",
+    "modules-nav", "tab-strip", "tab-close", "canvas", "canvas-title",
     "canvas-form", "selection-rect", "marquee-rect", "canvas-rule", "form-tab",
     "raw-tab", "raw-view", "view-toggle", "code-title", "code-handler",
     "code-view", "completions", "console-pane", "console-title", "console-state",
@@ -711,6 +711,23 @@ pub fn control_name(id: Int) -> Option(String) {
         Some(name) -> Some(name)
         None -> inspector_name(id)
       }
+  }
+}
+
+/// A module tab's id (`tab:<module id>`), one per open module. Tabs are
+/// emitted per module rather than as a list, so their ids are derived from
+/// the open set rather than from a fixed glossary.
+fn tab_name(model: State, id: Int) -> Option(String) {
+  case
+    list.find_map(model.opened, fn(module_id) {
+      case campy_form.wire_id("tab:" <> module_id) == id {
+        True -> Ok(module_id)
+        False -> Error(Nil)
+      }
+    })
+  {
+    Ok(module_id) -> Some("tab:" <> module_id)
+    Error(_) -> None
   }
 }
 
@@ -939,7 +956,12 @@ fn on_control(
   event_key: String,
   payload: String,
 ) -> IdeStep {
-  case control_name(id) {
+  case
+    case control_name(id) {
+      Some(name) -> Some(name)
+      None -> tab_name(model, id)
+    }
+  {
     None -> keep(model, submitted, accepted, last)
     Some(name) ->
       case control_action(model, name, event_key, payload) {
@@ -965,7 +987,21 @@ fn control_action(
     "menu-file" -> menu_effect("menu-file", event_key, payload)
     "menu-edit" -> menu_effect("menu-edit", event_key, payload)
     "menu-settings" -> menu_effect("menu-settings", event_key, payload)
-    _ ->
+    _ -> derived_control(model, name, event_key, payload)
+  }
+}
+
+/// Control names the shell derives from state rather than from a fixed table:
+/// one per palette tile, one per inspector row, one per open module tab.
+fn derived_control(
+  model: State,
+  name: String,
+  event_key: String,
+  payload: String,
+) -> ControlEffect {
+  case string.starts_with(name, "tab:") {
+    True -> ControlRun("tab-module", string.drop_start(name, 4))
+    False ->
       case string.starts_with(name, "tile:") {
         True -> ControlRun("add-component", string.drop_start(name, 5))
         False ->
@@ -1082,13 +1118,6 @@ fn list_action(model: State, name: String, payload: String) -> ControlEffect {
         list.find(model.project.modules, fn(module) { module.name == payload })
       {
         Ok(module) -> ControlRun("open-module", module.id)
-        Error(_) -> ControlKeep
-      }
-    "module-tabs" ->
-      case
-        list.find(model.project.modules, fn(module) { module.name == payload })
-      {
-        Ok(module) -> ControlRun("tab-module", module.id)
         Error(_) -> ControlKeep
       }
     "browser-entries" ->

@@ -275,10 +275,20 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
                 zgui::prelude::CloseResponse::Close
             });
         }
-        match host.document.get() {
-            None => AnyView::new(r#box().class("campy-root")),
-            Some(doc) => controls::build_document(&doc, &host),
-        }
+        // The document read lives in a dynamic child rather than here: the
+        // window is built in an owner scope with no observer, so reading the
+        // signal in the builder would be a read nothing subscribes to (and
+        // zgui says so). A child closure is invoked in a tracking scope, so
+        // the subtree rebuilds exactly when `LoadUi` moves the document.
+        let rebuild_host = host.clone();
+        AnyView::new(
+            r#box()
+                .class("campy-host")
+                .child(move || match rebuild_host.document.get() {
+                    None => AnyView::new(r#box().class("campy-root")),
+                    Some(doc) => controls::build_document(&doc, &rebuild_host),
+                }),
+        )
     }
 }
 
@@ -294,11 +304,15 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
     #[allow(unused_mut)]
     let mut app = zgui::app()
         .with_title("Campy")
-        .with_size(1200.0, 800.0)
+        .with_size(1280.0, 860.0)
         .with_stylesheet(CAMPY_SHEET);
     #[cfg(feature = "ui-testing")]
     {
         app = app.with_renderer(Box::new(crate::testing::null_renderer_factory));
+    }
+    #[cfg(not(feature = "ui-testing"))]
+    if let Some(path) = crate::snapshot::path() {
+        app = app.with_renderer(crate::snapshot::factory(path));
     }
     let view_ui = ui.clone();
     let handler = app
@@ -346,12 +360,19 @@ fn ui_event_loop() -> Result<winit::event_loop::EventLoop<zgui_platform_winit::U
         winit::event_loop::EventLoop::<zgui_platform_winit::UserEvent>::with_user_event();
     #[cfg(target_os = "linux")]
     {
-        let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
+        // CAMPY_UI_BACKEND=x11 forces the X11 backend even on Wayland
+        // sessions (automation: XWayland clients are drivable with
+        // xdotool); the default follows the session.
+        let forced_x11 = std::env::var("CAMPY_UI_BACKEND").as_deref() == Ok("x11");
+        let wayland = !forced_x11 && std::env::var("WAYLAND_DISPLAY").is_ok();
         if wayland {
             use winit::platform::wayland::EventLoopBuilderExtWayland as _;
             builder.with_any_thread(true);
         } else {
             use winit::platform::x11::EventLoopBuilderExtX11 as _;
+            if forced_x11 {
+                builder.with_x11();
+            }
             builder.with_any_thread(true);
         }
     }

@@ -1777,13 +1777,13 @@ pub fn set_mcp(state: State, enabled: Bool, status: String) -> State {
 
 pub fn window_position(state: State) -> #(Int, Int) {
   case active_module(state) {
-    None -> #(32, 120)
+    None -> #(32, 40)
     Some(module) ->
       case
         list.find(state.window_positions, fn(entry) { entry.0 == module.id })
       {
         Ok(entry) -> entry.1
-        Error(_) -> #(32, 120)
+        Error(_) -> #(32, 40)
       }
   }
 }

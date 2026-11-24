@@ -210,6 +210,21 @@ pub fn item_text(items: &[PropValue], index: usize) -> String {
         .unwrap_or_default()
 }
 
+/// One model item's `active` flag (`{text, id, active}` structs). A list that
+/// carries no such field marks nothing, which is the plain list.
+fn item_active(items: &[PropValue], index: usize) -> bool {
+    items
+        .get(index)
+        .and_then(|item| match item {
+            PropValue::Struct(fields) => fields
+                .iter()
+                .find(|(name, _)| name == "active")
+                .and_then(|(_, value)| value.boolean()),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 fn px(value: f64) -> String {
     if value.fract() == 0.0 {
         format!("{}px", value as i64)
@@ -272,9 +287,20 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
     let rect = signals.rect.clone();
     let enabled = signals.enabled.clone();
     let visible = signals.visible.clone();
+    // The shell's own styling hooks: every `class` prop on the description
+    // (one per `with_class` call, whitespace-separated within one) lands on
+    // the wrapper, beside the `campy-<kind>` class the widget layer uses.
+    let classes = desc
+        .props
+        .iter()
+        .filter(|(key, _)| key == "class")
+        .filter_map(|(_, value)| value.text().map(str::to_owned))
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut wrapper = r#box()
         .class("campy-control")
         .class(format!("campy-{}", desc.kind))
+        .class(classes)
         .style_property("left", move || Some(px(rect.get().0)))
         .style_property("top", move || Some(px(rect.get().1)))
         .style_property("width", move || Some(px(rect.get().2)))
@@ -416,15 +442,40 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         }
 
         "combo" | "menu-list" => {
-            let model = signals.model.clone();
-            AnyView::new(view! {
-                Select(
-                    value = text,
-                    on_change = UnsyncCallback::new(move |value: String| host.emit(id, "selected", value)),
-                ) {
-                    {move || options(model.clone(), "campy-option")}
-                }
-            })
+            // A field that cycles its choices on click. zgui-ui's `Select` is the
+            // richer control, but its popup is one of the live-window input gaps
+            // this migration tracks (ADR 0003), and binding it two-way makes it
+            // write its value back on mount, which feeds the loop a new
+            // generation every tick. A base control is the path verified end to
+            // end through real surface input, and a property row that cannot be
+            // changed is worse than one that takes a second click.
+            let cycle_model = signals.model.clone();
+            let cycle_text = text.clone();
+            let cycle_host = host.clone();
+            let shown = move || {
+                let items = cycle_model.get();
+                let suffix = if items.is_empty() { "" } else { "  ▾" };
+                format!("{}{suffix}", cycle_text.get())
+            };
+            AnyView::new(
+                zgui::elements::control()
+                    .class("campy-widget-button")
+                    .class("campy-cycle")
+                    .tabindex(Focus::Sequential)
+                    .on(events::CLICK, move |_| {
+                        let items = cycle_model.get();
+                        if items.is_empty() {
+                            return;
+                        }
+                        let current = cycle_text.get();
+                        let index = (0..items.len())
+                            .find(|index| item_text(&items, *index) == current)
+                            .unwrap_or(0);
+                        let next = item_text(&items, (index + 1) % items.len());
+                        cycle_host.emit(id, "selected", next);
+                    })
+                    .child(shown),
+            )
         }
 
         "list" => {
@@ -437,10 +488,12 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
                     row = move |index: usize| {
                         let items = model.get();
                         let label = item_text(&items, index);
+                        let active = item_active(&items, index);
                         let row_host = list_host.clone();
                         let click_label = label.clone();
                         zgui::elements::control()
                             .class("campy-list-row")
+                            .class_toggle(ClassName::new("campy-list-active"), move || active)
                             .tabindex(Focus::Sequential)
                             .on(
                                 events::CLICK,

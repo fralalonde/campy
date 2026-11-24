@@ -563,7 +563,7 @@ pub fn window_title_drag_moves_the_module_window_test() {
     |> state.pointer_down(100, -14)
     |> state.pointer_move(120, 6)
     |> state.pointer_up(120, 6)
-  state.window_position(moved) |> should.equal(#(52, 140))
+  state.window_position(moved) |> should.equal(#(52, 60))
 }
 
 pub fn selection_edge_grip_resizes_the_control_test() {
@@ -1414,10 +1414,10 @@ pub fn placement_uses_computed_container_bounds_test() {
 
 pub fn module_window_moves_and_resizes_test() {
   let model = demo_state()
-  state.window_position(model) |> should.equal(#(32, 120))
+  state.window_position(model) |> should.equal(#(32, 40))
 
   let moved = state.move_window(model, 20, 30)
-  state.window_position(moved) |> should.equal(#(52, 150))
+  state.window_position(moved) |> should.equal(#(52, 70))
 
   let resized =
     model

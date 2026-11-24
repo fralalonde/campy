@@ -4,6 +4,14 @@
 %% Projects are stored as versioned Erlang terms. Project file paths are
 %% relative to CAMPY_ROOT (set by scripts/workspace.py) unless absolute.
 %%
+%% Decoding is `binary_to_term/1` rather than `binary_to_term/2` with `[safe]`:
+%% the terms store the form model's own atoms (`panel`, `free`, `slider`, …),
+%% and a Gleam-compiled program holds those as binaries rather than atoms, so
+%% at boot the atom table never contains them and `safe` rejects every file
+%% this codec wrote. Shape is still checked below (`{workspace, 1, …}` and
+%% `decode_projects/2`), which is what rejects anything that is not a file of
+%% ours.
+%%
 %% Codec v12: a module's last field is its source origin, either
 %% {embedded, Source} (the source lives in this term file) or
 %% {external, Path} (only the path is stored; the codec never reads it).
@@ -29,7 +37,7 @@ load_workspace(Path) ->
     Full = resolve(Path),
     case file:read_file(Full) of
         {ok, Binary} ->
-            try binary_to_term(Binary, [safe]) of
+            try binary_to_term(Binary) of
                 {workspace, 1, Projects, Active, WPath} when is_list(Projects) ->
                     case decode_projects(Projects, []) of
                         {ok, Next} ->
@@ -52,7 +60,7 @@ load_project(Path) ->
     Full = resolve(Path),
     case file:read_file(Full) of
         {ok, Binary} ->
-            try binary_to_term(Binary, [safe]) of
+            try binary_to_term(Binary) of
                 Term ->
                     case decode_project(Term) of
                         {ok, Project} -> {ok, Project};

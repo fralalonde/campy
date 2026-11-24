@@ -100,7 +100,7 @@ pub fn every_wire_contract_section_is_present_test() {
     #("status", "label"),
     #("projects-nav", "list"),
     #("modules-nav", "list"),
-    #("module-tabs", "list"),
+    #("tab-strip", "panel"),
     #("tab-close", "button"),
     #("canvas", "surface"),
     #("inspector", "panel"),
@@ -132,9 +132,9 @@ pub fn root_is_the_window_root_and_ids_are_unique_test() {
 pub fn section_ids_are_stable_wire_ids_test() {
   let document = shell.desc(demo_view())
   let names = [
-    "menu-bar", "palette", "run", "stop", "status", "projects-nav",
-    "module-tabs", "canvas", "inspector", "code-view", "console",
-    "settings-panel", "context-menu", "nav-context",
+    "menu-bar", "palette", "run", "stop", "status", "projects-nav", "tab-strip",
+    "canvas", "inspector", "code-view", "console", "settings-panel",
+    "context-menu", "nav-context",
   ]
   list.each(names, fn(name) {
     by_name(document, name).id |> should.equal(campy_form.wire_id(name))

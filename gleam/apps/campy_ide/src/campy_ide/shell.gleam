@@ -28,7 +28,7 @@
 //// | `nav-rule` | panel | 1px rule between the two navigator lists |
 //// | `module-add` | button | new module |
 //// | `modules-nav` | list | module rows (`SetModel` of `{text,id,active}`); emits `selected` with the name |
-//// | `module-tabs` | list | open tabs (`SetModel` of `{text,id,active}`); emits `selected` with the name |
+//// | `tab-strip` | panel | the open module tabs; one `tab:<module id>` button per tab, emitting `clicked` |
 //// | `tab-close` | button | close the active tab |
 //// | `canvas` | surface | designer canvas; `pointer:canvas:down/move/up/wheel` |
 //// | `canvas-title` | label | form title bar (`SetText`) |
@@ -125,8 +125,8 @@
 ////   (Ctrl+Z/Y, Ctrl+C/X/V, Delete, Ctrl+N/Shift+N/O/S/Shift+S/Q, F5/F6/F7,
 ////   Shift+F5, Ctrl+Tab, Ctrl+Space, Escape) cross as renderer `key` events
 ////   (`ctrl+s`, `f6`, `delete`, …) and are routed by `campy_ide`'s loop.
-//// - The old tab strip had a per-tab × control. A model-driven `list` cannot
-////   spawn per-row buttons, so tabs are `module-tabs` (select) plus
+//// - The old tab strip had a per-tab × control. Tabs are now one button per
+////   open module (`tab:<module id>`, so a click names its module) plus
 ////   `tab-close` (close the active tab); the navigator context menu keeps its
 ////   "Close tab" item as well.
 //// - Adding/removing a designed control changes the canvas subtree, which no
@@ -139,9 +139,9 @@
 //// - The old console was a log list plus a Send field; the v2 `console` kind is
 ////   a terminal that feeds input itself (`console:console:input`), so the
 ////   separate input row is gone.
-//// - A `ControlDesc` carries no class field (the renderer derives one class per
-////   kind), so every control also carries a static `class` prop naming its
-////   styling role for the renderer's CSS pass (ignored by the current host).
+//// - Every control carries a static `class` prop (one, space-joined: the view
+////   diff looks props up by key) naming its styling role. The renderer applies
+////   it beside the `campy-<kind>` class it derives.
 //// - The shell's absolute layout is the old fixed chrome at 1280×860; panels do
 ////   not stretch when the window is enlarged (no responsive geometry op).
 //// - The designer chrome is canvas content, not controls: `selection-rect` is
@@ -160,10 +160,9 @@
 ////
 //// # Renderer gaps found by Z2.3 (in the renderer, not this document)
 ////
-//// - `list` rows are inert: the renderer's `VirtualList` has no row activation
-////   and never emits `selected`, so `projects-nav`, `modules-nav`,
-////   `module-tabs`, `completions` and `browser-entries` cannot be operated by
-////   pointer yet (the loop routes their `selected` events for when they can).
+//// - `list` rows emit `selected` with the row text (gap closed): the loop
+////   routes `projects-nav`, `modules-nav`, `completions` and
+////   `browser-entries` from it.
 //// - `menu` renders as a plain button (no popup, emits `clicked`), so the
 ////   File/Edit/Settings items are not reachable until the renderer builds the
 ////   zgui `Menu`; the loop routes `selected` labels by the old item titles.
@@ -413,7 +412,7 @@ pub fn empty_view() -> ShellView {
     scheme_index: 0,
     form_title: "",
     window_x: 32,
-    window_y: 120,
+    window_y: 40,
     projects: [],
     modules: [],
     tabs: [],
@@ -607,7 +606,7 @@ pub fn desc(view: ShellView) -> List(ControlDesc) {
 fn menu_bar(view: ShellView) -> ControlDesc {
   node("menu-bar", "panel", "", 0, 0, window_width, 46)
   |> with_class("campy-menubar")
-  |> with_props([layout_prop("row")])
+  |> with_props([layout_prop("free")])
   |> with_children([
     menu("menu-file", "File", 8, 58, file_menu(), "New, open, save"),
     menu("menu-edit", "Edit", 70, 58, edit_menu(), "Undo, redo, clipboard"),
@@ -704,7 +703,7 @@ fn palette() -> ControlDesc {
     })
   node("palette", "panel", "", 228, 4, 960, 38)
   |> with_class("campy-palette")
-  |> with_props([layout_prop("row")])
+  |> with_props([layout_prop("free")])
   |> with_children(tiles)
 }
 
@@ -713,7 +712,7 @@ fn palette() -> ControlDesc {
 fn navigator(view: ShellView) -> ControlDesc {
   node("nav", "panel", "", 0, 47, 190, 787)
   |> with_class("campy-nav")
-  |> with_props([layout_prop("column")])
+  |> with_props([layout_prop("free")])
   |> with_children([
     node("nav-projects-title", "label", "Projects", 8, 8, 90, 28)
       |> with_class("campy-title"),
@@ -768,22 +767,8 @@ fn navigator(view: ShellView) -> ControlDesc {
 
 fn centre(view: ShellView) -> List(ControlDesc) {
   [
-    list_node(
-      "module-tabs",
-      191,
-      47,
-      740,
-      32,
-      list.map(view.tabs, fn(item: TabItem) {
-        WireStruct([
-          #("text", WireText(item.name)),
-          #("id", WireText(item.id)),
-          #("active", WireBool(item.active)),
-        ])
-      }),
-    )
-      |> with_class("campy-tabs"),
-    node("tab-close", "button", "×", 935, 51, 24, 24)
+    tab_strip(view),
+    node("tab-close", "button", "×", 909, 51, 24, 24)
       |> with_class("campy-icon-button")
       |> with_props([hint_prop("Close tab")]),
     canvas(view),
@@ -797,10 +782,12 @@ fn centre(view: ShellView) -> List(ControlDesc) {
     rule("canvas-rule", 191, 629, 768, 1) |> shown(!view.code_view),
     node("form-tab", "button", "▦ Form", 195, 633, 90, 30)
       |> with_class("campy-tab-button")
+      |> with_class_if("campy-tab-on", !view.raw_tab)
       |> with_props([hint_prop("Design canvas")])
       |> shown(!view.code_view),
     node("raw-tab", "button", "⌨ Raw", 289, 633, 90, 30)
       |> with_class("campy-tab-button")
+      |> with_class_if("campy-tab-on", view.raw_tab)
       |> with_props([hint_prop("Module source")])
       |> shown(!view.code_view),
     node("view-toggle", "button", toggle_glyph(view), 915, 86, 36, 36)
@@ -838,6 +825,25 @@ fn centre(view: ShellView) -> List(ControlDesc) {
       |> shown(view.code_view && !list.is_empty(view.completions)),
     console_pane(view),
   ]
+}
+
+/// The open modules, as a strip of tabs. One button per module rather than a
+/// `list`: the only list the platform offers is vertical, and a tab strip is
+/// not. The module id rides the control name (`tab:<module id>`), so a click
+/// names the module the loop should switch to.
+fn tab_strip(view: ShellView) -> ControlDesc {
+  let tabs =
+    view.tabs
+    |> list.index_map(fn(item: TabItem, index: Int) {
+      node("tab:" <> item.id, "button", item.name, 2 + index * 136, 4, 132, 26)
+      |> with_class("campy-module-tab")
+      |> with_class_if("campy-tab-on", item.active)
+      |> with_props([hint_prop("Switch to this module")])
+    })
+  node("tab-strip", "panel", "", 191, 47, 740, 32)
+  |> with_class("campy-tab-strip")
+  |> with_props([layout_prop("free")])
+  |> with_children(tabs)
 }
 
 fn toggle_glyph(view: ShellView) -> String {
@@ -946,13 +952,15 @@ fn console_pane(view: ShellView) -> ControlDesc {
 fn right_pane(view: ShellView) -> ControlDesc {
   node("right-pane", "panel", "", 960, 47, 320, 787)
   |> with_class("campy-inspector-pane")
-  |> with_props([layout_prop("column")])
+  |> with_props([layout_prop("free")])
   |> with_children([
     node("insp-tab-properties", "button", "⚙ Properties", 8, 8, 150, 30)
       |> with_class("campy-insp-tab")
+      |> with_class_if("campy-tab-on", !view.events_tab)
       |> with_props([hint_prop("Properties")]),
     node("insp-tab-events", "button", "⚡ Events", 162, 8, 150, 30)
       |> with_class("campy-insp-tab")
+      |> with_class_if("campy-tab-on", view.events_tab)
       |> with_props([hint_prop("Events")]),
     rule("insp-rule", 0, 42, 320, 1),
     node("insp-selection", "label", view.selection_label, 8, 50, 240, 32)
@@ -970,7 +978,7 @@ fn right_pane(view: ShellView) -> ControlDesc {
 fn project_panel(view: ShellView) -> ControlDesc {
   node("project-panel", "panel", "", 0, 88, 320, 699)
   |> with_class("campy-project-panel")
-  |> with_props([layout_prop("column")])
+  |> with_props([layout_prop("free")])
   |> shown(view.project_selected)
   |> with_children([
     node("project-icon", "picture", "", 8, 8, 48, 48)
@@ -1016,7 +1024,7 @@ fn inspector(
     })
   node(name, "panel", "", 0, 88, 320, 699)
   |> with_class("campy-inspector")
-  |> with_props([layout_prop("column")])
+  |> with_props([layout_prop("free")])
   |> shown(active && !view.project_selected)
   |> with_children(rows)
 }
@@ -1165,7 +1173,7 @@ fn at(items: List(a), index: Int) -> Option(a) {
 fn status_bar(view: ShellView) -> ControlDesc {
   node("status-bar", "panel", "", 0, 834, window_width, 26)
   |> with_class("campy-status-bar")
-  |> with_props([layout_prop("row")])
+  |> with_props([layout_prop("free")])
   |> with_children([
     node("status", "label", view.status, 10, 3, 700, 20)
       |> with_class("campy-status"),
@@ -1179,7 +1187,7 @@ fn status_bar(view: ShellView) -> ControlDesc {
 fn settings_dialog(view: ShellView) -> ControlDesc {
   node("settings-panel", "panel", "", 380, 120, 520, 330)
   |> with_class("campy-dialog")
-  |> with_props([layout_prop("column")])
+  |> with_props([layout_prop("free")])
   |> shown(view.settings_open)
   |> with_children([
     node("settings-title", "label", "Editor settings", 18, 16, 480, 24)
@@ -1230,7 +1238,7 @@ fn settings_dialog(view: ShellView) -> ControlDesc {
 fn agent_dialog(view: ShellView) -> ControlDesc {
   node("agent-panel", "panel", "", 360, 140, 560, 300)
   |> with_class("campy-dialog")
-  |> with_props([layout_prop("column")])
+  |> with_props([layout_prop("free")])
   |> shown(view.agent_open)
   |> with_children([
     node("agent-title", "label", "Agent settings", 18, 16, 520, 24)
@@ -1276,7 +1284,7 @@ fn agent_dialog(view: ShellView) -> ControlDesc {
 fn project_dialog(view: ShellView) -> ControlDesc {
   node("project-dialog", "panel", "", 410, 160, 460, 240)
   |> with_class("campy-dialog")
-  |> with_props([layout_prop("column")])
+  |> with_props([layout_prop("free")])
   |> shown(view.project_dialog_open)
   |> with_children([
     node("project-dialog-title", "label", "Projects", 18, 16, 420, 24)
@@ -1306,7 +1314,7 @@ fn project_dialog(view: ShellView) -> ControlDesc {
 fn browser_dialog(view: ShellView) -> ControlDesc {
   node("browser-panel", "panel", "", 380, 100, 520, 420)
   |> with_class("campy-dialog")
-  |> with_props([layout_prop("column")])
+  |> with_props([layout_prop("free")])
   |> shown(view.popup_open)
   |> with_children([
     node("browser-title", "label", view.popup_title, 16, 12, 480, 24)
@@ -1453,8 +1461,36 @@ fn list_node(
   |> with_props([model_prop(items)])
 }
 
+/// Adds a class to the control's single `class` prop, joining with a space
+/// where one is already there. One prop rather than one per class: the view
+/// diff looks props up by key, so a repeated key reads as a changed value.
 fn with_class(desc: ControlDesc, name: String) -> ControlDesc {
-  with_props(desc, [#("class", WireText(name))])
+  let props =
+    list.map(desc.props, fn(prop) {
+      case prop {
+        #("class", WireText(existing)) -> #(
+          "class",
+          WireText(existing <> " " <> name),
+        )
+        other -> other
+      }
+    })
+  ControlDesc(
+    ..desc,
+    props: case list.any(desc.props, fn(prop) { prop.0 == "class" }) {
+      True -> props
+      False -> list.append(desc.props, [#("class", WireText(name))])
+    },
+  )
+}
+
+/// The class only where a state says so: the sheet styles the active tab, and
+/// an inactive one carries nothing extra.
+fn with_class_if(desc: ControlDesc, name: String, on: Bool) -> ControlDesc {
+  case on {
+    True -> with_class(desc, name)
+    False -> desc
+  }
 }
 
 fn with_props(

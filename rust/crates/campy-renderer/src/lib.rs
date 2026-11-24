@@ -9,6 +9,7 @@
 pub mod controls;
 pub mod sessions;
 pub mod sheet;
+pub mod snapshot;
 #[cfg(feature = "ui-testing")]
 pub mod testing;
 pub mod wire;

@@ -653,6 +653,7 @@ name = "campy-renderer"
 version = "0.1.0"
 dependencies = [
  "flume",
+ "png",
  "tree-sitter",
  "tree-sitter-gleam",
  "winit",
@@ -660,6 +661,8 @@ dependencies = [
  "zgui-editor",
  "zgui-platform-headless",
  "zgui-platform-winit",
+ "zgui-render-vector-vello",
+ "zgui-render-wgpu",
  "zgui-terminal",
  "zgui-ui",
 ]
