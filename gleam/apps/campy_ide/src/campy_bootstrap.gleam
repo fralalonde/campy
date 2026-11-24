@@ -6,6 +6,11 @@ import gleam/int
 import gleam/io
 import gleam/result
 
+// Headless bootstrap: the definition pipeline (schema → document) without a
+// window. The protocol-v2 native path is exercised by the session tests and
+// the native smoke suite (Z4.1); this entry point stays as `just smoke`'s
+// display-free check that the definition/model layer is intact.
+
 @external(erlang, "campy_host_ffi", "watch_enabled")
 fn watch_enabled() -> Bool
 
@@ -22,12 +27,13 @@ fn reload_search_box() -> Result(Nil, String)
 fn describe_search_box() -> Result(campy_ui.Definition, String)
 
 pub fn main() {
-  let assert 1 = campy_bridge.protocol_version()
+  let assert 2 = campy_bridge.protocol_version()
   let assert Ok(definition) = describe_search_box()
-  let assert Ok(source) = campy_ui.to_slint(definition)
-  let assert Ok(_) = campy_bridge.validate_ui(source)
+  let assert Ok(_) = campy_ui.to_slint(definition)
   let assert Ok(session) = runtime.new(definition)
-  io.println("Campy bootstrap: Gleam → in-process Rust NIF → Slint compiler OK")
+  io.println(
+    "Campy bootstrap: Gleam → search-box definition → model OK (protocol v2)",
+  )
   io.println("UI generation 1 accepted (headless compiler mode).")
   case watch_enabled() {
     True -> {
@@ -66,7 +72,6 @@ fn loop(session: runtime.Session, model: search_box.Model, previous: String) {
 fn reload(session: runtime.Session) -> Result(runtime.Session, String) {
   use _ <- result.try(reload_search_box())
   use candidate <- result.try(describe_search_box())
-  use source <- result.try(campy_ui.to_slint(candidate))
-  use _ <- result.try(campy_bridge.validate_ui(source))
+  use _ <- result.try(campy_ui.to_slint(candidate))
   runtime.commit(session, candidate)
 }

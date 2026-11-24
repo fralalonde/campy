@@ -121,10 +121,10 @@
 ////
 //// - Hover tooltips and palette status-line hints have no protocol event
 ////   (there is no hover kind), so hint texts ride as static `hint` props and
-////   the status line still exists for `SetText`. Keyboard bindings (Ctrl+Z/Y,
-////   Ctrl+C/X/V, Delete, Ctrl+N/Shift+N/O/S/Shift+S/Q, F5/F6/F7, Shift+F5,
-////   Ctrl+Tab, Ctrl+Space, Escape — unchanged) have no wire channel either;
-////   they need a renderer-side key path (reported as the Z2.3 gap).
+////   the status line still exists for `SetText`. The 20 keyboard bindings
+////   (Ctrl+Z/Y, Ctrl+C/X/V, Delete, Ctrl+N/Shift+N/O/S/Shift+S/Q, F5/F6/F7,
+////   Shift+F5, Ctrl+Tab, Ctrl+Space, Escape) cross as renderer `key` events
+////   (`ctrl+s`, `f6`, `delete`, …) and are routed by `campy_ide`'s loop.
 //// - The old tab strip had a per-tab × control. A model-driven `list` cannot
 ////   spawn per-row buttons, so tabs are `module-tabs` (select) plus
 ////   `tab-close` (close the active tab); the navigator context menu keeps its
@@ -145,9 +145,10 @@
 //// - The shell's absolute layout is the old fixed chrome at 1280×860; panels do
 ////   not stretch when the window is enlarged (no responsive geometry op).
 //// - The designer chrome is canvas content, not controls: `selection-rect` is
-////   the union box of the selection, `marquee-rect` is moved by `SetGeometry`
-////   during a drag, and the eight resize handles are drawn by the canvas gesture
-////   layer (they were per-control Slint children, which a surface cannot host).
+////   the union box of the selection, `marquee-rect` follows a live
+////   marquee/placement drag (`SetGeometry` + `visible` from the view), and the
+////   eight resize handles are hit-tested by the BEAM gesture layer (they were
+////   per-control Slint children, which a surface cannot host).
 ////   The completion popup is a `list` whose position `ide_ui`/Z2.3 sets with
 ////   `SetGeometry` (the caret lives in the editor, not in this view).
 //// - Right-click on a navigator row (`nav-context`) needs a pointer event on a
@@ -155,7 +156,25 @@
 ////   but has no wire trigger yet (protocol gap, same family as hover/keys).
 //// - The canvas drop highlight (`drop-candidate`) and the pending palette tile
 ////   were class/background switches; protocol v2 has no class op, so they are
-////   not drawn (the placement rectangle is the marquee rect meanwhile).
+////   not drawn (the marquee rectangle is the placement preview meanwhile).
+////
+//// # Renderer gaps found by Z2.3 (in the renderer, not this document)
+////
+//// - `list` rows are inert: the renderer's `VirtualList` has no row activation
+////   and never emits `selected`, so `projects-nav`, `modules-nav`,
+////   `module-tabs`, `completions` and `browser-entries` cannot be operated by
+////   pointer yet (the loop routes their `selected` events for when they can).
+//// - `menu` renders as a plain button (no popup, emits `clicked`), so the
+////   File/Edit/Settings items are not reachable until the renderer builds the
+////   zgui `Menu`; the loop routes `selected` labels by the old item titles.
+//// - `pointer:<id>:*` carries no button or modifiers, so right-click (the
+////   canvas context menu) and Ctrl-click (additive selection) have no wire
+////   form; `campy_ide` maps Shift+F10 to the context menu and the marquee to
+////   multi-select instead.
+//// - A second `LoadUi` on a live session is accepted (`ui-loaded`) but the
+////   window does not rebuild from the new document, so `Reload` (structural
+////   edits, theme, module switch) does not display until the renderer reads
+////   its document signal tracked.
 
 import campy_bridge.{
   type ControlDesc, type WireValue, ControlDesc, WireBool, WireImage, WireInt,
@@ -172,6 +191,19 @@ import gleam/result
 pub const window_width = 1280
 
 pub const window_height = 860
+
+/// The designer canvas pane inside the shell (window CSS px). `campy_ide`'s
+/// pointer routing subtracts these to reach form-local coordinates.
+pub const canvas_x = 191
+
+pub const canvas_y = 79
+
+pub const canvas_w = 768
+
+pub const canvas_h = 550
+
+/// The module window's title-bar height inside the canvas.
+pub const form_title_height = 28
 
 /// Font and size choices offered by the settings dialog (public: `ide_ui` maps
 /// the current font/size onto the same lists, so value and model agree).
@@ -324,6 +356,8 @@ pub type ShellView {
     controls: List(ControlItem),
     canvas: List(ControlDesc),
     canvas_selection: #(Int, Int, Int, Int),
+    /// Active marquee/placement rectangle, normalized, canvas-local.
+    canvas_marquee: #(Bool, Int, Int, Int, Int),
     props: List(PropItem),
     events: List(PropItem),
     completions: List(CompletionItem),
@@ -386,6 +420,7 @@ pub fn empty_view() -> ShellView {
     controls: [],
     canvas: [],
     canvas_selection: #(0, 0, 0, 0),
+    canvas_marquee: #(False, 0, 0, 0, 0),
     props: [],
     events: [],
     completions: [],
@@ -819,7 +854,8 @@ fn canvas(view: ShellView) -> ControlDesc {
     [] -> []
   }
   let #(sx, sy, sw, sh) = view.canvas_selection
-  node("canvas", "surface", "", 191, 79, 768, 550)
+  let #(marquee, mx, my, mw, mh) = view.canvas_marquee
+  node("canvas", "surface", "", canvas_x, canvas_y, canvas_w, canvas_h)
   |> with_class("campy-canvas")
   |> with_props([layout_prop("free")])
   |> shown(!view.code_view && !view.raw_tab)
@@ -831,7 +867,7 @@ fn canvas(view: ShellView) -> ControlDesc {
       view.window_x,
       view.window_y,
       form_w,
-      28,
+      form_title_height,
     )
       |> with_class("campy-canvas-title"),
     node(
@@ -839,7 +875,7 @@ fn canvas(view: ShellView) -> ControlDesc {
       "panel",
       view.form_title,
       view.window_x,
-      view.window_y + 28,
+      view.window_y + form_title_height,
       form_w,
       form_h,
     )
@@ -849,9 +885,9 @@ fn canvas(view: ShellView) -> ControlDesc {
     node("selection-rect", "panel", "", sx, sy, sw, sh)
       |> with_class("campy-selected")
       |> shown(view.has_selection),
-    node("marquee-rect", "panel", "", 0, 0, 0, 0)
+    node("marquee-rect", "panel", "", mx, my, mw, mh)
       |> with_class("campy-marquee")
-      |> shown(False),
+      |> shown(marquee),
   ])
 }
 

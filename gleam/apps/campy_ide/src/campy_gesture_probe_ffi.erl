@@ -1,91 +1,62 @@
 -module(campy_gesture_probe_ffi).
--export([run/12]).
+-export([run/9]).
 
-%% Runs the hybrid drag gesture contract against the live IDE shell:
-%% marquee-from-unselected, move-from-selected, select-on-click-release.
-%% The Gleam caller supplies the shell source, the wire models to push, and
-%% one free-layout control's geometry (model coordinates).
+%% Drives the loaded IDE shell document with the headless ui-testing driver:
+%% pointer phases land on the designer surface and a button click reaches the
+%% BEAM as `control:<wire id>:clicked` — the two input channels the loop routes.
+%%
+%% Note: the pointer payload carries no button or modifiers (reported gap), so
+%% the probe only asserts the phases and coordinates the loop receives.
 
-run(Source, Modules, Tabs, Controls, Code, Selected, Cleared,
-    Surfaces, PaneX, PaneY, WindowX, WindowY) ->
+run(Title, Width, Height, Theme, Controls, CanvasId, ButtonId, ButtonX, ButtonY) ->
     {ok, Session} = campy_bridge_ffi:open_session(),
     {ok, Id} = campy_bridge_ffi:session_id(Session),
-    {ok, nil} = campy_bridge_ffi:submit(Session, {load_ui, 1, Source}),
+    {ok, nil} = campy_bridge_ffi:submit(
+        Session, {load_ui, 1, Title, Width, Height, Theme, Controls}),
     _ = await(Id, 1, <<"ui-loaded">>, 10000),
-    ok = push(Session, <<"module-items">>, Modules),
-    ok = push(Session, <<"tab-items">>, Tabs),
-    ok = push(Session, <<"control-items">>, Controls),
-    ok = push(Session, <<"code-lines">>, Code),
-    [{surface_spec, Target, PX, PY}] = Surfaces,
-    ContentX = PaneX + WindowX, ContentY = PaneY + WindowY + 28,
-    %% Calibrate: the module window's title bar is 640 wide at (WindowX,
-    %% WindowY); clicking it always emits window-move-x, proving the
-    %% pane-offset arithmetic lands inside the canvas.
-    Calib = click(Session, 1, ContentX + 320, PaneY + WindowY + 14),
-    true = lists:keymember(<<"callback:window-move-x">>, 1, Calib),
-    io:format("GESTURE_CALIBRATION_OK~n"),
-    %% Phase 1: drag from the unselected control past the threshold draws
-    %% the marquee and commits through frame-apply; no move or drop cursor.
-    press(Session, 1, ContentX + PX, ContentY + PY),
-    move(Session, 1, ContentX + PX + 30, ContentY + PY + 30),
-    move(Session, 1, ContentX + PX + 60, ContentY + PY + 60),
-    Phase1 = release(Session, 1, ContentX + PX + 60, ContentY + PY + 60),
-    true = lists:keymember(<<"callback:frame-apply">>, 1, Phase1),
-    false = lists:keymember(<<"callback:move-x">>, 1, Phase1),
-    false = lists:keymember(<<"callback:drag-over-x">>, 1, Phase1),
-    io:format("GESTURE_MARQUEE_FROM_UNSELECTED_OK~n"),
-    %% Phase 2: the same drag from a selected control arms the move instead.
-    ok = push(Session, <<"control-items">>, Selected),
-    Phase2 = drag(Session, 1, ContentX + PX, ContentY + PY, 45),
-    true = lists:keymember(<<"callback:drag-over-x">>, 1, Phase2),
-    true = lists:keymember(<<"callback:move-x">>, 1, Phase2),
-    false = lists:keymember(<<"callback:frame-apply">>, 1, Phase2),
-    false = lists:keymember(<<"callback:select">>, 1, Phase2),
-    io:format("GESTURE_MOVE_FROM_SELECTED_OK~n"),
-    %% Phase 3: press and release without movement selects on button-up.
-    ok = push(Session, <<"control-items">>, Cleared),
-    Phase3 = click(Session, 1, ContentX + PX, ContentY + PY),
-    {_, TargetPayload} = lists:keyfind(<<"callback:select">>, 1, Phase3),
-    true = TargetPayload =:= Target,
-    false = lists:keymember(<<"callback:frame-apply">>, 1, Phase3),
-    false = lists:keymember(<<"callback:move-x">>, 1, Phase3),
-    io:format("GESTURE_SELECT_ON_RELEASE_OK~n"),
+    io:format("GESTURE_SHELL_LOADED_OK~n"),
+
+    %% Phase 1: the surface forwards raw pointer phases at window CSS pixels.
+    {ok, nil} = campy_bridge_ffi:test_pointer(<<"press">>, 300.0, 200.0),
+    {ok, nil} = campy_bridge_ffi:test_pointer(<<"move">>, 330.0, 230.0),
+    {ok, nil} = campy_bridge_ffi:test_pointer(<<"release">>, 330.0, 230.0),
+    Down = <<"pointer:", (integer_to_binary(CanvasId))/binary, ":down">>,
+    Move = <<"pointer:", (integer_to_binary(CanvasId))/binary, ":move">>,
+    Up = <<"pointer:", (integer_to_binary(CanvasId))/binary, ":up">>,
+    Events = drain(1000),
+    assert_payload(Events, Down, <<"300;200">>),
+    assert_payload(Events, Move, <<"330;230">>),
+    assert_payload(Events, Up, <<"330;230">>),
+    io:format("GESTURE_POINTER_PHASES_OK~n"),
+
+    %% Phase 2: a campy button click reaches the loop as a control event.
+    {ok, nil} = campy_bridge_ffi:test_pointer(<<"move">>, ButtonX, ButtonY),
+    {ok, nil} = campy_bridge_ffi:test_pointer(<<"press">>, ButtonX, ButtonY),
+    {ok, nil} = campy_bridge_ffi:test_pointer(<<"release">>, ButtonX, ButtonY),
+    Clicked = <<"control:", (integer_to_binary(ButtonId))/binary, ":clicked">>,
+    ClickEvents = drain(1000),
+    case lists:keymember(Clicked, 1, ClickEvents) of
+        true -> io:format("GESTURE_CONTROL_CLICK_OK~n");
+        false -> error({missing_control_click, Clicked, ClickEvents})
+    end,
+
     {ok, nil} = campy_bridge_ffi:close_session(Session),
     _ = await(Id, 1, <<"closed">>, 5000),
-    io:format("GESTURE_PROBE_PASSED target=~s~n", [Target]),
+    io:format("GESTURE_PROBE_PASSED~n"),
     nil.
 
-push(Session, Name, Value) ->
-    {ok, nil} = campy_bridge_ffi:submit(Session, {set_model, 1, Name, Value}),
-    receive after 100 -> ok end.
-
-press(Session, Gen, X, Y) ->
-    {ok, nil} = campy_bridge_ffi:test_input(Session, Gen, {press, X + 0.0, Y + 0.0}).
-
-move(Session, Gen, X, Y) ->
-    {ok, nil} = campy_bridge_ffi:test_input(Session, Gen, {move, X + 0.0, Y + 0.0}),
-    receive after 40 -> ok end.
-
-release(Session, Gen, X, Y) ->
-    {ok, nil} = campy_bridge_ffi:test_input(Session, Gen, {release, X + 0.0, Y + 0.0}),
-    drain(400).
-
-%% Press, two moves past the threshold, release; returns drained events.
-drag(Session, Gen, X, Y, Distance) ->
-    press(Session, Gen, X, Y),
-    move(Session, Gen, X + Distance * 2 div 3, Y + Distance * 2 div 3),
-    move(Session, Gen, X + Distance, Y + Distance),
-    release(Session, Gen, X + Distance, Y + Distance).
-
-click(Session, Gen, X, Y) ->
-    press(Session, Gen, X, Y),
-    release(Session, Gen, X, Y).
+assert_payload(Events, Kind, Payload) ->
+    case lists:keyfind(Kind, 1, Events) of
+        {Kind, Payload} -> ok;
+        Other -> error({unexpected_pointer_event, Kind, Payload, Other})
+    end.
 
 drain(Ms) ->
     Deadline = erlang:monotonic_time(millisecond) + Ms,
     drain_until(Deadline, []).
 
 drain_until(Deadline, Acc) ->
+    pump(),
     Remaining = max(0, Deadline - erlang:monotonic_time(millisecond)),
     case campy_bridge_ffi:poll(min(Remaining, 1000)) of
         {some, {native_event, _, _, Kind, Payload}} ->
@@ -101,6 +72,7 @@ await(Id, Generation, Want, Timeout) ->
     await_until(Id, Generation, Want, Deadline).
 
 await_until(Id, Generation, Want, Deadline) ->
+    pump(),
     Remaining = max(0, Deadline - erlang:monotonic_time(millisecond)),
     case campy_bridge_ffi:poll(min(Remaining, 1000)) of
         {some, {native_event, Id, Gen, Want, Payload}} when Gen >= Generation ->
@@ -114,3 +86,9 @@ await_until(Id, Generation, Want, Deadline) ->
         none ->
             await_until(Id, Generation, Want, Deadline)
     end.
+
+%% The headless ui-testing driver advances frames only when pumped; without
+%% this the command drain timer never runs. Harmless on a real-window NIF.
+pump() ->
+    try campy_bridge_ffi:test_pump(16) catch _:_ -> ok end,
+    ok.

@@ -1,10 +1,12 @@
 -module(campy_host_ffi).
 -export([watch_enabled/0, signal/0, wait/0, reload_search_box/0,
          describe_search_box/0, write_generated/1, generated_path/1,
-         headless_enabled/0, now_ms/0]).
+         headless_enabled/0, now_ms/0, has_display/0, temp_path/1]).
 
 headless_enabled() -> os:getenv("CAMPY_HEADLESS") =:= "1".
 now_ms() -> erlang:monotonic_time(millisecond).
+has_display() ->
+    os:getenv("DISPLAY") =/= false orelse os:getenv("WAYLAND_DISPLAY") =/= false.
 
 watch_enabled() -> os:getenv("CAMPY_WATCH") =:= "1".
 
@@ -46,6 +48,20 @@ write_generated(Source) ->
 
 generated_path(Name) ->
     filename:join([os:getenv("CAMPY_ROOT"), "generated", Name]).
+
+%% A scratch file path for tests (created under the platform temp dir).
+temp_path(Name) ->
+    Base = case os:getenv("TMPDIR") of
+        false ->
+            case os:getenv("TEMP") of
+                false -> "/tmp";
+                Dir -> Dir
+            end;
+        Dir -> Dir
+    end,
+    Root = filename:join([Base, "campy-test"]),
+    ok = filelib:ensure_dir(filename:join([Root, "x"])),
+    filename:join([Root, Name]).
 
 error_text(Reason) ->
     {error, unicode:characters_to_binary(io_lib:format("~p", [Reason]))}.
