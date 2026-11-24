@@ -58,7 +58,7 @@ impl Host {
     }
 
     /// The registration's control flag, once the NIF registers us.
-    pub fn adopt_control(&self, control: std::sync::Arc<crate::sessions::Control>) {
+    pub(crate) fn adopt_control(&self, control: std::sync::Arc<crate::sessions::Control>) {
         *self.control.borrow_mut() = Some(control);
     }
 
