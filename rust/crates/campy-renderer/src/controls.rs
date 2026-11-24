@@ -14,7 +14,7 @@ use zgui::elements::{r#box, text};
 use zgui::geom::{Css, CssPx, Point};
 use zgui::prelude::*;
 use zgui::view::{AnyView, AttrName, ClassName, events};
-use zgui_editor::{EditorEvent, EditorHandle, EditorProps};
+use zgui_editor::{EditorEvent, EditorHandle, EditorProps, LanguageConfig, LanguageRegistry};
 use zgui_ui::prelude::*;
 
 use crate::wire::{ControlDesc, PropValue, UiDocument};
@@ -437,10 +437,12 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
             let ready_host = host.clone();
             let event_host = host.clone();
             let initial = desc.text.clone();
+            let registry = gleam_registry();
             let editor = view! {
                 Editor(
                     text = initial,
                     language = language,
+                    registry = registry,
                     on_ready = Box::new(move |handle: EditorHandle| {
                         *ready_slot.borrow_mut() = Some(handle.clone());
                         ready_host.editors.borrow_mut().insert(id, handle);
@@ -494,4 +496,28 @@ fn options(model: RwSignal<Vec<PropValue>, LocalStorage>, class: &str) -> AnyVie
         column = column.child(view_row(item_text(&items, index)));
     }
     AnyView::new(column)
+}
+
+/// The application's language registry: the bundled set plus the Gleam
+/// grammar (tree-sitter-gleam exposes the ABI-stable `LanguageFn`, which
+/// tree-sitter 0.26 converts to its `Language`).
+fn gleam_registry() -> Option<LanguageRegistry> {
+    use std::sync::OnceLock;
+    static REGISTRY: OnceLock<Option<LanguageRegistry>> = OnceLock::new();
+    Some(
+        REGISTRY
+            .get_or_init(|| {
+                let registry = LanguageRegistry::new().with_bundled();
+                registry.register(LanguageConfig {
+                    name: "gleam".into(),
+                    language: tree_sitter::Language::from(tree_sitter_gleam::LANGUAGE),
+                    highlight_query: tree_sitter_gleam::HIGHLIGHT_QUERY.to_owned(),
+                    injections_query: None,
+                    extensions: vec!["gleam".into()],
+                });
+                Some(registry)
+            })
+            .clone()
+            .expect("the registry is always built"),
+    )
 }
