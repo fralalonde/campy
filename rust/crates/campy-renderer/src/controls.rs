@@ -24,6 +24,12 @@ use zgui_ui::prelude::*;
 
 use crate::wire::{ControlDesc, PropValue, UiDocument};
 
+/// A popup's row height, padding and width, in CSS pixels.
+const MENU_ROW: f64 = 26.0;
+const MENU_SEPARATOR: f64 = 9.0;
+const MENU_PAD: f64 = 4.0;
+const MENU_WIDTH: f64 = 260.0;
+
 /// The BEAM-facing event channel (session, generation, kind, payload).
 pub type EventSink = Arc<dyn Fn(u64, u64, String, String) + Send + Sync>;
 
@@ -54,6 +60,23 @@ pub struct Host {
     pub window: RefCell<Option<zgui::runtime::windows::WindowHandle>>,
     /// Whether the debug fullscreen request was made (`CAMPY_UI_FULLSCREEN`).
     pub fullscreen_done: Cell<bool>,
+    /// The menu whose popup is showing, by control id. One at a time: opening
+    /// another replaces it, and a press outside closes it. Plain state rather
+    /// than a signal: a host may be built outside any window scope (a deferred
+    /// load swaps one in from the drain), and a `new_local` signal made there
+    /// is disposed with that scope. `popup_tick` is the signal, and it is made
+    /// during the document build so it belongs to the window.
+    pub menu_open: Cell<Option<u64>>,
+    /// Bumped whenever `menu_open` changes; the popup redraws on it.
+    pub popup_tick: RefCell<Option<RwSignal<u64, LocalStorage>>>,
+    /// Absolute CSS rectangles of the document's controls, filled by each
+    /// build. A popup is drawn at the document root, so it has to know where
+    /// its trigger is on screen.
+    pub rects: RefCell<HashMap<u64, (f64, f64, f64, f64)>>,
+    /// The open popup's absolute rectangle, for the press-outside test.
+    pub popup_rect: Cell<Option<(f64, f64, f64, f64)>>,
+    /// Whether `CAMPY_UI_OPEN_MENU` has been honoured (one shot).
+    pub popup_debugged: Cell<bool>,
     /// The command-drain interval for this session's window. Re-created
     /// on every document rebuild: the reactive hole cleans the scope a
     /// run's timer lives in, so each run arms its own (the chain is
@@ -79,6 +102,11 @@ impl Host {
             live_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             window: RefCell::new(None),
             fullscreen_done: Cell::new(false),
+            menu_open: Cell::new(None),
+            popup_tick: RefCell::new(None),
+            rects: RefCell::new(HashMap::new()),
+            popup_rect: Cell::new(None),
+            popup_debugged: Cell::new(false),
             drain_timer: RefCell::new(None),
             control: RefCell::new(None),
         })
@@ -143,6 +171,41 @@ impl Host {
             self.session,
             self.live_generation.clone(),
         )
+    }
+
+    /// Tells the popup that `menu_open` moved.
+    fn bump_popup(&self) {
+        if let Some(tick) = self.popup_tick.borrow().as_ref() {
+            tick.update(|version| *version += 1);
+        }
+    }
+
+    /// Subscribes to the popup's version and answers it.
+    fn popup_version(&self) -> u64 {
+        self.popup_tick
+            .borrow()
+            .as_ref()
+            .map(|tick| tick.get())
+            .unwrap_or(0)
+    }
+
+    /// Opens or closes `menu`, replacing whatever was showing.
+    fn toggle_menu(&self, menu: u64) {
+        let showing = self.menu_open.get();
+        self.menu_open.set(if showing == Some(menu) {
+            None
+        } else {
+            Some(menu)
+        });
+        self.bump_popup();
+    }
+
+    /// Closes the popup, if one is showing.
+    fn close_menu(&self) {
+        if self.menu_open.get().is_some() {
+            self.menu_open.set(None);
+            self.bump_popup();
+        }
     }
 
     /// A control-scoped reply: `read:<id>:<key>`.
@@ -239,19 +302,41 @@ fn px(value: f64) -> String {
 /// Builds the whole window document: the themed root plus one wrapper per
 /// top-level control.
 pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
+    // The popup's signal belongs to this build (and so to the window), which is
+    // what keeps it alive across a window swap: the host itself may not be.
+    *host.popup_tick.borrow_mut() = Some(RwSignal::new_local(0_u64));
     host.controls.borrow_mut().clear();
+    host.rects.borrow_mut().clear();
+    for desc in &doc.controls {
+        collect_rects(desc, 0.0, 0.0, &mut host.rects.borrow_mut());
+    }
+    if !host.popup_debugged.get() {
+        host.popup_debugged.set(true);
+        // A validation run cannot click yet on every desktop; this opens the
+        // first menu so its popup can be screenshotted at startup.
+        if std::env::var_os("CAMPY_UI_OPEN_MENU").is_some()
+            && let Some(menu) = first_menu(&doc.controls)
+        {
+            host.menu_open.set(Some(menu));
+        }
+    }
     let children: Vec<AnyView> = doc
         .controls
         .iter()
         .map(|desc| AnyView::new(build_control(desc, host)))
         .collect();
+    let popup_host = host.clone();
     let key_host = host.clone();
+    let close_host = host.clone();
     let root = r#box()
         .class("campy-root")
         .class("campy-free")
         .on(events::KEY_DOWN, move |cx| {
             let event: &KeyEvent = cx;
             if let Some(combo) = key_combo(&event.key_without_modifiers, cx.modifiers) {
+                if pointer_log() {
+                    eprintln!("key {combo}");
+                }
                 key_host.emit_raw("key", combo);
             }
         })
@@ -260,8 +345,140 @@ pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
         } else {
             "campy-light"
         })
-        .children(children);
+        .on(events::POINTER_DOWN, move |cx| {
+            // A press outside the open popup closes it, the way a menu bar
+            // behaves everywhere. Inside, it is the row's own click.
+            let position: Point<CssPx, Css> = cx.position;
+            let inside = close_host.popup_rect.get().is_some_and(|(x, y, w, h)| {
+                let (px, py) = (position.x.0 as f64, position.y.0 as f64);
+                px >= x && px <= x + w && py >= y && py <= y + h
+            });
+            if !inside {
+                close_host.close_menu();
+            }
+        })
+        .children(children)
+        .child(move || menu_popup(&popup_host));
     AnyView::new(root)
+}
+
+/// Records each control's absolute rectangle: the popup is drawn at the root,
+/// so where its trigger sits cannot be read from the trigger itself.
+fn collect_rects(
+    desc: &ControlDesc,
+    origin_x: f64,
+    origin_y: f64,
+    into: &mut HashMap<u64, (f64, f64, f64, f64)>,
+) {
+    let x = origin_x + desc.x;
+    let y = origin_y + desc.y;
+    into.insert(desc.id, (x, y, desc.w, desc.h));
+    for child in &desc.children {
+        collect_rects(child, x, y, into);
+    }
+}
+
+/// Whether a model item is a separator, which the shell spells as an em dash.
+fn is_separator(label: &str) -> bool {
+    label.trim().is_empty() || label.trim() == "\u{2014}"
+}
+
+/// Splits a menu label from its shortcut: the model carries the old shell's
+/// item titles, `Save    Ctrl+S`, so the shortcut is whatever follows a run of
+/// two or more spaces.
+fn split_shortcut(label: &str) -> (String, String) {
+    let bytes = label.as_bytes();
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        if bytes[index] == b' ' && bytes[index + 1] == b' ' {
+            let name = label[..index].trim_end().to_owned();
+            let shortcut = label[index..].trim().to_owned();
+            return (name, shortcut);
+        }
+        index += 1;
+    }
+    (label.to_owned(), String::new())
+}
+
+/// The id of the first `menu` in the document (the validation knob's target).
+fn first_menu(controls: &[ControlDesc]) -> Option<u64> {
+    for desc in controls {
+        if desc.kind == "menu" {
+            return Some(desc.id);
+        }
+        if let Some(found) = first_menu(&desc.children) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// The open menu's popup, or nothing. One `control()` row per model item so a
+/// click emits the label the loop already routes by.
+fn menu_popup(host: &Rc<Host>) -> AnyView {
+    let _version = host.popup_version();
+    let Some(menu) = host.menu_open.get() else {
+        host.popup_rect.set(None);
+        return AnyView::new(r#box());
+    };
+    let Some(&(x, y, _, h)) = host.rects.borrow().get(&menu) else {
+        return AnyView::new(r#box());
+    };
+    let items = host
+        .controls
+        .borrow()
+        .get(&menu)
+        .map(|signals| signals.model.get())
+        .unwrap_or_default();
+    // Separators are a rule, not a row: counting them at row height leaves a
+    // band of empty panel under the last item.
+    let height = items
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let label = item_text(&items, index);
+            if is_separator(&label) {
+                MENU_SEPARATOR
+            } else {
+                MENU_ROW
+            }
+        })
+        .sum::<f64>()
+        + MENU_PAD * 2.0;
+    let width = MENU_WIDTH;
+    host.popup_rect.set(Some((x, y + h, width, height)));
+    let mut card = r#box()
+        .class("campy-menu-popup")
+        .style_property("left", Some(px(x)))
+        .style_property("top", Some(px(y + h + 2.0)))
+        .style_property("width", Some(px(width)))
+        .style_property("height", Some(px(height)));
+    for (index, _) in items.iter().enumerate() {
+        let label = item_text(&items, index);
+        if is_separator(&label) {
+            card = card.child(r#box().class("campy-menu-separator"));
+            continue;
+        }
+        let row_host = host.clone();
+        let click_label = label.clone();
+        let (name, shortcut) = split_shortcut(&label);
+        card = card.child(
+            zgui::elements::control()
+                .class("campy-menu-item")
+                .tabindex(Focus::Sequential)
+                .on(events::CLICK, move |_| {
+                    row_host.close_menu();
+                    row_host.emit(menu, "selected", click_label.clone());
+                })
+                .child(
+                    r#box()
+                        .class("campy-menu-line")
+                        .child(text().child(name))
+                        .child(text().class("campy-menu-shortcut").child(shortcut)),
+                ),
+        );
+    }
+    AnyView::new(card)
 }
 
 /// One control: a positioned wrapper carrying geometry/enabled/visible,
@@ -421,13 +638,33 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         // surface input; zgui-ui components get their own live-window A/B
         // in Z2.2 (their own tests dispatch through the component testkit,
         // not the platform).
-        "button" | "menu" => AnyView::new(
+        "button" => AnyView::new(
             zgui::elements::control()
                 .class("campy-widget-button")
                 .tabindex(Focus::Sequential)
                 .on(events::CLICK, move |_| host.emit(id, "clicked", ""))
                 .child(move || text.get()),
         ),
+
+        // A menu shows its `model` as a popup rather than emitting `clicked`:
+        // the loop routes `control:<id>:selected` with the item label, which is
+        // how File/Edit/Settings reach the actions the old shell had.
+        "menu" => {
+            let open = host.clone();
+            let is_open = host.clone();
+            AnyView::new(
+                zgui::elements::control()
+                    .class("campy-widget-button")
+                    .class("campy-menu-trigger")
+                    .class_toggle(ClassName::new("campy-menu-on"), move || {
+                        let _version = is_open.popup_version();
+                        is_open.menu_open.get() == Some(id)
+                    })
+                    .tabindex(Focus::Sequential)
+                    .on(events::CLICK, move |_| open.toggle_menu(id))
+                    .child(move || text.get()),
+            )
+        }
 
         "edit" => {
             let placeholder = prop_string(desc, "placeholder").unwrap_or_default();
@@ -807,4 +1044,35 @@ fn pointer_payload(
     }
     let mods = mods.trim_end_matches('+');
     format!("{};{};{button};{mods}", position.x.0, position.y.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_separator, split_shortcut};
+
+    #[test]
+    fn a_menu_label_splits_from_its_shortcut() {
+        // The model carries the old shell's item titles verbatim.
+        assert_eq!(
+            split_shortcut("Save    Ctrl+S"),
+            ("Save".to_owned(), "Ctrl+S".to_owned())
+        );
+        assert_eq!(
+            split_shortcut("Save As    Ctrl+Shift+S"),
+            ("Save As".to_owned(), "Ctrl+Shift+S".to_owned())
+        );
+        // One space is part of the name: "Bring to front" has no shortcut.
+        assert_eq!(
+            split_shortcut("Bring to front"),
+            ("Bring to front".to_owned(), String::new())
+        );
+    }
+
+    #[test]
+    fn a_separator_is_an_em_dash_or_nothing() {
+        assert!(is_separator("—"));
+        assert!(is_separator(""));
+        assert!(is_separator("   "));
+        assert!(!is_separator("Quit    Ctrl+Q"));
+    }
 }

@@ -568,10 +568,14 @@ gaps 1, 3, 4, 5 are CLOSED — reliable Reload for every session (per-run
 drain timers, deferred-session window swaps, build-race stalls),
 `list` rows emit `selected` with the row text, and the pointer payload
 carries `x;y;button;mods` (right-click and ctrl-click). The IDE loop's
-list/right-click routing was already in place from Z2.3. Still open for
-G1/Wave 4: gap 2 (`menu` popups need zgui-ui's DropdownMenu+Menu
-children convention; keyboard mitigations hold), gaps 6/7 (hover,
-console-goto), and Z4.1 (smoke-native PNG removal).
+list/right-click routing was already in place from Z2.3. Gap 2 is
+now CLOSED: a `menu` renders its `model` as a popup of base `control()`
+rows at the document root (positioned from the trigger's absolute
+rectangle, one `selected` event per item with the label the loop already
+routes), which reaches File/Edit/Settings without depending on zgui-ui's
+DropdownMenu — whose input path is still the unverified one. Still open
+for G1/Wave 4: gaps 6/7 (hover, console-goto) and Z4.1 (smoke-native
+PNG removal).
 
 **Visual pass (live window, first look):** the shell now renders as a
 dark IDE rather than a wall of blue buttons. Four causes, all fixed:

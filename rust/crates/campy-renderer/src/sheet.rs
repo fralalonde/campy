@@ -122,6 +122,20 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-list-active { background: var(--campy-accent-soft); color: var(--campy-text);
                           font-weight: 600; }",
     ".campy-option { display: flex; align-items: center; padding: 0 10px; }",
+    // --- menu popup ---------------------------------------------------------
+    ".campy-menu-popup { position: absolute; background: var(--campy-panel);
+                         border: 1px solid var(--campy-border); border-radius: 8px;
+                         padding: 4px; }",
+    ".campy-menu-item { display: flex; align-items: center; width: 100%; height: 26px;
+                        padding: 0 10px; border-radius: 5px; font-size: 13px;
+                        color: var(--campy-text); }",
+    ".campy-menu-item:hover { background: var(--campy-accent-soft); }",
+    ".campy-menu-line { display: flex; justify-content: space-between;
+                        align-items: center; width: 100%; }",
+    ".campy-menu-shortcut { color: var(--campy-muted); font-size: 12px; }",
+    ".campy-menu-on { background: var(--campy-hover); }",
+    ".campy-menu-separator { height: 1px; margin: 4px 6px; background: var(--campy-border); }",
+    ".campy-menu-trigger { font-weight: 500; }",
     // --- module tabs --------------------------------------------------------
     ".campy-tab-strip { background: var(--campy-panel);
                         border-bottom: 1px solid var(--campy-border); }",

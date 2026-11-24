@@ -72,6 +72,26 @@ fn form() -> UiDocument {
                 children: vec![],
             },
             ControlDesc {
+                id: 4,
+                kind: "menu".into(),
+                text: "File".into(),
+                x: 400.0,
+                y: 16.0,
+                w: 90.0,
+                h: 32.0,
+                enabled: true,
+                visible: true,
+                props: vec![(
+                    "model".into(),
+                    PropValue::List(vec![
+                        PropValue::Text("Save    Ctrl+S".into()),
+                        PropValue::Text("—".into()),
+                        PropValue::Text("Quit    Ctrl+Q".into()),
+                    ]),
+                )],
+                children: vec![],
+            },
+            ControlDesc {
                 id: 3,
                 kind: "edit".into(),
                 text: "seed".into(),
@@ -182,6 +202,22 @@ fn loads_updates_clicks_reads_and_rejects() {
         clicks,
         vec!["control:2:clicked ".to_owned()],
         "the button handler fired"
+    );
+
+    // A menu opens its model as a popup and emits the chosen label: the loop
+    // routes `selected` by the old item titles, shortcuts included.
+    testing::test_pointer("click", 445.0, 32.0).expect("the menu trigger is clicked");
+    testing::test_pump(32).expect("a pump is enqueued");
+    std::thread::sleep(Duration::from_millis(80));
+    // The popup sits under the trigger: 4px of padding, then 26px rows, so the
+    // first item's middle is 17px below the popup's top edge.
+    testing::test_pointer("click", 500.0, 67.0).expect("the first item is clicked");
+    testing::test_pump(32).expect("a pump is enqueued");
+    wait_for(&sink, 1, "control:4:selected");
+    assert_eq!(
+        events_of(&sink, "control:4:"),
+        vec!["control:4:selected Save    Ctrl+S".to_owned()],
+        "the menu emitted the item's label"
     );
 
     // Stale generations are rejected; the UI keeps running.

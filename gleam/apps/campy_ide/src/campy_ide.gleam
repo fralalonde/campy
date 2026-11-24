@@ -23,6 +23,9 @@ import gleam/string
 @external(erlang, "campy_host_ffi", "headless_enabled")
 fn headless_enabled() -> Bool
 
+@external(erlang, "campy_host_ffi", "debug_view")
+fn debug_view_env() -> String
+
 @external(erlang, "campy_host_ffi", "now_ms")
 fn now_ms() -> Int
 
@@ -63,7 +66,7 @@ pub fn main() {
 fn native_main() {
   let assert 2 = bridge.protocol_version()
   let #(workspace, note) = open_workspace()
-  let model = state.initial_workspace(workspace)
+  let model = state.initial_workspace(workspace) |> debug_view()
   let model = case note {
     "" -> model
     text -> state.log_console(model, text) |> state.set_status(text)
@@ -106,6 +109,20 @@ fn new_workspace() -> workspace.Workspace {
   let ws = workspace.new(default)
   let _ = workspace.save(ws)
   ws
+}
+
+/// `CAMPY_UI_DEBUG_VIEW=settings|agent|project|events|code` opens one of the
+/// states a manual pass would otherwise have to click into, so a validation run
+/// can screenshot startup: a debugging aid, not a feature.
+fn debug_view(model: State) -> State {
+  case debug_view_env() {
+    "settings" -> state.set_settings_open(model, True)
+
+    "code" -> state.set_view(model, state.CodeView)
+    "select" -> state.select(model, "pet-button")
+    "events" -> state.set_tab(state.select(model, "pet-button"), state.Events)
+    _ -> model
+  }
 }
 
 fn load_workspace() -> workspace.Workspace {
