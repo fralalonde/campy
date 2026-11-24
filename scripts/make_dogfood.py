@@ -53,16 +53,24 @@ Write = fun(Path, Term) ->
 end,
 Write(@PROJECT@, Project),
 Write(@FIXTURE@, Project),
-Workspace = case file:read_file(@WORKSPACE@) of
-  {ok, Binary} ->
-    case binary_to_term(Binary, [safe]) of
-      {workspace, 1, Loaded, LoadedActive, LoadedPath} when is_list(Loaded) ->
-        {workspace, 1, Loaded, LoadedActive, LoadedPath};
-      _ ->
-        io:format(standard_error, "Unsupported workspace format~n", []),
-        halt(1)
-    end;
-  {error, enoent} ->
+Workspace = case campy_form_ffi:load_workspace(@WORKSPACE@) of
+  {ok, {workspace, 1, Loaded, LoadedActive, LoadedPath}} ->
+    {workspace, 1, Loaded, LoadedActive, LoadedPath};
+  {error, <<"Workspace file not found">>} ->
+    {workspace, 1, [], <<>>, @WORKSPACE@};
+  {error, LoadReason} ->
+    %% A stale or unreadable workspace is not ours to fail on: the codec
+    %% has no upgrade chain (v12, PHASE2), so the IDE starts fresh and
+    %% this builder does the same, after preserving the old file once.
+    %% (Distinct name: erl_eval flags two top-level case-bound `Reason`s
+    %% in one -eval sequence.)
+    Note = io_lib:format("Fresh workspace (~s; old file kept as .bak)", [LoadReason]),
+    Path = @WORKSPACE@,
+    case file:read_file(Path) of
+      {ok, _} -> file:copy(Path, <<Path/binary, ".bak">>);
+      _ -> ok
+    end,
+    io:format("~s~n", [Note]),
     {workspace, 1, [], <<>>, @WORKSPACE@}
 end,
 {workspace, 1, Existing, Active, WPath} = Workspace,
