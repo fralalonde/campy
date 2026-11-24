@@ -46,6 +46,10 @@ dev: build
 build-app module="widgets": build-gleam
     python scripts/workspace.py build-app {{module}}
 
+# Write projects/campy-dev.campy: campy's own sources as external modules.
+dogfood:
+    python scripts/make_dogfood.py
+
 # Generate the current search-box UI without hand-editing Slint.
 generate: build
     python scripts/workspace.py generate
