@@ -298,7 +298,10 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
             if desc.kind == "surface" {
                 // The designer surface: engine-computed grid + raw pointer
                 // phases forwarded to the BEAM (which hit-tests from the
-                // form model). Positions are window CSS pixels.
+                // form model). Payload: `x;y;button;mods` — button is
+                // left/right/middle on presses and releases, none on
+                // moves; mods is a `+`-joined modifier list (none when
+                // empty). Positions are window CSS pixels.
                 let down_host = host.clone();
                 let move_host = host.clone();
                 let up_host = host.clone();
@@ -307,23 +310,27 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
                 wrapper = wrapper
                     .on(events::POINTER_DOWN, move |cx| {
                         let position: Point<CssPx, Css> = cx.position;
+                        let event: &zgui::vocab::PointerEvent = cx;
+                        let button = event.button;
                         down_host.emit_raw(
                             &format!("pointer:{surface_id}:down"),
-                            format!("{};{}", position.x.0, position.y.0),
+                            pointer_payload(position, button, cx.modifiers),
                         );
                     })
                     .on(events::POINTER_MOVE, move |cx| {
                         let position: Point<CssPx, Css> = cx.position;
                         move_host.emit_raw(
                             &format!("pointer:{surface_id}:move"),
-                            format!("{};{}", position.x.0, position.y.0),
+                            pointer_payload(position, None, cx.modifiers),
                         );
                     })
                     .on(events::POINTER_UP, move |cx| {
                         let position: Point<CssPx, Css> = cx.position;
+                        let event: &zgui::vocab::PointerEvent = cx;
+                        let button = event.button;
                         up_host.emit_raw(
                             &format!("pointer:{surface_id}:up"),
-                            format!("{};{}", position.x.0, position.y.0),
+                            pointer_payload(position, button, cx.modifiers),
                         );
                     })
                     .on(events::WHEEL, move |cx| {
@@ -422,13 +429,27 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
 
         "list" => {
             let model = signals.model.clone();
+            let list_host = host.clone();
             AnyView::new(view! {
                 VirtualList(
                     count = Signal::derive_local(move || model.get().len()),
                     row_size = 24.0,
                     row = move |index: usize| {
                         let items = model.get();
-                        view_row(item_text(&items, index))
+                        let label = item_text(&items, index);
+                        let row_host = list_host.clone();
+                        let click_label = label.clone();
+                        zgui::elements::control()
+                            .class("campy-list-row")
+                            .tabindex(Focus::Sequential)
+                            .on(
+                                events::CLICK,
+                                move |_| {
+                                    let label = click_label.clone();
+                                    row_host.emit(id, "selected", label)
+                                },
+                            )
+                            .child(label)
                     },
                 )
             })
@@ -686,4 +707,33 @@ fn forwardable_named(name: &str) -> bool {
             | "arrowleft"
             | "arrowright"
     ) || (name.len() <= 3 && name.starts_with('f') && name[1..].chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The pointer payload: `x;y;button;mods` (gaps 4 and 5: the designer's
+/// right-click context menu and modifier-gestures ride the extra fields;
+/// `x;y` alone remains valid for older parsers).
+fn pointer_payload(
+    position: Point<CssPx, Css>,
+    button: Option<zgui::vocab::PointerButton>,
+    modifiers: zgui::vocab::Modifiers,
+) -> String {
+    let button = button
+        .map(|button| match button {
+            zgui::vocab::PointerButton::Secondary => "right",
+            zgui::vocab::PointerButton::Middle => "middle",
+            _ => "left",
+        })
+        .unwrap_or("none");
+    let mut mods = String::new();
+    if modifiers.control() {
+        mods.push_str("ctrl+");
+    }
+    if modifiers.shift() {
+        mods.push_str("shift+");
+    }
+    if modifiers.alt() {
+        mods.push_str("alt+");
+    }
+    let mods = mods.trim_end_matches('+');
+    format!("{};{};{button};{mods}", position.x.0, position.y.0)
 }
