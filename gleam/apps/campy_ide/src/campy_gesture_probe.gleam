@@ -68,7 +68,10 @@ fn press_point(
 
 pub fn main() {
   let model = state.initial(project.campy())
-  let assert Ok(source) = ide_ui.to_slint(model)
+  // Z2.2 compile shim: the IDE shell is a `ControlDesc` document now, so there
+  // is no Slint source to hand the ui-testing FFI. Z2.3 rewrites this probe for
+  // pointer-only surfaces; until then it still builds and starts.
+  let source = ""
   let snapshot = ide_ui.snapshot(model)
   // A large, unselected, free-layout control to start every gesture on.
   let assert [target, ..] = list.filter(snapshot.controls, free_surface)

@@ -1,16 +1,180 @@
-// The static Slint shell of the IDE: one interpreted component per structure,
-// emitted once at startup (and on F6 reloads). `ide_ui` owns the data model
-// (snapshots, scalar diffing, wire values); this module only generates source,
-// parameterized by the window title and the baked-in scalar declarations.
+//// The IDE shell, protocol v2: one `ControlDesc` document built from a
+//// `ShellView` (the IDE's display state, produced by `campy_ide/ide_ui`).
+////
+//// `desc(view)` is the whole window: the LoadUi document (`ide_ui.load_commands`)
+//// and, through the generic tree diff in `ide_ui`, the source of every granular
+//// op. The document is loaded once; ordinary edits are `SetText`/`SetBool`/
+//// `SetInt`/`SetModel`/`SetGeometry`/`SetCode`/`AppendConsole`/`SetMarks` ops.
+////
+//// # Ids
+////
+//// Every control id is `campy_form.wire_id(<name>)` (the same 31-bit hash the
+//// designed forms use), never a hand-rolled table. `campy_form.window_id` (0)
+//// is the window root. Name ↔ id glossary (derive with `campy_form.wire_id`):
+////
+//// | name | kind | role |
+//// | --- | --- | --- |
+//// | `ide-root` (id 0) | panel | window root (fixed 1280×860 shell) |
+//// | `menu-bar` | panel (row) | File/Edit/Settings menus, palette, Run/Stop |
+//// | `menu-file`, `menu-edit`, `menu-settings` | menu | popup menus; `model` = item labels; emits `selected` with the label |
+//// | `palette` | panel (row) | CCL palette tiles |
+//// | `tile:<kind>` | button | one per `campy_ccl.all()` entry; emits `clicked` |
+//// | `run`, `stop` | button | Run/Stop (`enabled` follows the preview) |
+//// | `menu-rule` | panel | 1px rule under the menu bar |
+//// | `nav` | panel | navigator column |
+//// | `nav-projects-title`, `nav-modules-title` | label | section titles |
+//// | `project-add`, `project-delete` | button | project dialog / remove project |
+//// | `projects-nav` | list | project rows (`SetModel` of `{text,id,active}`); emits `selected` with the title |
+//// | `nav-rule` | panel | 1px rule between the two navigator lists |
+//// | `module-add` | button | new module |
+//// | `modules-nav` | list | module rows (`SetModel` of `{text,id,active}`); emits `selected` with the name |
+//// | `module-tabs` | list | open tabs (`SetModel` of `{text,id,active}`); emits `selected` with the name |
+//// | `tab-close` | button | close the active tab |
+//// | `canvas` | surface | designer canvas; `pointer:canvas:down/move/up/wheel` |
+//// | `canvas-title` | label | form title bar (`SetText`) |
+//// | `canvas-form` | panel | the form root (from `live_preview.to_controls`, re-keyed); its children are the designed controls at their wire ids |
+//// | `selection-rect` | panel | selection outline (`SetGeometry`, `SetBool visible`) |
+//// | `marquee-rect` | panel | marquee outline (`SetGeometry`, `SetBool visible`) |
+//// | `view-toggle` | button | form/code switch (glyph flips with `SetText`) |
+//// | `canvas-rule` | panel | 1px rule above the Form/Raw tabs |
+//// | `form-tab`, `raw-tab` | button | bottom tabs of the form editor |
+//// | `raw-view` | memo | read-only source pane of the Raw tab (`SetCode`) |
+//// | `code-title`, `code-handler` | label | handler header |
+//// | `code-view` | code_editor | handler source (`SetCode`, `editor:<id>:changed`) |
+//// | `completions` | list | completion popup (`SetModel`, positioned by `SetGeometry`) |
+//// | `console-pane` | panel | console pane |
+//// | `console-title`, `console-state` | label | title + running/stopped (`SetText`) |
+//// | `console-clear` | button | clear |
+//// | `console` | console | `AppendConsole` feed; input → `console:console:input` |
+//// | `right-pane` | panel | inspector column |
+//// | `insp-tab-properties`, `insp-tab-events` | button | inspector tabs |
+//// | `insp-rule` | panel | 1px rule |
+//// | `insp-selection` | label | selection label (`SetText`) |
+//// | `insp-delete` | button | delete selection (visible with a selection) |
+//// | `project-panel` | panel | project properties (visible when the project is selected) |
+//// | `project-icon` | picture | project icon |
+//// | `project-icon-glyph` | label | icon placeholder |
+//// | `project-icon-choose`, `project-icon-clear` | button | icon actions |
+//// | `project-title-label`, `project-path-label` | label | field labels |
+//// | `project-title` | edit | project title (`edited`) |
+//// | `project-path` | label | project path (`SetText`) |
+//// | `inspector` | panel | property rows (visible on the Properties tab) |
+//// | `insp:<key>:label` | label | row label |
+//// | `insp:<key>` | edit/checkbox/combo/button | one row per property key (see below) |
+//// | `inspector-events` | panel | event rows (visible on the Events tab) |
+//// | `insp:<event>` | button | one row per event key; emits `clicked` |
+//// | `status-bar` | panel | status line |
+//// | `status`, `status-path` | label | status text / project path (`SetText`) |
+//// | `settings-panel` | panel (hidden) | Editor settings dialog |
+//// | `settings-title`, `settings-font-label`, `settings-size-label`, `settings-scheme-label` | label | dialog text |
+//// | `settings-font`, `settings-size`, `settings-scheme` | combo | settings choices (`selected`) |
+//// | `settings-hints` | checkbox | UI hints (`toggled`) |
+//// | `settings-close` | button | close |
+//// | `agent-panel` | panel (hidden) | Agent settings dialog |
+//// | `agent-title`, `agent-port-label`, `agent-status`, `agent-endpoint`, `agent-note` | label | dialog text |
+//// | `agent-mcp` | checkbox | enable MCP (`toggled`) |
+//// | `agent-port` | edit | port (`edited`) |
+//// | `agent-close` | button | close |
+//// | `project-dialog` | panel (hidden) | project dialog |
+//// | `project-dialog-title`, `project-dialog-body` | label | dialog text |
+//// | `project-new`, `project-open`, `project-dialog-cancel` | button | actions |
+//// | `browser-panel` | panel (hidden) | in-app file browser |
+//// | `browser-title`, `browser-dir` | label | title / directory (`SetText`) |
+//// | `browser-home`, `browser-new-dir`, `browser-up` | button | navigation |
+//// | `browser-entries` | list | entries (`SetModel`); emits `selected` with the entry name |
+//// | `browser-name-label` | label | field label |
+//// | `browser-name` | edit | entry name (`edited`) |
+//// | `browser-accept`, `browser-cancel` | button | confirm / cancel |
+//// | `context-menu` | panel (hidden) | canvas context menu |
+//// | `ctx-cut`, `ctx-copy`, `ctx-paste`, `ctx-delete`, `ctx-align` | button | actions |
+//// | `align-menu` | panel (hidden) | align submenu |
+//// | `align-left`, `align-right`, `align-center`, `align-top`, `align-bottom`, `align-middle` | button | align actions |
+//// | `nav-context` | panel (hidden) | navigator context menu |
+//// | `nav-ctx-remove`, `nav-ctx-open`, `nav-ctx-delete`, `nav-ctx-close-tab` | button | actions |
+////
+//// # Events
+////
+//// Buttons emit `control:<id>:clicked`; menus/lists/combos emit
+//// `control:<id>:selected` with the selected *text*; inspector edit rows emit
+//// `edited` with the typed value; checkbox rows emit `toggled` with
+//// `"true"`/`"false"`; the console emits `console:<id>:input`; the code editor
+//// emits `editor:<id>:changed`; the canvas emits `pointer:<id>:<phase>`.
+//// Payloads are values only: the loop derives the action from the section id
+//// (and, for menus, from the selected label — the labels below are the old
+//// shell's item titles verbatim, shortcuts included). Menu items are *not*
+//// individual controls: the `menu` kind carries them as its `model` (a
+//// delimiter-free list of labels), so the selected label is the payload.
+//// Separator rows are the em-dash label `—`.
+////
+//// # Inspector rows
+////
+//// Rows are a *static pool* (one control per key, ids `insp:<key>`), so a
+//// selection change never reloads the document: the diff shows/hides rows and
+//// moves them with `SetGeometry`. `prop_keys()`/`event_keys()` enumerate the
+//// pool (fixed IDE keys + every `campy_ccl` schema key). Row kind per key:
+//// `edit` (Text/Number keys, `edited`), `checkbox` (Bool keys, `toggled`),
+//// `combo` (align/layout/color, `selected`), `button` (picture open + event
+//// rows, `clicked`). The universal CCL `text` row routes to the same editor as
+//// the text field (Z1.1 note): it is `insp:text`, an `edit`.
+////
+//// # Mapping notes (old shell → v2)
+////
+//// - Hover tooltips and palette status-line hints have no protocol event
+////   (there is no hover kind), so hint texts ride as static `hint` props and
+////   the status line still exists for `SetText`. Keyboard bindings (Ctrl+Z/Y,
+////   Ctrl+C/X/V, Delete, Ctrl+N/Shift+N/O/S/Shift+S/Q, F5/F6/F7, Shift+F5,
+////   Ctrl+Tab, Ctrl+Space, Escape — unchanged) have no wire channel either;
+////   they need a renderer-side key path (reported as the Z2.3 gap).
+//// - The old tab strip had a per-tab × control. A model-driven `list` cannot
+////   spawn per-row buttons, so tabs are `module-tabs` (select) plus
+////   `tab-close` (close the active tab); the navigator context menu keeps its
+////   "Close tab" item as well.
+//// - Adding/removing a designed control changes the canvas subtree, which no
+////   granular op can express: the tree diff reports a structural change and
+////   `ide_ui` answers with a fresh LoadUi (the same path F6 uses). Ordinary
+////   edits stay granular.
+//// - The old "Raw" tab rendered generated Slint source; protocol v2 has no
+////   source generation, so `raw-view` shows the active module's source
+////   read-only.
+//// - The old console was a log list plus a Send field; the v2 `console` kind is
+////   a terminal that feeds input itself (`console:console:input`), so the
+////   separate input row is gone.
+//// - A `ControlDesc` carries no class field (the renderer derives one class per
+////   kind), so every control also carries a static `class` prop naming its
+////   styling role for the renderer's CSS pass (ignored by the current host).
+//// - The shell's absolute layout is the old fixed chrome at 1280×860; panels do
+////   not stretch when the window is enlarged (no responsive geometry op).
+//// - The designer chrome is canvas content, not controls: `selection-rect` is
+////   the union box of the selection, `marquee-rect` is moved by `SetGeometry`
+////   during a drag, and the eight resize handles are drawn by the canvas gesture
+////   layer (they were per-control Slint children, which a surface cannot host).
+////   The completion popup is a `list` whose position `ide_ui`/Z2.3 sets with
+////   `SetGeometry` (the caret lives in the editor, not in this view).
+//// - Right-click on a navigator row (`nav-context`) needs a pointer event on a
+////   `list` row; §1.4 only defines `selected` for lists, so the menu can render
+////   but has no wire trigger yet (protocol gap, same family as hover/keys).
+//// - The canvas drop highlight (`drop-candidate`) and the pending palette tile
+////   were class/background switches; protocol v2 has no class op, so they are
+////   not drawn (the placement rectangle is the marquee rect meanwhile).
+
+import campy_bridge.{
+  type ControlDesc, type WireValue, ControlDesc, WireBool, WireImage, WireInt,
+  WireList, WireStruct, WireText,
+}
 import campy_ccl
-import campy_form/preview.{quote}
+import campy_form
 import gleam/int
 import gleam/list
-import gleam/string
+import gleam/option.{type Option, None, Some}
+import gleam/result
 
-// Font and size choices offered by the settings dialog's combo boxes. Public:
-// the snapshot layer maps the current font onto the same lists to compute the
-// combo indices, so the scalar and the rendered model can never disagree.
+/// Fixed shell size (LoadUi width/height).
+pub const window_width = 1280
+
+pub const window_height = 860
+
+/// Font and size choices offered by the settings dialog (public: `ide_ui` maps
+/// the current font/size onto the same lists, so value and model agree).
 pub const fonts = [
   "monospace", "DejaVu Sans Mono", "Liberation Mono", "Courier New",
   "Noto Sans Mono",
@@ -18,1610 +182,1275 @@ pub const fonts = [
 
 pub const sizes = ["11", "12", "13", "14", "16", "18", "20"]
 
-fn string_list(items: List(String)) -> String {
-  "[" <> string.join(list.map(items, quote), ", ") <> "]"
+pub const schemes = ["Dark", "Light", "Solarized"]
+
+pub const color_options = [
+  "Default", "#e06c75", "#e5a55d", "#e5c07b", "#98c379", "#56b6c2", "#61afef",
+  "#c678dd", "#f5f5f5",
+]
+
+pub const align_options = [
+  "Free", "Top", "Bottom", "Left", "Right", "Client", "Fill",
+]
+
+pub const layout_options = ["Free", "Column", "Row"]
+
+// ---------------------------------------------------------------------------
+// View data (what the shell displays; built by `ide_ui.snapshot`)
+// ---------------------------------------------------------------------------
+
+pub type ProjectItem {
+  ProjectItem(id: String, title: String, active: Bool, icon: String)
 }
 
-pub fn source(title: String, declarations: String) -> String {
-  "import { Button, CheckBox, ComboBox, LineEdit, ListView, Palette, ProgressIndicator, ScrollView, Slider, TextEdit } from \"std-widgets.slint\";\n"
-  <> structs()
-  <> components()
-  <> "export component CampyPreview inherits Window {\n"
-  <> "  title: "
-  <> quote("Campy IDE — " <> title)
-  <> ";\n"
-  <> "  preferred-width: 1280px;\n"
-  <> "  preferred-height: 860px;\n"
-  <> "  min-width: 960px;\n"
-  <> "  min-height: 640px;\n"
-  <> "  in-out property <[ProjectItem]> project-items: [];\n"
-  <> "  in-out property <[ModuleItem]> module-items: [];\n"
-  <> "  in-out property <[TabItem]> tab-items: [];\n"
-  <> "  in-out property <[ControlItem]> control-items: [];\n"
-  <> "  in-out property <[CodeLine]> code-lines: [];\n"
-  <> "  in-out property <string> code-text: \"\";\n"
-  <> "  in-out property <[CompletionItem]> completion-items: [];\n"
-  <> "  in-out property <[BrowserItem]> browser-items: [];\n"
-  <> "  in-out property <[string]> console-lines: [];\n"
-  <> "  in-out property <length> nav-context-x: 0px;\n"
-  <> "  in-out property <length> nav-context-y: 0px;\n"
-  <> "  in-out property <[DiagItem]> diag-items: [];\n"
-  <> "  in-out property <[PropItem]> prop-items: [];\n"
-  <> "  in-out property <[PropItem]> event-items: [];\n"
-  <> "  in-out property <[PaletteItem]> palette-items: "
-  <> palette_literal()
-  <> ";\n"
-  <> "  in-out property <bool> ctrl-down: false;\n"
-  <> "  in-out property <string> palette-hint: \"\";\n"
-  <> "  in-out property <bool> marquee-active: false;\n"
-  <> "  in-out property <length> marquee-x: 0px;\n"
-  <> "  in-out property <length> marquee-y: 0px;\n"
-  <> "  in-out property <length> marquee-w: 0px;\n"
-  <> "  in-out property <length> marquee-h: 0px;\n"
-  <> "  in-out property <bool> live-drag-active: false;\n"
-  <> "  in-out property <string> live-drag-id: \"\";\n"
-  <> "  in-out property <bool> live-drag-multi: false;\n"
-  <> "  in-out property <length> live-drag-offset-x: 0px;\n"
-  <> "  in-out property <length> live-drag-offset-y: 0px;\n"
-  <> "  in-out property <bool> place-active: false;\n"
-  <> "  in-out property <length> place-x: 0px;\n"
-  <> "  in-out property <length> place-y: 0px;\n"
-  <> "  in-out property <length> place-w: 0px;\n"
-  <> "  in-out property <length> place-h: 0px;\n"
-  <> "  in-out property <length> win-drag-x: 0px;\n"
-  <> "  in-out property <length> win-drag-y: 0px;\n"
-  <> "  in-out property <bool> win-moving: false;\n"
-  <> "  in-out property <length> win-resize-dw: 0px;\n"
-  <> "  in-out property <length> win-resize-dh: 0px;\n"
-  <> "  in-out property <bool> win-resizing: false;\n"
-  <> declarations
-  <> "  init => { Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light; }\n"
-  <> "  changed dark-mode => { Palette.color-scheme = dark-mode ? ColorScheme.dark : ColorScheme.light; }\n"
-  <> callbacks()
-  <> "  forward-focus: key-handler;\n"
-  <> "  key-handler := FocusScope {\n"
-  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
-  <> keybindings()
-  <> "    key-pressed(event) => {\n"
-  <> "      if (event.text == Key.Control) { root.ctrl-down = true; }\n"
-  <> "      if (root.completions-open) {\n"
-  <> "        if (event.text == Key.UpArrow) { root.completion-move(-1); return accept; }\n"
-  <> "        if (event.text == Key.DownArrow) { root.completion-move(1); return accept; }\n"
-  <> "        if (event.text == Key.Return) { root.completion-accept(\"\"); return accept; }\n"
-  <> "        if (event.text == Key.Tab) { root.completion-accept(\"\"); return accept; }\n"
-  <> "        if (event.text == Key.Escape) { root.completion-close(); return accept; }\n"
-  <> "      }\n"
-  <> "      reject\n"
-  <> "    }\n"
-  <> "    key-released(event) => {\n"
-  <> "      if (event.text == Key.Control) { root.ctrl-down = false; }\n"
-  <> "      reject\n"
-  <> "    }\n"
-  <> "    Rectangle { width: 100%; height: 100%; background: root.theme-bg; }\n"
-  <> "    VerticalLayout { width: 100%; height: 100%; spacing: 0px;\n"
-  <> menu_bar()
-  <> main_area()
-  <> "      Rectangle { height: 1px; background: theme-border; }\n"
-  <> status_bar()
-  <> "\n    }\n"
-  <> settings_overlay()
-  <> agent_overlay()
-  <> project_dialog_overlay()
-  <> popup_overlay()
-  <> nav_context_overlay()
-  <> palette_hint_overlay()
-  <> "  }\n"
-  <> "}\n"
+pub type ModuleItem {
+  ModuleItem(id: String, name: String, active: Bool)
 }
 
-fn structs() -> String {
-  "struct ProjectItem { id: string, title: string, active: bool, icon: image, has-icon: bool }\n"
-  <> "struct ModuleItem { id: string, name: string, active: bool }\n"
-  <> "struct TabItem { id: string, name: string, active: bool }\n"
-  <> "struct ControlItem { id: string, kind: string, text: string, x: length, y: length, w: length, h: length, enabled: bool, visible: bool, selected: bool, primary: bool, picture: image, value: float, transparency: float, arranged: bool, checked: bool, placeholder: string, read-only: bool, minimum: float, maximum: float, current-index: int, items: [string] }\n"
-  <> "struct PaletteItem { kind: string, icon: string, label: string }\n"
-  <> "struct CodeToken { text: string, kind: string, start: int }\n"
-  <> "struct CodeLine { index: int, tokens: [CodeToken] }\n"
-  <> "struct PropItem { key: string, label: string, kind: string, value: string, checked: bool, index: int, options: [string], hint: string }\n"
-  <> "struct CompletionItem { label: string, detail: string, insert: string }\n"
-  <> "struct DiagItem { line: int, severity: int, message: string }\n"
-  <> "struct BrowserItem { name: string, is-dir: bool }\n"
-  <> "struct ColorItem { label: string, color: color }\n"
+pub type TabItem {
+  TabItem(id: String, name: String, active: Bool)
 }
 
-fn components() -> String {
-  "component DottedFrame inherits Rectangle {\n"
-  <> "  in property <color> dot-color: #0078d4;\n"
-  <> "  for i in "
-  <> dot_range()
-  <> ": Rectangle { x: (parent.width - 2px) * i / 24; y: 0; width: 2px; height: 2px; background: dot-color; }\n"
-  <> "  for i in "
-  <> dot_range()
-  <> ": Rectangle { x: (parent.width - 2px) * i / 24; y: parent.height - 2px; width: 2px; height: 2px; background: dot-color; }\n"
-  <> "  for i in "
-  <> dot_range()
-  <> ": Rectangle { x: 0; y: (parent.height - 2px) * i / 24; width: 2px; height: 2px; background: dot-color; }\n"
-  <> "  for i in "
-  <> dot_range()
-  <> ": Rectangle { x: parent.width - 2px; y: (parent.height - 2px) * i / 24; width: 2px; height: 2px; background: dot-color; }\n"
-  <> "}\n\n"
-  <> "component TabPanel inherits Rectangle {\n"
-  <> "  in property <[TabItem]> model: [];\n"
-  <> "  in property <color> theme-fg;\n"
-  <> "  in property <color> theme-accent;\n"
-  <> "  in property <color> theme-border;\n"
-  <> "  in property <color> theme-surface;\n"
-  <> "  in property <color> theme-tint;\n"
-  <> "  callback select-tab(string);\n"
-  <> "  callback close-tab(string);\n"
-  <> "  property <length> strip-height: 32px;\n"
-  <> "  ScrollView {\n"
-  <> "    y: 0; height: root.strip-height; width: 100%;\n"
-  <> "    HorizontalLayout {\n"
-  <> "      alignment: start; spacing: 2px; padding-left: 4px; padding-top: 3px; padding-right: 4px;\n"
-  <> "      for tab in root.model: Rectangle {\n"
-  <> "        width: 150px; height: 26px;\n"
-  <> "        border-radius: 4px;\n"
-  <> "        background: tab.active ? root.theme-surface : tab-select.has-hover ? root.theme-tint : transparent;\n"
-  <> "        if tab.active: Rectangle { y: parent.height - 3px; height: 3px; width: 100%; border-radius: 2px; background: root.theme-accent; }\n"
-  <> "        Text { x: 8px; y: 0; width: parent.width - 32px; height: 100%; text: tab.name; color: root.theme-fg; vertical-alignment: center; overflow: elide; font-weight: tab.active ? 700 : 400; }\n"
-  <> "        tab-select := TouchArea { clicked => { root.select-tab(tab.id); } }\n"
-  <> "        tab-close := TouchArea {\n"
-  <> "          x: parent.width - 24px; width: 24px; height: 100%;\n"
-  <> "          clicked => { root.close-tab(tab.id); }\n"
-  <> "          Rectangle {\n"
-  <> "            x: 2px; y: 3px; width: 18px; height: 20px; border-radius: 4px;\n"
-  <> "            background: tab-close.has-hover ? root.theme-tint : transparent;\n"
-  <> "            Text { text: \"×\"; color: root.theme-fg; horizontal-alignment: center; vertical-alignment: center; }\n"
-  <> "          }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-  <> "  Rectangle { y: root.strip-height - 1px; height: 1px; width: 100%; background: root.theme-border; }\n"
-  <> "  Rectangle {\n"
-  <> "    y: root.strip-height; width: 100%; height: parent.height - root.strip-height;\n"
-  <> "    @children\n"
-  <> "  }\n"
-  <> "}\n\n"
-  <> "component FontPicker inherits Rectangle {\n"
-  <> "  in property <string> value;\n"
-  <> "  in property <[string]> options;\n"
-  <> "  in property <color> theme-fg;\n"
-  <> "  in property <color> theme-border;\n"
-  <> "  in property <color> theme-surface;\n"
-  <> "  in property <color> theme-tint;\n"
-  <> "  callback picked(string);\n"
-  <> "  in-out property <bool> open: false;\n"
-  <> "  height: 32px + (open ? min(options.length * 28px, 160px) : 0px);\n"
-  <> "  clip: true;\n"
-  <> "  Rectangle {\n"
-  <> "    height: 30px;\n"
-  <> "    border-width: 1px; border-color: theme-border; border-radius: 4px; background: fp-touch.has-hover ? theme-tint : theme-surface;\n"
-  <> "    HorizontalLayout { padding-left: 10px; padding-right: 8px; spacing: 6px;\n"
-  <> "      Text { text: value == \"\" ? \"Pick a font\" : value; font-family: value; color: theme-fg; vertical-alignment: center; overflow: elide; }\n"
-  <> "      Rectangle { horizontal-stretch: 1; }\n"
-  <> "      Text { text: \"▾\"; color: theme-fg; vertical-alignment: center; }\n"
-  <> "    }\n"
-  <> "    fp-touch := TouchArea { clicked => { open = !open; } }\n"
-  <> "  }\n"
-  <> "  if open: VerticalLayout { y: 32px; width: parent.width; height: min(options.length * 28px, 160px);\n"
-  <> "    for option in options: Rectangle {\n"
-  <> "      height: 28px;\n"
-  <> "      background: option == value ? theme-tint : fp-row.has-hover ? theme-tint : transparent;\n"
-  <> "      HorizontalLayout { padding-left: 10px; padding-right: 8px;\n"
-  <> "        Text { text: option; font-family: option; color: theme-fg; vertical-alignment: center; overflow: elide; }\n"
-  <> "      }\n"
-  <> "      fp-row := TouchArea { clicked => { picked(option); open = false; } }\n"
-  <> "    }\n"
-  <> "  }\n"
-  <> "}\n\n"
-  <> "component ColorPicker inherits Rectangle {\n"
-  <> "  in property <color> current-color: transparent;\n"
-  <> "  in property <[ColorItem]> options;\n"
-  <> "  in property <color> theme-fg;\n"
-  <> "  in property <color> theme-border;\n"
-  <> "  in property <color> theme-surface;\n"
-  <> "  in property <color> theme-tint;\n"
-  <> "  callback picked(string);\n"
-  <> "  in-out property <bool> open: false;\n"
-  <> "  height: 30px + (open ? min((options.length / 4 + 1) * 30px, 190px) : 0px);\n"
-  <> "  clip: true;\n"
-  <> "  Rectangle {\n"
-  <> "    height: 28px;\n"
-  <> "    border-width: 1px; border-color: theme-border; border-radius: 4px; background: cp-touch.has-hover ? theme-tint : theme-surface;\n"
-  <> "    HorizontalLayout { padding-left: 10px; padding-right: 8px; spacing: 6px;\n"
-  <> "      Rectangle { width: 16px; height: 16px; background: current-color; border-width: 1px; border-color: theme-border; border-radius: 3px; y: (parent.height - 16px) / 2; }\n"
-  <> "      Text { text: current-color == transparent ? \"Default\" : \"Custom\"; color: theme-fg; vertical-alignment: center; overflow: elide; }\n"
-  <> "      Rectangle { horizontal-stretch: 1; }\n"
-  <> "      Text { text: \"▾\"; color: theme-fg; vertical-alignment: center; }\n"
-  <> "    }\n"
-  <> "    cp-touch := TouchArea { clicked => { open = !open; } }\n"
-  <> "  }\n"
-  <> "  if open: VerticalLayout { y: 30px; width: parent.width; height: min((options.length / 4 + 1) * 30px, 190px);\n"
-  <> "    VerticalLayout { padding: 4px; spacing: 4px;\n"
-  <> "      for row-idx in [0, 1]: HorizontalLayout { spacing: 4px;\n"
-  <> "        for col-idx in [0, 1, 2, 3]: Rectangle {\n"
-  <> "          width: (parent.width - 8px) / 4; height: 26px;\n"
-  <> "          background: options[row-idx * 4 + col-idx].color;\n"
-  <> "          border-width: options[row-idx * 4 + col-idx].color == current-color && current-color != transparent ? 2px : 1px;\n"
-  <> "          border-color: options[row-idx * 4 + col-idx].color == current-color && current-color != transparent ? theme-fg : theme-border;\n"
-  <> "          border-radius: 3px;\n"
-  <> "          cp-swatch := TouchArea { clicked => { picked(options[row-idx * 4 + col-idx].label); open = false; } }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "      HorizontalLayout { height: 24px; padding-left: 4px; spacing: 4px;\n"
-  <> "        Rectangle { height: 22px; background: theme-surface; border-width: 1px; border-color: theme-border; border-radius: 3px; horizontal-stretch: 1;\n"
-  <> "          Text { text: \"Default\"; color: theme-fg; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }\n"
-  <> "          cp-clear := TouchArea { clicked => { picked(\"\"); open = false; } }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-  <> "}\n\n"
-  <> "component MenuRow inherits Rectangle {\n"
-  <> "  in property <string> label;\n"
-  <> "  in property <bool> enabled: true;\n"
-  <> "  in property <color> theme-fg;\n"
-  <> "  in property <color> theme-tint;\n"
-  <> "  callback activated();\n"
-  <> "  height: 26px;\n"
-  <> "  background: row-hover.has-hover && enabled ? theme-tint : transparent;\n"
-  <> "  Text { x: 10px; y: 0; width: parent.width - 14px; height: parent.height; text: label; color: theme-fg; vertical-alignment: center; horizontal-alignment: left; overflow: elide; opacity: enabled ? 1 : 0.35; }\n"
-  <> "  row-hover := TouchArea { enabled: enabled; clicked => { activated(); } }\n"
-  <> "}\n\n"
-  <> "component ResizeHandle inherits Rectangle {\n"
-  <> "  in property <string> mode;\n"
-  <> "  in property <color> accent;\n"
-  <> "  callback gesture-start();\n"
-  <> "  callback gesture-track(length, length);\n"
-  <> "  callback gesture-finish();\n"
-  <> "  width: 10px; height: 10px;\n"
-  <> "  background: accent;\n"
-  <> "  border-radius: 3px;\n"
-  <> "  TouchArea {\n"
-  <> "    mouse-cursor: mode == \"nw\" || mode == \"se\" ? MouseCursor.nwse-resize : mode == \"ne\" || mode == \"sw\" ? MouseCursor.nesw-resize : mode == \"n\" || mode == \"s\" ? MouseCursor.ns-resize : MouseCursor.ew-resize;\n"
-  <> "    pointer-event(event) => {\n"
-  <> "      if (event.kind == PointerEventKind.down) { root.gesture-start(); }\n"
-  <> "      if (event.kind == PointerEventKind.up) { root.gesture-finish(); }\n"
-  <> "    }\n"
-  <> "    moved => {\n"
-  <> "      if (self.pressed) {\n"
-  <> "        root.gesture-track(self.mouse-x - self.pressed-x, self.mouse-y - self.pressed-y);\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-  <> "}\n\n"
-  <> "component PropRow inherits Rectangle {\n"
-  <> "  in property <PropItem> item;\n"
-  <> "  in property <bool> show-hints: false;\n"
-  <> "  in property <color> theme-fg;\n"
-  <> "  in property <color> theme-border;\n"
-  <> "  in property <color> theme-surface;\n"
-  <> "  in property <color> theme-tint;\n"
-  <> "  callback prop-edit(string, string);\n"
-  <> "  callback prop-open(string);\n"
-  <> "  property <bool> picker-open: false;\n"
-  <> "  height: 30px + (picker-open ? 92px : 0px);\n"
-  <> "  HorizontalLayout { spacing: 6px;\n"
-  <> "    Rectangle { width: 96px;\n"
-  <> "      Text { text: item.label; width: 96px; vertical-alignment: center; color: theme-fg; overflow: elide; }\n"
-  <> "      if show-hints && item.hint != \"\": Tooltip { text: @markdown(\"\\{item.hint}\"); }\n"
-  <> "    }\n"
-  <> "    if item.kind == \"text\" || item.kind == \"number\": LineEdit { text: item.value; horizontal-stretch: 1; accepted(text) => { prop-edit(item.key, self.text); } }\n"
-  <> "    if item.kind == \"bool\": CheckBox { checked: item.checked; toggled => { prop-edit(item.key, self.checked ? \"true\" : \"false\"); } }\n"
-  <> "    if item.kind == \"choice\": ComboBox { model: item.options; current-index: item.index; selected => { prop-edit(item.key, self.current-value); } }\n"
-  <> "    if item.kind == \"picture\" || item.kind == \"event\": Rectangle { horizontal-stretch: 1; border-width: 1px; border-color: theme-border; border-radius: 3px; background: open-cell.has-hover ? theme-tint : theme-surface;\n"
-  <> "      Text { x: 8px; y: 0; width: parent.width - 12px; height: parent.height; text: item.value == \"\" ? \"—\" : item.value; color: theme-fg; vertical-alignment: center; overflow: elide; }\n"
-  <> "      open-cell := TouchArea { clicked => { prop-open(item.key); } }\n"
-  <> "    }\n"
-  <> "    if item.kind == \"color\": ColorPicker {\n"
-  <> "      open <=> picker-open;\n"
-  <> "      current-color: item.value == \"\" ? transparent :\n"
-  <> "        item.value == \"#e06c75\" ? #e06c75 :\n"
-  <> "        item.value == \"#e5a55d\" ? #e5a55d :\n"
-  <> "        item.value == \"#e5c07b\" ? #e5c07b :\n"
-  <> "        item.value == \"#98c379\" ? #98c379 :\n"
-  <> "        item.value == \"#56b6c2\" ? #56b6c2 :\n"
-  <> "        item.value == \"#61afef\" ? #61afef :\n"
-  <> "        item.value == \"#c678dd\" ? #c678dd :\n"
-  <> "        item.value == \"#f5f5f5\" ? #f5f5f5 : transparent;\n"
-  <> "      options: [\n"
-  <> "        { label: \"#e06c75\", color: #e06c75 }, { label: \"#e5a55d\", color: #e5a55d }, { label: \"#e5c07b\", color: #e5c07b }, { label: \"#98c379\", color: #98c379 },\n"
-  <> "        { label: \"#56b6c2\", color: #56b6c2 }, { label: \"#61afef\", color: #61afef }, { label: \"#c678dd\", color: #c678dd }, { label: \"#f5f5f5\", color: #f5f5f5 },\n"
-  <> "      ];\n"
-  <> "      theme-fg: theme-fg; theme-border: theme-border; theme-surface: theme-surface; theme-tint: theme-tint;\n"
-  <> "      picked(hex) => { prop-edit(item.key, hex); }\n"
-  <> "    }\n"
-  <> "  }\n"
-  <> "}\n\n"
-  <> "component PropGrid inherits Rectangle {\n"
-  <> "  in property <[PropItem]> rows;\n"
-  <> "  in property <bool> show-hints: false;\n"
-  <> "  in property <color> theme-fg;\n"
-  <> "  in property <color> theme-border;\n"
-  <> "  in property <color> theme-surface;\n"
-  <> "  in property <color> theme-tint;\n"
-  <> "  callback prop-edit(string, string);\n"
-  <> "  callback prop-open(string);\n"
-  <> "  ScrollView {\n"
-  <> "    VerticalLayout { spacing: 2px; padding-bottom: 8px;\n"
-  <> "      for entry in root.rows: PropRow {\n"
-  <> "        item: entry;\n"
-  <> "        show-hints: root.show-hints;\n"
-  <> "        theme-fg: theme-fg; theme-border: theme-border; theme-surface: theme-surface; theme-tint: theme-tint;\n"
-  <> "        prop-edit(key, value) => { prop-edit(key, value); }\n"
-  <> "        prop-open(key) => { prop-open(key); }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-  <> "}\n\n"
-  <> "component ControlView inherits Rectangle {\n"
-  <> "  in property <ControlItem> data;\n"
-  <> "  in property <bool> designing: false;\n"
-  <> "  in property <bool> free-layout: false;\n"
-  <> "  in property <color> theme-fg;\n"
-  <> "  in property <color> theme-accent;\n"
-  <> "  in property <color> theme-border;\n"
-  <> "  in property <color> theme-surface;\n"
-  <> "  in property <bool> additive: false;\n"
-  <> "  in property <string> drop-candidate: \"\";\n"
-  <> "  in property <bool> live-drag-active: false;\n"
-  <> "  in property <string> live-drag-id: \"\";\n"
-  <> "  in property <bool> live-drag-multi: false;\n"
-  <> "  in property <length> live-drag-offset-x: 0px;\n"
-  <> "  in property <length> live-drag-offset-y: 0px;\n"
-  <> "  callback select(string);\n"
-  <> "  callback toggle-select(string);\n"
-  <> "  callback drag-start(string);\n"
-  <> "  callback drag-over-x(int);\n"
-  <> "  callback drag-over-y(int);\n"
-  <> "  callback drag-shift-x(length);\n"
-  <> "  callback drag-shift-y(length);\n"
-  <> "  callback move-x(int);\n"
-  <> "  callback move-y(int);\n"
-  <> "  callback resize-left(int);\n"
-  <> "  callback resize-right(int);\n"
-  <> "  callback resize-top(int);\n"
-  <> "  callback resize-bottom(int);\n"
-  <> "  callback gesture-start();\n"
-  <> "  callback gesture-end();\n"
-  <> "  callback context-menu(string);\n"
-  <> "  callback rect-x(int);\n"
-  <> "  callback rect-y(int);\n"
-  <> "  callback rect-w(int);\n"
-  <> "  callback rect-h(int);\n"
-  <> "  callback frame-apply();\n"
-  <> "  property <length> drag-x: 0px;\n"
-  <> "  property <length> drag-y: 0px;\n"
-  <> "  property <bool> drag-armed: false;\n"
-  <> "  property <bool> marquee-armed: false;\n"
-  <> "  in-out property <bool> marquee-active: false;\n"
-  <> "  in-out property <length> marquee-x: 0px;\n"
-  <> "  in-out property <length> marquee-y: 0px;\n"
-  <> "  in-out property <length> marquee-w: 0px;\n"
-  <> "  in-out property <length> marquee-h: 0px;\n"
-  <> "  property <string> resize-mode: \"\";\n"
-  <> "  property <length> resize-dw: 0px;\n"
-  <> "  property <length> resize-dh: 0px;\n"
-  <> "  property <bool> resizing: false;\n"
-  <> "  property <bool> west: resize-mode == \"w\" || resize-mode == \"nw\" || resize-mode == \"sw\";\n"
-  <> "  property <bool> east: resize-mode == \"e\" || resize-mode == \"ne\" || resize-mode == \"se\";\n"
-  <> "  property <bool> north: resize-mode == \"n\" || resize-mode == \"nw\" || resize-mode == \"ne\";\n"
-  <> "  property <bool> south: resize-mode == \"s\" || resize-mode == \"sw\" || resize-mode == \"se\";\n"
-  <> "  content := Rectangle {\n"
-  <> "    clip: true;\n"
-  <> "    x: free-layout ? (root.live-drag-id == data.id ? drag-x : root.live-drag-active && root.live-drag-multi && data.selected ? root.live-drag-offset-x : 0px) : 0px;\n"
-  <> "    y: free-layout ? (root.live-drag-id == data.id ? drag-y : root.live-drag-active && root.live-drag-multi && data.selected ? root.live-drag-offset-y : 0px) : 0px;\n"
-  <> "    width: free-layout ? data.w : parent.width;\n"
-  <> "    height: free-layout ? data.h : parent.height;\n"
-  <> "    border-width: data.selected ? 2px : data.id == drop-candidate ? 2px : (data.kind == \"label\" || data.kind == \"picture\" || data.kind == \"checkbox\" || data.kind == \"radio\" ? 0px : 1px);\n"
-  <> "    border-color: data.selected ? theme-accent : data.id == drop-candidate ? #f0c040 : (data.kind == \"panel\" ? theme-border : #6a6a6a);\n"
-  <> "    background: data.kind == \"panel\" || data.kind == \"group\" ? theme-surface : transparent;\n"
-  <> "    border-radius: data.kind == \"panel\" ? 4px : 0px;\n"
-  <> "    opacity: data.visible ? 1 : 0.35;\n"
-  <> "    if data.kind == \"label\": Text { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; color: theme-fg; vertical-alignment: center; }\n"
-  <> "    if data.kind == \"edit\": LineEdit { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; enabled: data.enabled; }\n"
-  <> "    if data.kind == \"memo\": TextEdit { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; read-only: true; }\n"
-  <> "    if data.kind == \"button\": Button { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; enabled: data.enabled; }\n"
-  <> "    if data.kind == \"checkbox\": CheckBox { x: 0; y: 0; width: parent.width; height: parent.height; text: data.text; enabled: data.enabled; }\n"
-  <> "    if data.kind == \"radio\": Rectangle { x: 0; y: (parent.height - 18px) / 2; width: 18px; height: 18px; border-radius: 9px; border-width: 1px; border-color: theme-fg; background: transparent; }\n"
-  <> "    if data.kind == \"radio\": Rectangle { x: 5px; y: (parent.height - 8px) / 2; width: 8px; height: 8px; border-radius: 4px; background: theme-accent; }\n"
-  <> "    if data.kind == \"radio\": Text { x: 26px; y: 0; height: parent.height; text: data.text; color: theme-fg; vertical-alignment: center; }\n"
-  <> "    if data.kind == \"combo\": ComboBox { x: 0; y: 0; width: parent.width; height: parent.height; model: [\"First\", \"Second\", \"Third\"]; current-index: 0; enabled: data.enabled; }\n"
-  <> "    if data.kind == \"list\": ListView { x: 0; y: 0; width: parent.width; height: parent.height;\n"
-  <> "      for item in [\"First item\", \"Second item\", \"Third item\", \"Fourth item\", \"Fifth item\"]: Rectangle { height: 26px;\n"
-  <> "        Text { x: 8px; y: 0; height: parent.height; text: item; color: theme-fg; vertical-alignment: center; }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "    if data.kind == \"slider\": Slider { x: 0; y: 0; width: parent.width; height: parent.height; minimum: 0.0; maximum: 100.0; value: data.value; enabled: data.enabled; }\n"
-  <> "    if data.kind == \"progress\": ProgressIndicator { x: 0; y: (parent.height - 6px) / 2; width: parent.width; height: 6px; progress: data.value / 100.0; }\n"
-  <> "    if data.kind == \"picture\": Image { x: 0; y: 0; width: parent.width; height: parent.height; source: data.picture; image-fit: contain; opacity: 1.0 - data.transparency / 100.0; }\n"
-  <> "    if data.kind == \"panel\" || data.kind == \"group\": Text { x: 8px; y: 6px; text: data.text; color: theme-fg; font-weight: 600; }\n"
-  <> "    if data.kind == \"menu\": Rectangle { x: 0; y: 0; width: parent.width; height: parent.height; background: theme-surface; border-width: 1px; border-color: theme-border; border-radius: 3px;\n"
-  <> "      Text { x: 10px; y: 0; height: parent.height; text: data.text; color: theme-fg; vertical-alignment: center; }\n"
-  <> "      Text { x: parent.width - 20px; y: 0; height: parent.height; text: \"▾\"; color: theme-fg; vertical-alignment: center; }\n"
-  <> "    }\n"
-  <> "  }\n"
-  <> "  if designing && free-layout: TouchArea {\n"
-  <> "    pointer-event(event) => {\n"
-  <> "      if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) { drag-x = 0px; drag-y = 0px; drag-armed = false; marquee-armed = false; }\n"
-  <> "      if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) { root.context-menu(data.id + \";\" + round((data.x + self.mouse-x) / 1px) + \";\" + round((data.y + self.mouse-y) / 1px)); }\n"
-  <> "      if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {\n"
-  <> "        if (drag-armed) {\n"
-  <> "          drag-x = self.mouse-x - self.pressed-x;\n"
-  <> "          drag-y = self.mouse-y - self.pressed-y;\n"
-  <> "          root.drag-over-x(round((data.x + self.mouse-x) / 1px));\n"
-  <> "          root.drag-over-y(round((data.y + self.mouse-y) / 1px));\n"
-  <> "          root.move-x(round(drag-x / 1px));\n"
-  <> "          root.move-y(round(drag-y / 1px));\n"
-  <> "          root.gesture-end();\n"
-  <> "        }\n"
-  <> "        if (!drag-armed && marquee-armed) {\n"
-  <> "          marquee-w = self.mouse-x - self.pressed-x;\n"
-  <> "          marquee-h = self.mouse-y - self.pressed-y;\n"
-  <> "          marquee-active = false;\n"
-  <> "          root.rect-x(round(marquee-x / 1px));\n"
-  <> "          root.rect-y(round(marquee-y / 1px));\n"
-  <> "          root.rect-w(round(marquee-w / 1px));\n"
-  <> "          root.rect-h(round(marquee-h / 1px));\n"
-  <> "          root.frame-apply();\n"
-  <> "        }\n"
-  <> "        if (!drag-armed && !marquee-armed) {\n"
-  <> "          if (root.additive) { root.toggle-select(data.id); } else { root.select(data.id); }\n"
-  <> "        }\n"
-  <> "        drag-x = 0px; drag-y = 0px;\n"
-  <> "        drag-armed = false; marquee-armed = false;\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "    moved => {\n"
-  <> "      if (self.pressed) {\n"
-  <> "        drag-x = self.mouse-x - self.pressed-x;\n"
-  <> "        drag-y = self.mouse-y - self.pressed-y;\n"
-  <> "        if ((drag-x < 0px ? -drag-x : drag-x) > 2px || (drag-y < 0px ? -drag-y : drag-y) > 2px) {\n"
-  <> "          if (drag-armed) {\n"
-  <> "            root.drag-shift-x(drag-x);\n"
-  <> "            root.drag-shift-y(drag-y);\n"
-  <> "            root.drag-over-x(round((data.x + self.mouse-x) / 1px));\n"
-  <> "            root.drag-over-y(round((data.y + self.mouse-y) / 1px));\n"
-  <> "          } else if (marquee-armed) {\n"
-  <> "            marquee-w = drag-x;\n"
-  <> "            marquee-h = drag-y;\n"
-  <> "          } else if (data.selected) {\n"
-  <> "            drag-armed = true; root.gesture-start(); root.drag-start(data.id);\n"
-  <> "            root.drag-shift-x(drag-x);\n"
-  <> "            root.drag-shift-y(drag-y);\n"
-  <> "            root.drag-over-x(round((data.x + self.mouse-x) / 1px));\n"
-  <> "            root.drag-over-y(round((data.y + self.mouse-y) / 1px));\n"
-  <> "          } else {\n"
-  <> "            marquee-armed = true; marquee-active = true;\n"
-  <> "            marquee-x = data.x + self.pressed-x;\n"
-  <> "            marquee-y = data.y + self.pressed-y;\n"
-  <> "            marquee-w = drag-x;\n"
-  <> "            marquee-h = drag-y;\n"
-  <> "          }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-  <> "  if designing && !free-layout: TouchArea { clicked => { root.select(data.id); } pointer-event(event) => { if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) { root.context-menu(data.id); } } }\n"
-  <> "  if designing && free-layout && resizing: Rectangle {\n"
-  <> "    x: west ? resize-dw : 0px;\n"
-  <> "    y: north ? resize-dh : 0px;\n"
-  <> "    width: max(1px, data.w - (west ? resize-dw : 0px) + (east ? resize-dw : 0px));\n"
-  <> "    height: max(1px, data.h - (north ? resize-dh : 0px) + (south ? resize-dh : 0px));\n"
-  <> "    border-width: 1px; border-color: theme-accent; background: transparent;\n"
-  <> "  }\n"
-  <> "  if designing && free-layout && data.primary && !live-drag-active: Rectangle {\n"
-  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
-  <> "    for mode in [\"nw\", \"n\", \"ne\", \"w\", \"e\", \"sw\", \"s\", \"se\"]: ResizeHandle {\n"
-  <> "      mode: mode;\n"
-  <> "      accent: theme-accent;\n"
-  <> "      x: mode == \"nw\" || mode == \"w\" || mode == \"sw\" ? -5px : mode == \"n\" || mode == \"s\" ? (root.width - 10px) / 2 : root.width - 5px;\n"
-  <> "      y: mode == \"nw\" || mode == \"n\" || mode == \"ne\" ? -5px : mode == \"w\" || mode == \"e\" ? (root.height - 10px) / 2 : root.height - 5px;\n"
-  <> "      gesture-start() => {\n"
-  <> "        root.resizing = true;\n"
-  <> "        root.resize-mode = mode;\n"
-  <> "        root.resize-dw = 0px;\n"
-  <> "        root.resize-dh = 0px;\n"
-  <> "        root.gesture-start();\n"
-  <> "      }\n"
-  <> "      gesture-track(dx, dy) => {\n"
-  <> "        if (root.resizing) {\n"
-  <> "          root.resize-dw = dx;\n"
-  <> "          root.resize-dh = dy;\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "      gesture-finish() => {\n"
-  <> "        if (root.resizing) {\n"
-  <> "          if (root.resize-mode == \"w\" || root.resize-mode == \"nw\" || root.resize-mode == \"sw\") {\n"
-  <> "            root.resize-left(round(root.resize-dw / 1px));\n"
-  <> "          }\n"
-  <> "          if (root.resize-mode == \"e\" || root.resize-mode == \"ne\" || root.resize-mode == \"se\") {\n"
-  <> "            root.resize-right(round(root.resize-dw / 1px));\n"
-  <> "          }\n"
-  <> "          if (root.resize-mode == \"n\" || root.resize-mode == \"nw\" || root.resize-mode == \"ne\") {\n"
-  <> "            root.resize-top(round(root.resize-dh / 1px));\n"
-  <> "          }\n"
-  <> "          if (root.resize-mode == \"s\" || root.resize-mode == \"sw\" || root.resize-mode == \"se\") {\n"
-  <> "            root.resize-bottom(round(root.resize-dh / 1px));\n"
-  <> "          }\n"
-  <> "          root.resizing = false;\n"
-  <> "          root.resize-dw = 0px;\n"
-  <> "          root.resize-dh = 0px;\n"
-  <> "          root.gesture-end();\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-  <> "}\n"
-}
-
-fn palette_literal() -> String {
-  "["
-  <> string.join(
-    list.map(campy_ccl.all(), fn(component) {
-      "{ kind: "
-      <> quote(component.key)
-      <> ", icon: "
-      <> quote(component.icon)
-      <> ", label: "
-      <> quote(component.label)
-      <> " }"
-    }),
-    ", ",
+pub type ControlItem {
+  ControlItem(
+    id: String,
+    kind: String,
+    text: String,
+    x: Int,
+    y: Int,
+    w: Int,
+    h: Int,
+    enabled: Bool,
+    visible: Bool,
+    selected: Bool,
+    primary: Bool,
+    picture: String,
+    value: Int,
+    transparency: Int,
+    arranged: Bool,
+    checked: Bool,
+    placeholder: String,
+    read_only: Bool,
+    minimum: Int,
+    maximum: Int,
+    current_index: Int,
+    items: List(String),
   )
-  <> "]"
 }
 
-fn callbacks() -> String {
-  "  callback file-new();\n"
-  <> "  callback file-new-module();\n"
-  <> "  callback file-open();\n"
-  <> "  callback file-save();\n"
-  <> "  callback file-save-as();\n"
-  <> "  callback file-quit();\n"
-  <> "  callback run-app();\n"
-  <> "  callback update-app();\n"
-  <> "  callback reload-code();\n"
-  <> "  callback stop-app();\n"
-  <> "  callback open-module(string);\n"
-  <> "  callback tab-module(string);\n"
-  <> "  callback close-module(string);\n"
-  <> "  callback new-module();\n"
-  <> "  callback switch-project(string);\n"
-  <> "  callback delete-project();\n"
-  <> "  callback toggle-view();\n"
-  <> "  callback view-form();\n"
-  <> "  callback view-code();\n"
-  <> "  callback show-ui();\n"
-  <> "  callback show-slint();\n"
-  <> "  callback console-input(string);\n"
-  <> "  callback console-goto-line(string);\n"
-  <> "  callback clear-console();\n"
-  <> "  callback window-move-x(int);\n"
-  <> "  callback window-move-y(int);\n"
-  <> "  callback window-resize-w(int);\n"
-  <> "  callback window-resize-h(int);\n"
-  <> "  callback add-component(string);\n"
-  <> "  callback copy-component();\n"
-  <> "  callback cut-component();\n"
-  <> "  callback paste-component();\n"
-  <> "  callback undo();\n"
-  <> "  callback redo();\n"
-  <> "  callback select(string);\n"
-  <> "  callback field-name(string);\n"
-  <> "  callback field-text(string);\n"
-  <> "  callback field-x(string);\n"
-  <> "  callback field-y(string);\n"
-  <> "  callback field-w(string);\n"
-  <> "  callback field-h(string);\n"
-  <> "  callback toggle-enabled(bool);\n"
-  <> "  callback toggle-visible(bool);\n"
-  <> "  callback field-title(string);\n"
-  <> "  callback field-width(string);\n"
-  <> "  callback field-height(string);\n"
-  <> "  callback tab-properties();\n"
-  <> "  callback tab-events();\n"
-  <> "  callback edit-event(string);\n"
-  <> "  callback prop-edit(string);\n"
-  <> "  callback prop-open(string);\n"
-  <> "  callback open-align();\n"
-  <> "  callback align-selection(string);\n"
-  <> "  callback delete-selected();\n"
-  <> "  callback toggle-select(string);\n"
-  <> "  callback drag-start(string);\n"
-  <> "  callback drag-over-x(int);\n"
-  <> "  callback drag-over-y(int);\n"
-  <> "  callback rect-x(int);\n"
-  <> "  callback rect-y(int);\n"
-  <> "  callback rect-w(int);\n"
-  <> "  callback rect-h(int);\n"
-  <> "  callback frame-apply();\n"
-  <> "  callback place-apply();\n"
-  <> "  callback cancel-place();\n"
-  <> "  callback toggle-hints(bool);\n"
-  <> "  callback open-agent();\n"
-  <> "  callback open-project-dialog();\n"
-  <> "  callback close-project-dialog();\n"
-  <> "  callback dialog-new-project();\n"
-  <> "  callback dialog-open-project();\n"
-  <> "  callback field-project-title(string);\n"
-  <> "  callback field-border(string);\n"
-  <> "  callback field-transparency(string);\n"
-  <> "  callback order-front();\n"
-  <> "  callback order-back();\n"
-  <> "  callback context-menu(string);\n"
-  <> "  callback close-context-menu();\n"
-  <> "  callback context-copy();\n"
-  <> "  callback context-cut();\n"
-  <> "  callback context-paste();\n"
-  <> "  callback context-delete();\n"
-  <> "  callback close-agent();\n"
-  <> "  callback toggle-mcp(bool);\n"
-  <> "  callback mcp-port(string);\n"
-  <> "  callback editor-view();\n"
-  <> "  callback editor-edit();\n"
-  <> "  callback code-edit(string);\n"
-  <> "  callback completion-request();\n"
-  <> "  callback completion-accept(string);\n"
-  <> "  callback completion-click(string);\n"
-  <> "  callback completion-move(int);\n"
-  <> "  callback completion-close();\n"
-  <> "  callback set-align(string);\n"
-  <> "  callback set-layout(string);\n"
-  <> "  callback set-container-layout(string);\n"
-  <> "  callback set-layout-free();\n"
-  <> "  callback set-layout-column();\n"
-  <> "  callback set-layout-row();\n"
-  <> "  callback move-x(int);\n"
-  <> "  callback move-y(int);\n"
-  <> "  callback resize-left(int);\n"
-  <> "  callback resize-right(int);\n"
-  <> "  callback resize-top(int);\n"
-  <> "  callback resize-bottom(int);\n"
-  <> "  callback gesture-start();\n"
-  <> "  callback gesture-end();\n"
-  <> "  callback browse-picture();\n"
-  <> "  callback browse-project-icon();\n"
-  <> "  callback clear-project-icon();\n"
-  <> "  callback open-settings();\n"
-  <> "  callback close-settings();\n"
-  <> "  callback font-selected(string);\n"
-  <> "  callback font-size-selected(string);\n"
-  <> "  callback scheme-selected(string);\n"
-  <> "  callback popup-accept(string);\n"
-  <> "  callback file-cancel();\n"
-  <> "  callback browser-navigate(string);\n"
-  <> "  callback browser-up();\n"
-  <> "  callback browser-home();\n"
-  <> "  callback browser-new-dir();\n"
-  <> "  callback browser-pick(string);\n"
-  <> "  callback browser-accept();\n"
-  <> "  callback browser-set-name(string);\n"
-  <> "  callback nav-context-menu(string);\n"
-  <> "  callback nav-context-close();\n"
-  <> "  callback nav-delete();\n"
-  <> "  callback nav-close-tab();\n"
+pub type TokenItem {
+  TokenItem(text: String, kind: String)
 }
 
-fn keybindings() -> String {
-  "    KeyBinding { keys: @keys(Control + Z); activated => { root.undo(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + Shift + Z); activated => { root.redo(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + Y); activated => { root.redo(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + C); activated => { root.copy-component(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + X); activated => { root.cut-component(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + V); activated => { root.paste-component(); } }\n"
-  <> "    KeyBinding { keys: @keys(Delete); enabled: root.has-selection; activated => { root.delete-selected(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + N); activated => { root.file-new(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + Shift + N); activated => { root.file-new-module(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + O); activated => { root.file-open(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + S); activated => { root.file-save(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + Shift + S); activated => { root.file-save-as(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + Q); activated => { root.file-quit(); } }\n"
-  <> "    KeyBinding { keys: @keys(F5); activated => { root.run-app(); } }\n"
-  <> "    KeyBinding { keys: @keys(F6); activated => { root.reload-code(); } }\n"
-  <> "    KeyBinding { keys: @keys(F7); activated => { root.update-app(); } }\n"
-  <> "    KeyBinding { keys: @keys(Shift + F5); activated => { root.stop-app(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + Tab); activated => { root.toggle-view(); } }\n"
-  <> "    KeyBinding { keys: @keys(Control + Space); activated => { root.completion-request(); } }\n"
-  <> "    KeyBinding { keys: @keys(Escape); activated => { root.close-settings(); root.file-cancel(); root.cancel-place(); } }\n"
+pub type LineItem {
+  LineItem(tokens: List(TokenItem))
 }
 
-fn menu_bar() -> String {
-  "    HorizontalLayout {\n"
-  <> "      height: 46px; padding: 8px; spacing: 6px;\n"
-  <> "      file-menu := ContextMenuArea { width: 58px; height: 32px;\n"
-  <> "        Button { text: \"File\"; clicked => { file-menu.show({ x: 0px, y: 32px }); } "
-  <> hint("New, open, save")
-  <> " }\n"
-  <> "        Menu {\n"
-  <> "          MenuItem { title: \"New project    Ctrl+N\"; activated => { root.file-new(); } }\n"
-  <> "          MenuItem { title: \"New module    Ctrl+Shift+N\"; activated => { root.file-new-module(); } }\n"
-  <> "          MenuSeparator { }\n"
-  <> "          MenuItem { title: \"Open…    Ctrl+O\"; activated => { root.file-open(); } }\n"
-  <> "          MenuItem { title: \"Save    Ctrl+S\"; activated => { root.file-save(); } }\n"
-  <> "          MenuItem { title: \"Save As…    Ctrl+Shift+S\"; activated => { root.file-save-as(); } }\n"
-  <> "          MenuSeparator { }\n"
-  <> "          MenuItem { title: \"Quit    Ctrl+Q\"; activated => { root.file-quit(); } }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "      edit-menu := ContextMenuArea { width: 58px; height: 32px;\n"
-  <> "        Button { text: \"Edit\"; clicked => { edit-menu.show({ x: 0px, y: 32px }); } "
-  <> hint("Undo, redo, clipboard")
-  <> " }\n"
-  <> "        Menu {\n"
-  <> "          MenuItem { title: \"Undo    Ctrl+Z\"; enabled: root.can-undo; activated => { root.undo(); } }\n"
-  <> "          MenuItem { title: \"Redo    Ctrl+Shift+Z\"; enabled: root.can-redo; activated => { root.redo(); } }\n"
-  <> "          MenuSeparator { }\n"
-  <> "          MenuItem { title: \"Copy component    Ctrl+C\"; activated => { root.copy-component(); } }\n"
-  <> "          MenuItem { title: \"Cut component    Ctrl+X\"; activated => { root.cut-component(); } }\n"
-  <> "          MenuItem { title: \"Paste component    Ctrl+V\"; activated => { root.paste-component(); } }\n"
-  <> "          MenuSeparator { }\n"
-  <> "          MenuItem { title: \"Delete component    Del\"; activated => { root.delete-selected(); } }\n"
-  <> "          MenuSeparator { }\n"
-  <> "          MenuItem { title: \"Bring to front\"; enabled: root.has-selection; activated => { root.order-front(); } }\n"
-  <> "          MenuItem { title: \"Move to back\"; enabled: root.has-selection; activated => { root.order-back(); } }\n"
-  <> "          MenuSeparator { }\n"
-  <> "          MenuItem { title: \"Update running app    F7\"; activated => { root.update-app(); } }\n"
-  <> "          MenuItem { title: \"Reload Campy code    F6\"; activated => { root.reload-code(); } }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "      settings-menu := ContextMenuArea { width: 90px; height: 32px;\n"
-  <> "        Button { text: \"Settings\"; clicked => { settings-menu.show({ x: 0px, y: 32px }); } "
-  <> hint("Editor, agent")
-  <> " }\n"
-  <> "        Menu {\n"
-  <> "          MenuItem { title: \"Editor…\"; activated => { root.open-settings(); } }\n"
-  <> "          MenuItem { title: \"Agent…\"; activated => { root.open-agent(); } }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "      ScrollView { horizontal-stretch: 1; height: 42px;\n"
-  <> "        HorizontalLayout { spacing: 4px; padding: 3px;\n"
-  <> "          for item in root.palette-items: Rectangle {\n"
-  <> "            width: 40px; height: 32px; border-width: 1px; border-color: root.theme-border; border-radius: 4px;\n"
-  <> "            background: item.kind == root.pending-kind ? root.theme-tint : transparent;\n"
-  <> "            Text { text: item.icon; color: root.theme-fg; horizontal-alignment: center; vertical-alignment: center; font-size: 16px; }\n"
-  <> "            TouchArea {\n"
-  <> "              clicked => { key-handler.focus(); root.add-component(item.kind); }\n"
-  <> "              changed has-hover => {\n"
-  <> "                if self.has-hover { root.palette-hint = item.label + \" — click, then drag on the form to place it\"; }\n"
-  <> "                if !self.has-hover && root.palette-hint == item.label + \" — click, then drag on the form to place it\" { root.palette-hint = \"\"; }\n"
-  <> "              }\n"
-  <> "            }\n"
-  <> "          }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "      Rectangle { width: 34px; height: 32px; border-radius: 4px; border-width: 1px; border-color: root.theme-border;\n"
-  <> "        background: run-hover.has-hover && !root.running ? root.theme-tint : transparent;\n"
-  <> "        Text { text: \"▶\"; font-size: 16px; color: root.running ? root.theme-fg : #3fb950; horizontal-alignment: center; vertical-alignment: center; opacity: root.running ? 0.35 : 1; }\n"
-  <> "        run-hover := TouchArea { enabled: !root.running; clicked => { root.run-app(); } }\n"
-  <> "        "
-  <> hint("Run (F5)")
-  <> "\n"
-  <> "      }\n"
-  <> "      Rectangle { width: 34px; height: 32px; border-radius: 4px; border-width: 1px; border-color: root.theme-border;\n"
-  <> "        background: stop-hover.has-hover && root.running ? root.theme-tint : transparent;\n"
-  <> "        Text { text: \"■\"; font-size: 14px; color: root.running ? #f85149 : root.theme-fg; horizontal-alignment: center; vertical-alignment: center; opacity: root.running ? 1 : 0.35; }\n"
-  <> "        stop-hover := TouchArea { enabled: root.running; clicked => { root.stop-app(); } }\n"
-  <> "        "
-  <> hint("Stop (Shift+F5)")
-  <> "\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "    Rectangle { height: 1px; background: root.theme-border; }\n"
+pub type CompletionItem {
+  CompletionItem(label: String, detail: String, insert: String)
 }
 
-fn main_area() -> String {
-  "    HorizontalLayout { spacing: 0px; vertical-stretch: 1;\n"
-  <> navigator()
-  <> "      Rectangle { width: 1px; background: root.theme-border; }\n"
-  <> centre()
-  <> "      Rectangle { width: 1px; background: root.theme-border; }\n"
-  <> right_pane()
-  <> "    }\n"
+pub type DiagItem {
+  DiagItem(line: Int, severity: Int, message: String)
 }
 
-fn navigator() -> String {
-  "      VerticalLayout { width: 190px; spacing: 4px; padding: 8px;\n"
-  <> "        HorizontalLayout { height: 28px; spacing: 4px;\n"
-  <> "          Text { text: \"Projects\"; font-weight: 600; color: root.theme-fg; vertical-alignment: center; }\n"
-  <> "          Rectangle { horizontal-stretch: 1; }\n"
-  <> "          Button { text: \"+\"; width: 26px; height: 24px; clicked => { root.open-project-dialog(); } "
-  <> hint("Add project")
-  <> " }\n"
-  <> "          Rectangle { width: 26px; height: 24px; border-width: 1px; border-color: root.theme-border; border-radius: 4px; background: ws-trash.has-hover && root.can-delete-project ? root.theme-tint : transparent; opacity: root.can-delete-project ? 1 : 0.4;\n"
-  <> "            ws-trash := TouchArea { enabled: root.can-delete-project; clicked => { root.delete-project(); } }\n"
-  <> "            Path { x: (parent.width - 12px) / 2; y: (parent.height - 14px) / 2; width: 12px; height: 14px; stroke: root.theme-fg; stroke-width: 1.1px; fill: transparent;\n"
-  <> "              commands: \"M 1 3 L 11 3 M 4 3 L 4 1 L 8 1 L 8 3 M 2 3 L 3 13 L 9 13 L 10 3 M 4.5 6 L 4.5 10 M 7.5 6 L 7.5 10\";\n"
-  <> "            }\n"
-  <> "            "
-  <> hint("Remove project")
-  <> "\n"
-  <> "          }\n"
-  <> "        }\n"
-  <> "        project-list := ListView { height: 110px;\n"
-  <> "          for project[index] in root.project-items: Rectangle { width: 100%; height: 30px;\n"
-  <> "              background: project.active ? root.theme-tint : transparent;\n"
-  <> "              HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 6px;\n"
-  <> "                if project.has-icon: Rectangle { width: 18px; height: 100%;\n"
-  <> "                  Image { x: 0; y: (parent.height - 18px) / 2; width: 18px; height: 18px; source: project.icon; image-fit: contain; }\n"
-  <> "                }\n"
-  <> "                if !project.has-icon: Rectangle { width: 18px; height: 100%;\n"
-  <> "                  Text { x: 0; y: (parent.height - 18px) / 2; width: 18px; height: 18px; text: \"▤\"; vertical-alignment: center; horizontal-alignment: center; color: root.theme-fg; }\n"
-  <> "                }\n"
-  <> "                Text { text: project.title; vertical-alignment: center; color: root.theme-fg; overflow: elide; }\n"
-  <> "              }\n"
-  <> "              project-row := TouchArea {\n"
-  <> "                clicked => { root.switch-project(project.id); }\n"
-  <> "                pointer-event(event) => {\n"
-  <> "                  if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {\n"
-  <> "                    root.nav-context-x = self.mouse-x;\n"
-  <> "                    root.nav-context-y = 87px + index * 30px + self.mouse-y - project-list.viewport-y;\n"
-  <> "                    root.nav-context-menu(\"project;\" + project.id);\n"
-  <> "                  }\n"
-  <> "                }\n"
-  <> "              }\n"
-  <> "              "
-  <> hint("Right-click: actions")
-  <> "\n"
-  <> "            }\n"
-  <> "          }\n"
-  <> "        Rectangle { height: 1px; background: root.theme-border; }\n"
-  <> "        HorizontalLayout { height: 28px; spacing: 4px;\n"
-  <> "          Text { text: \"Modules\"; font-weight: 600; color: root.theme-fg; vertical-alignment: center; }\n"
-  <> "          Rectangle { horizontal-stretch: 1; }\n"
-  <> "          Button { text: \"+\"; width: 30px; height: 26px; clicked => { root.new-module(); } "
-  <> hint("New module")
-  <> " }\n"
-  <> "        }\n"
-  <> "        module-list := ListView { vertical-stretch: 1;\n"
-  <> "          for module[index] in root.module-items: Rectangle { width: 100%; height: 32px;\n"
-  <> "            Rectangle { height: 32px;\n"
-  <> "              background: module.active ? root.theme-tint : transparent;\n"
-  <> "              HorizontalLayout { padding-left: 8px; padding-right: 8px;\n"
-  <> "                Text { text: module.name; vertical-alignment: center; color: root.theme-fg; overflow: elide; }\n"
-  <> "              }\n"
-  <> "              module-row := TouchArea {\n"
-  <> "                clicked => { root.open-module(module.id); }\n"
-  <> "                pointer-event(event) => {\n"
-  <> "                  if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {\n"
-  <> "                    root.nav-context-x = self.mouse-x;\n"
-  <> "                    root.nav-context-y = 234px + index * 32px + self.mouse-y - module-list.viewport-y;\n"
-  <> "                    root.nav-context-menu(\"module;\" + module.id);\n"
-  <> "                  }\n"
-  <> "                }\n"
-  <> "              }\n"
-  <> "              "
-  <> hint("Right-click: actions")
-  <> "\n"
-  <> "            }\n"
-  <> "          }\n"
-  <> "        }\n"
-  <> "      }\n"
+pub type BrowserItem {
+  BrowserItem(name: String, is_dir: Bool)
 }
 
-fn centre() -> String {
-  "      VerticalLayout { horizontal-stretch: 1; max-width: 4000px; spacing: 0px;\n"
-  <> "        TabPanel {\n"
-  <> "          model: root.tab-items;\n"
-  <> "          theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface; theme-tint: root.theme-tint;\n"
-  <> "          select-tab(id) => { root.tab-module(id); }\n"
-  <> "          close-tab(id) => { root.close-module(id); }\n"
-  <> "          Rectangle { horizontal-stretch: 1; vertical-stretch: 1;\n"
-  <> form_editor()
-  <> code_pane()
-  <> view_toggle_button()
-  <> "          }\n"
-  <> "        }\n"
-  <> "        Rectangle { height: 1px; background: root.theme-border; }\n"
-  <> console_pane()
-  <> "      }\n"
+/// One inspector row: `kind` is the display kind ("text", "number", "bool",
+/// "choice", "color", "picture", "event"); `value`/`checked`/`index` carry the
+/// edited value; blank/mixed values keep the row empty.
+pub type PropItem {
+  PropItem(
+    key: String,
+    label: String,
+    kind: String,
+    value: String,
+    checked: Bool,
+    index: Int,
+    options: List(String),
+    hint: String,
+  )
 }
 
-fn console_pane() -> String {
-  "        Rectangle { height: 170px; background: root.code-bg;\n"
-  <> "          VerticalLayout { spacing: 0px;\n"
-  <> "            HorizontalLayout { height: 28px; padding-left: 10px; padding-right: 8px; spacing: 6px;\n"
-  <> "              Text { text: \"Console\"; color: root.code-name; font-weight: 600; vertical-alignment: center; }\n"
-  <> "              Text { text: root.running ? \"running\" : \"stopped\"; color: root.code-comment; vertical-alignment: center; }\n"
-  <> "              Rectangle { horizontal-stretch: 1; }\n"
-  <> "              Button { text: \"Clear\"; clicked => { root.clear-console(); } "
-  <> hint("Clear console")
-  <> " }\n"
-  <> "            }\n"
-  <> "            console-rows := ListView { vertical-stretch: 1;\n"
-  <> "              for line[index] in root.console-lines: Rectangle {\n"
-  <> "                height: 20px;\n"
-  <> "                background: console-row-touch.has-hover ? root.theme-tint : transparent;\n"
-  <> "                Text { x: 10px; y: 0; width: parent.width - 14px; height: parent.height; text: line; color: line.starts-with(\"line \") ? root.code-string : root.code-name; vertical-alignment: center; overflow: elide; font-family: root.editor-font; font-size: root.editor-font-size; }\n"
-  <> "                console-row-touch := TouchArea { clicked => { root.console-goto-line(index + \";\" + line); } }\n"
-  <> "              }\n"
-  <> "            }\n"
-  <> "            HorizontalLayout { height: 36px; padding: 4px; spacing: 6px;\n"
-  <> "              console-entry := LineEdit { placeholder-text: \"Send input to the running app…\"; horizontal-stretch: 1; accepted(text) => { root.console-input(text); console-entry.text = \"\"; } }\n"
-  <> "              Button { text: \"Send\"; primary: true; clicked => { root.console-input(console-entry.text); console-entry.text = \"\"; } "
-  <> hint("Send to app")
-  <> " }\n"
-  <> "            }\n"
-  <> "          }\n"
-  <> "        }\n"
+/// Everything the shell displays, derived from IDE state by `ide_ui.snapshot`.
+pub type ShellView {
+  ShellView(
+    title: String,
+    theme: String,
+    status: String,
+    path: String,
+    running: Bool,
+    code_view: Bool,
+    raw_tab: Bool,
+    events_tab: Bool,
+    hints: Bool,
+    has_selection: Bool,
+    selection_label: String,
+    can_delete_project: Bool,
+    has_project_icon: Bool,
+    project_icon: String,
+    project_title: String,
+    project_path: String,
+    project_selected: Bool,
+    settings_open: Bool,
+    agent_open: Bool,
+    project_dialog_open: Bool,
+    mcp_enabled: Bool,
+    mcp_port: String,
+    mcp_status: String,
+    context_open: Bool,
+    context_align: Bool,
+    context_x: Int,
+    context_y: Int,
+    selection_count: Int,
+    nav_context_open: Bool,
+    nav_context_project: Bool,
+    popup_open: Bool,
+    popup_title: String,
+    popup_action: String,
+    browser_dir: String,
+    browser_name: String,
+    font: String,
+    font_size: Int,
+    scheme_index: Int,
+    form_title: String,
+    window_x: Int,
+    window_y: Int,
+    projects: List(ProjectItem),
+    modules: List(ModuleItem),
+    tabs: List(TabItem),
+    controls: List(ControlItem),
+    canvas: List(ControlDesc),
+    canvas_selection: #(Int, Int, Int, Int),
+    props: List(PropItem),
+    events: List(PropItem),
+    completions: List(CompletionItem),
+    diagnostics: List(DiagItem),
+    browser_items: List(BrowserItem),
+    code: List(LineItem),
+    code_source: String,
+    code_handler: String,
+    console_lines: List(String),
+  )
 }
 
-// The form editor: bottom tabs switch between the actual design and the
-// generated Slint source.
-fn form_editor() -> String {
-  "          if !root.code-view: VerticalLayout { spacing: 0px;\n"
-  <> "            Rectangle { horizontal-stretch: 1; vertical-stretch: 1;\n"
-  <> free_canvas()
-  <> column_canvas()
-  <> row_canvas()
-  <> slint_source_view()
-  <> "            }\n"
-  <> "            Rectangle { height: 1px; background: root.theme-border; }\n"
-  <> "            HorizontalLayout { height: 34px; spacing: 4px; padding-left: 4px;\n"
-  <> "              Button { text: \"▦ Form\"; primary: !root.slint-tab; height: 30px; clicked => { root.show-ui(); } "
-  <> hint("Design canvas")
-  <> " }\n"
-  <> "              Button { text: \"⌨ Raw\"; primary: root.slint-tab; height: 30px; clicked => { root.show-slint(); } "
-  <> hint("Slint source")
-  <> " }\n"
-  <> "              Rectangle { horizontal-stretch: 1; }\n"
-  <> "            }\n"
-  <> "          }\n"
+/// A view with nothing in it: the diff baseline (`ide_ui.empty_snapshot`).
+pub fn empty_view() -> ShellView {
+  ShellView(
+    title: "",
+    theme: "dark",
+    status: "",
+    path: "",
+    running: False,
+    code_view: False,
+    raw_tab: False,
+    events_tab: False,
+    hints: False,
+    has_selection: False,
+    selection_label: "",
+    can_delete_project: False,
+    has_project_icon: False,
+    project_icon: "",
+    project_title: "",
+    project_path: "",
+    project_selected: False,
+    settings_open: False,
+    agent_open: False,
+    project_dialog_open: False,
+    mcp_enabled: False,
+    mcp_port: "",
+    mcp_status: "",
+    context_open: False,
+    context_align: False,
+    context_x: 0,
+    context_y: 0,
+    selection_count: 0,
+    nav_context_open: False,
+    nav_context_project: False,
+    popup_open: False,
+    popup_title: "",
+    popup_action: "",
+    browser_dir: "",
+    browser_name: "",
+    font: "monospace",
+    font_size: 13,
+    scheme_index: 0,
+    form_title: "",
+    window_x: 32,
+    window_y: 120,
+    projects: [],
+    modules: [],
+    tabs: [],
+    controls: [],
+    canvas: [],
+    canvas_selection: #(0, 0, 0, 0),
+    props: [],
+    events: [],
+    completions: [],
+    diagnostics: [],
+    browser_items: [],
+    code: [],
+    code_source: "",
+    code_handler: "",
+    console_lines: [],
+  )
 }
 
-fn slint_source_view() -> String {
-  "            if root.slint-tab: Rectangle { width: 100%; height: 100%; background: root.code-bg;\n"
-  <> "              VerticalLayout { spacing: 0px;\n"
-  <> "                HorizontalLayout { height: 32px; padding-left: 10px; spacing: 6px;\n"
-  <> "                  Text { text: \"Generated Slint (read-only)\"; color: root.code-comment; vertical-alignment: center; }\n"
-  <> "                  Rectangle { horizontal-stretch: 1; }\n"
-  <> "                }\n"
-  <> "                TextEdit { text: root.slint-source; read-only: true; vertical-stretch: 1; font-family: root.editor-font; font-size: root.editor-font-size; }\n"
-  <> "              }\n"
-  <> "            }\n"
+pub fn window_title(project_title: String) -> String {
+  "Campy IDE — " <> project_title
 }
 
-// The form/handler-code toggle floats over the editor area's top-right
-// corner: a square pictogram button (no text label) that stays on top of
-// whichever view is active, switching with Ctrl+Tab. The pictogram and hint
-// alternate with the current view: in the form editor it offers the handler
-// code editor, and in the code editor it offers the form.
-fn view_toggle_button() -> String {
-  "            Rectangle { x: parent.width - 44px; y: 8px; width: 36px; height: 36px;\n"
-  <> "              border-width: 1px; border-color: root.theme-border; border-radius: 4px;\n"
-  <> "              background: view-toggle-hover.has-hover ? root.theme-tint : root.theme-surface;\n"
-  <> "              Text { text: root.code-view ? \"▦\" : \"⌨\"; font-size: 18px; color: root.theme-fg; horizontal-alignment: center; vertical-alignment: center; }\n"
-  <> "              view-toggle-hover := TouchArea { clicked => { root.toggle-view(); } }\n"
-  <> "              "
-  <> hint("Toggle form/code (Ctrl+Tab)")
-  <> "\n"
-  <> "            }\n"
-}
-
-fn free_canvas() -> String {
-  "            if !root.slint-tab && root.layout-free: Rectangle { x: 0; y: 0; width: 100%; height: 100%; clip: true; background: root.theme-canvas;\n"
-  <> "              Rectangle { x: 0; y: 0; width: max(root.surface-w, parent.width); height: max(root.surface-h, parent.height); background: root.theme-canvas;\n"
-  <> grid_lines()
-  <> "                Rectangle {\n"
-  <> "                  x: root.window-x;\n"
-  <> "                  y: root.window-y;\n"
-  <> "                  width: root.canvas-w;\n"
-  <> "                  height: root.canvas-h + 28px;\n"
-  <> "                  Rectangle { x: 0; y: 0; width: parent.width; height: 28px; background: root.theme-surface; border-width: 1px; border-color: root.theme-border; border-radius: 4px;\n"
-  <> "                    Text { x: 10px; y: 0; height: parent.height; text: root.form-title; color: root.theme-fg; font-weight: 600; vertical-alignment: center; }\n"
-  <> "                    Text { x: parent.width - 90px; y: 0; height: parent.height; text: \"module window\"; color: root.theme-fg; font-size: 11px; vertical-alignment: center; opacity: 0.6; }\n"
-  <> "                    TouchArea {\n"
-  <> "                      pointer-event(event) => {\n"
-  <> "                        if (event.kind == PointerEventKind.down) { key-handler.focus(); root.win-moving = true; }\n"
-  <> "                        if (event.kind == PointerEventKind.up && root.win-moving) {\n"
-  <> "                          root.select(\"\");\n"
-  <> "                          root.window-move-x(round(root.win-drag-x / 1px));\n"
-  <> "                          root.window-move-y(round(root.win-drag-y / 1px));\n"
-  <> "                          root.win-moving = false; root.win-drag-x = 0px; root.win-drag-y = 0px;\n"
-  <> "                        }\n"
-  <> "                      }\n"
-  <> "                      moved => {\n"
-  <> "                        if (self.pressed) { root.win-drag-x = self.mouse-x - self.pressed-x; root.win-drag-y = self.mouse-y - self.pressed-y; }\n"
-  <> "                      }\n"
-  <> "                    }\n"
-  <> "                    "
-  <> hint("Drag window; click to select")
-  <> "\n"
-  <> "                  }\n"
-  <> "                  Rectangle { x: 0; y: 28px; width: parent.width; height: parent.height - 28px; background: root.theme-bg;\n"
-  <> "                    border-width: !root.has-selection ? 2px : 1px;\n"
-  <> "                    border-color: !root.has-selection ? root.theme-accent : root.drop-active && root.drop-candidate == \"\" ? #f0c040 : root.theme-border;\n"
-  <> "                    TouchArea {\n"
-  <> "                      pointer-event(event) => {\n"
-  <> "                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {\n"
-  <> "                          key-handler.focus();\n"
-  <> "                          root.context-menu(\";\" + round(self.mouse-x / 1px) + \";\" + round(self.mouse-y / 1px));\n"
-  <> "                        }\n"
-  <> "                        if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {\n"
-  <> "                          key-handler.focus();\n"
-  <> "                          root.marquee-active = true;\n"
-  <> "                          root.marquee-x = self.mouse-x;\n"
-  <> "                          root.marquee-y = self.mouse-y;\n"
-  <> "                          root.marquee-w = 0px;\n"
-  <> "                          root.marquee-h = 0px;\n"
-  <> "                        }\n"
-  <> "                        if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left && root.marquee-active) {\n"
-  <> "                          root.marquee-active = false;\n"
-  <> "                          if ((root.marquee-w < 0px ? -root.marquee-w : root.marquee-w) > 2px || (root.marquee-h < 0px ? -root.marquee-h : root.marquee-h) > 2px) {\n"
-  <> "                            root.rect-x(round(root.marquee-x / 1px));\n"
-  <> "                            root.rect-y(round(root.marquee-y / 1px));\n"
-  <> "                            root.rect-w(round(root.marquee-w / 1px));\n"
-  <> "                            root.rect-h(round(root.marquee-h / 1px));\n"
-  <> "                            root.frame-apply();\n"
-  <> "                          } else { root.select(\"\"); }\n"
-  <> "                        }\n"
-  <> "                      }\n"
-  <> "                      moved => {\n"
-  <> "                        if (root.marquee-active) {\n"
-  <> "                          root.marquee-w = self.mouse-x - root.marquee-x;\n"
-  <> "                          root.marquee-h = self.mouse-y - root.marquee-y;\n"
-  <> "                        }\n"
-  <> "                      }\n"
-  <> "                    }\n"
-  <> "                    for control in root.control-items: ControlView {\n"
-  <> "                      data: control; designing: true; free-layout: !control.arranged;\n"
-  <> "                      additive: root.ctrl-down; drop-candidate: root.drop-candidate;\n"
-  <> "                      live-drag-active: root.live-drag-active; live-drag-id: root.live-drag-id; live-drag-multi: root.live-drag-multi; live-drag-offset-x: root.live-drag-offset-x; live-drag-offset-y: root.live-drag-offset-y;\n"
-  <> "                      theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface;\n"
-  <> "                      x: control.x; y: control.y; width: control.w; height: control.h;\n"
-  <> "                      select(id) => { key-handler.focus(); root.select(id); }\n"
-  <> "                      toggle-select(id) => { key-handler.focus(); root.toggle-select(id); }\n"
-  <> "                      drag-start(id) => { root.drag-start(id); root.live-drag-id = id; root.live-drag-active = true; root.live-drag-multi = control.selected; root.live-drag-offset-x = 0px; root.live-drag-offset-y = 0px; }\n"
-  <> "                      drag-over-x(value) => { root.drag-over-x(value); }\n"
-  <> "                      drag-over-y(value) => { root.drag-over-y(value); }\n"
-  <> "                      drag-shift-x(dx) => { root.live-drag-offset-x = dx; }\n"
-  <> "                      drag-shift-y(dy) => { root.live-drag-offset-y = dy; }\n"
-  <> "                      move-x(dx) => { root.move-x(dx); }\n"
-  <> "                      move-y(dy) => { root.move-y(dy); }\n"
-  <> "                      resize-left(dx) => { root.resize-left(dx); }\n"
-  <> "                      resize-right(dx) => { root.resize-right(dx); }\n"
-  <> "                      resize-top(dy) => { root.resize-top(dy); }\n"
-  <> "                      resize-bottom(dy) => { root.resize-bottom(dy); }\n"
-  <> "                      gesture-start() => { root.gesture-start(); }\n"
-  <> "                      gesture-end() => { root.gesture-end(); root.live-drag-active = false; root.live-drag-id = \"\"; root.live-drag-multi = false; root.live-drag-offset-x = 0px; root.live-drag-offset-y = 0px; }\n"
-  <> "                      context-menu(id) => { root.context-menu(id); }\n"
-  <> "                      marquee-active <=> root.marquee-active; marquee-x <=> root.marquee-x; marquee-y <=> root.marquee-y; marquee-w <=> root.marquee-w; marquee-h <=> root.marquee-h;\n"
-  <> "                      rect-x(value) => { root.rect-x(value); }\n"
-  <> "                      rect-y(value) => { root.rect-y(value); }\n"
-  <> "                      rect-w(value) => { root.rect-w(value); }\n"
-  <> "                      rect-h(value) => { root.rect-h(value); }\n"
-  <> "                      frame-apply() => { key-handler.focus(); root.frame-apply(); }\n"
-  <> "                    }\n"
-  <> "                    if root.marquee-active && ((root.marquee-w < 0px ? -root.marquee-w : root.marquee-w) > 2px || (root.marquee-h < 0px ? -root.marquee-h : root.marquee-h) > 2px): DottedFrame {\n"
-  <> "                      x: root.marquee-w < 0px ? root.marquee-x + root.marquee-w : root.marquee-x;\n"
-  <> "                      y: root.marquee-h < 0px ? root.marquee-y + root.marquee-h : root.marquee-y;\n"
-  <> "                      width: root.marquee-w < 0px ? -root.marquee-w : root.marquee-w;\n"
-  <> "                      height: root.marquee-h < 0px ? -root.marquee-h : root.marquee-h;\n"
-  <> "                      dot-color: root.theme-accent;\n"
-  <> "                    }\n"
-  <> "                    if root.pending-kind != \"\": Rectangle {\n"
-  <> "                      x: 0; y: 0; width: 100%; height: 100%;\n"
-  <> "                      TouchArea {\n"
-  <> "                        mouse-cursor: MouseCursor.crosshair;\n"
-  <> "                        pointer-event(event) => {\n"
-  <> "                          if (event.kind == PointerEventKind.down) {\n"
-  <> "                            root.place-active = true;\n"
-  <> "                            root.place-x = self.mouse-x;\n"
-  <> "                            root.place-y = self.mouse-y;\n"
-  <> "                            root.place-w = 0px;\n"
-  <> "                            root.place-h = 0px;\n"
-  <> "                          }\n"
-  <> "                          if (event.kind == PointerEventKind.up && root.place-active) {\n"
-  <> "                            root.place-active = false;\n"
-  <> "                            root.rect-x(round(root.place-x / 1px));\n"
-  <> "                            root.rect-y(round(root.place-y / 1px));\n"
-  <> "                            root.rect-w(round(root.place-w / 1px));\n"
-  <> "                            root.rect-h(round(root.place-h / 1px));\n"
-  <> "                            root.place-apply();\n"
-  <> "                          }\n"
-  <> "                        }\n"
-  <> "                        moved => {\n"
-  <> "                          if (self.pressed) { root.place-w = self.mouse-x - root.place-x; root.place-h = self.mouse-y - root.place-y; }\n"
-  <> "                        }\n"
-  <> "                      }\n"
-  <> "                      if root.place-active: Rectangle {\n"
-  <> "                        x: root.place-w < 0px ? root.place-x + root.place-w : root.place-x;\n"
-  <> "                        y: root.place-h < 0px ? root.place-y + root.place-h : root.place-y;\n"
-  <> "                        width: root.place-w < 0px ? -root.place-w : root.place-w;\n"
-  <> "                        height: root.place-h < 0px ? -root.place-h : root.place-h;\n"
-  <> "                        border-width: 1px; border-color: root.theme-accent; background: transparent;\n"
-  <> "                      }\n"
-  <> "                    }\n"
-  <> "                  }\n"
-  <> "                  if !root.has-selection: Rectangle {\n"
-  <> "                    x: parent.width - 14px; y: parent.height - 14px; width: 14px; height: 14px;\n"
-  <> "                    background: root.theme-accent; border-radius: 2px;\n"
-  <> "                    TouchArea {\n"
-  <> "                      pointer-event(event) => {\n"
-  <> "                        if (event.kind == PointerEventKind.down) { root.gesture-start(); root.win-resizing = true; }\n"
-  <> "                        if (event.kind == PointerEventKind.up && root.win-resizing) {\n"
-  <> "                          root.window-resize-w(round(root.win-resize-dw / 1px));\n"
-  <> "                          root.window-resize-h(round(root.win-resize-dh / 1px));\n"
-  <> "                          root.gesture-end();\n"
-  <> "                          root.win-resizing = false; root.win-resize-dw = 0px; root.win-resize-dh = 0px;\n"
-  <> "                        }\n"
-  <> "                      }\n"
-  <> "                      moved => {\n"
-  <> "                        if (self.pressed) { root.win-resize-dw = self.mouse-x - self.pressed-x; root.win-resize-dh = self.mouse-y - self.pressed-y; }\n"
-  <> "                      }\n"
-  <> "                    }\n"
-  <> "                    "
-  <> hint("Resize window")
-  <> "\n"
-  <> "                  }\n"
-  <> "                }\n"
-  <> "                if root.context-open: Rectangle { x: 0; y: 0; width: 100%; height: 100%; background: transparent;\n"
-  <> "                  TouchArea { clicked => { root.close-context-menu(); } }\n"
-  <> "                  Rectangle { x: max(0px, min(root.context-x, root.surface-w - 158px)); y: max(0px, min(root.context-y, root.surface-h - 150px)); width: 150px; height: root.selection-count > 1 ? 141px : 114px;\n"
-  <> "                    background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 4px;\n"
-  <> "                    VerticalLayout { padding: 4px; spacing: 1px;\n"
-  <> "                      MenuRow { label: \"Cut\"; enabled: root.has-selection; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.context-cut(); } }\n"
-  <> "                      MenuRow { label: \"Copy\"; enabled: root.has-selection; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.context-copy(); } }\n"
-  <> "                      MenuRow { label: \"Paste\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.context-paste(); } }\n"
-  <> "                      MenuRow { label: \"Delete\"; enabled: root.has-selection; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.context-delete(); } }\n"
-  <> "                      if root.selection-count > 1: MenuRow { label: \"Align ▸\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.open-align(); } }\n"
-  <> "                    }\n"
-  <> "                  }\n"
-  <> "                  if root.context-align && root.selection-count > 1: Rectangle { x: max(0px, min(root.context-x + 150px, root.surface-w - 116px)); y: max(0px, min(root.context-y, root.surface-h - 180px)); width: 110px; height: 166px;\n"
-  <> "                    background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 4px;\n"
-  <> "                    VerticalLayout { padding: 4px; spacing: 1px;\n"
-  <> "                      MenuRow { label: \"Left\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.align-selection(\"left\"); } }\n"
-  <> "                      MenuRow { label: \"Right\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.align-selection(\"right\"); } }\n"
-  <> "                      MenuRow { label: \"Center\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.align-selection(\"center\"); } }\n"
-  <> "                      MenuRow { label: \"Top\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.align-selection(\"top\"); } }\n"
-  <> "                      MenuRow { label: \"Down\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.align-selection(\"bottom\"); } }\n"
-  <> "                      MenuRow { label: \"Middle\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.align-selection(\"middle\"); } }\n"
-  <> "                    }\n"
-  <> "                  }\n"
-  <> "                }\n"
-  <> "                if root.win-moving || root.win-resizing: Rectangle {\n"
-  <> "                  x: root.window-x + root.win-drag-x;\n"
-  <> "                  y: root.window-y + root.win-drag-y;\n"
-  <> "                  width: max(120px, root.canvas-w + root.win-resize-dw);\n"
-  <> "                  height: max(80px, root.canvas-h + root.win-resize-dh) + 28px;\n"
-  <> "                  border-width: 2px; border-color: root.theme-accent; border-radius: 4px; background: transparent;\n"
-  <> "                }\n"
-  <> "              }\n"
-  <> "            }\n"
-}
-
-// 0..limit-1, counting up. The stdlib's int.range is a fold (no list form),
-// and the grid needs plain ascending lists.
-fn up_to(limit: Int) -> List(Int) {
-  up_to_acc(limit, 0, [])
-}
-
-fn up_to_acc(limit: Int, i: Int, acc: List(Int)) -> List(Int) {
-  case i >= limit {
-    True -> list.reverse(acc)
-    False -> up_to_acc(limit, i + 1, [i, ..acc])
-  }
-}
-
-// The design-surface grid. Lines are baked at 24px spacing, so the counts must
-// cover the largest surface the model allows: window position is clamped to
-// 2000, form size to 4096, plus the 28px title bar and 80px margin —
-// 6176 x 6204 → 258 vertical and 259 horizontal lines. The surface itself
-// stretches to at least the visible pane, so an enlarged or maximized IDE
-// window keeps its grid too.
-fn grid_lines() -> String {
-  let vertical =
-    up_to(258)
-    |> list.map(fn(i) {
-      "                Rectangle { x: "
-      <> int.to_string(i * 24)
-      <> "px; y: 0; width: 1px; height: 100%; background: root.theme-grid; }\n"
-    })
-    |> string.concat
-  let horizontal =
-    up_to(259)
-    |> list.map(fn(i) {
-      "                Rectangle { x: 0; y: "
-      <> int.to_string(i * 24)
-      <> "px; width: 100%; height: 1px; background: root.theme-grid; }\n"
-    })
-    |> string.concat
-  vertical <> horizontal
-}
-
-fn column_canvas() -> String {
-  "            if !root.slint-tab && root.layout-column: ScrollView { width: 100%; height: 100%;\n"
-  <> "              VerticalLayout { padding: root.form-border-size; spacing: 6px;\n"
-  <> "                for control in root.control-items: ControlView {\n"
-  <> "                  data: control; designing: true; free-layout: false; height: control.h;\n"
-  <> "                  theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface;\n"
-  <> "                  select(id) => { key-handler.focus(); root.select(id); }\n"
-  <> "                }\n"
-  <> "              }\n"
-  <> "            }\n"
-}
-
-fn row_canvas() -> String {
-  "            if !root.slint-tab && root.layout-row: ScrollView { width: 100%; height: 100%;\n"
-  <> "              HorizontalLayout { padding: root.form-border-size; spacing: 6px; height: 100%;\n"
-  <> "                for control in root.control-items: ControlView {\n"
-  <> "                  data: control; designing: true; free-layout: false; width: control.w; height: 100%;\n"
-  <> "                  theme-fg: root.theme-fg; theme-accent: root.theme-accent; theme-border: root.theme-border; theme-surface: root.theme-surface;\n"
-  <> "                  select(id) => { key-handler.focus(); root.select(id); }\n"
-  <> "                }\n"
-  <> "              }\n"
-  <> "            }\n"
-}
-
-// The handler code pane: an always-editable TextInput (transparent text,
-// visible caret and selection) sits exactly on top of a highlighted token
-// layer that the renderer tokenizes with tree-sitter-gleam. Both layers use
-// the same font engine, so a line-height probe keeps them in register. The
-// caret is tracked in line/col (monospace advance) for completion requests,
-// diagnostics paint bars beside their lines, and a completion popup anchors
-// to the caret.
-fn code_pane() -> String {
-  "          if root.code-view: Rectangle { width: 100%; height: 100%; background: root.code-bg;\n"
-  <> "            property <int> code-caret-line: 0;\n"
-  <> "            property <int> code-caret-col: 0;\n"
-  <> "            property <length> code-caret-x: 0px;\n"
-  <> "            property <length> code-caret-y: 0px;\n"
-  <> "            code-line-probe := TextInput { x: -2000px; y: 0; width: 40px; text: \"X\"; font-family: root.editor-font; font-size: root.editor-font-size; }\n"
-  <> "            code-char-probe := Text { x: -2000px; y: 0; width: 40px; text: \"X\"; font-family: root.editor-font; font-size: root.editor-font-size; }\n"
-  <> "            VerticalLayout { spacing: 0px;\n"
-  <> "              HorizontalLayout { height: 32px; padding-left: 10px; padding-right: 56px; spacing: 6px;\n"
-  <> "                Text { text: \"Handler code\"; color: root.code-name; font-weight: 600; vertical-alignment: center; }\n"
-  <> "                Text { text: root.code-handler; color: root.code-string; vertical-alignment: center; }\n"
-  <> "                Rectangle { horizontal-stretch: 1; }\n"
-  <> "              }\n"
-  <> "              code-scroll := ScrollView {\n"
-  <> "                Rectangle {\n"
-  <> "                  width: max(code-scroll.visible-width, code-input.preferred-width + 20px);\n"
-  <> "                  height: max(code-scroll.visible-height, root.code-lines.length * code-line-probe.preferred-height);\n"
-  <> "                  for diag in root.diag-items: Rectangle {\n"
-  <> "                    y: diag.line * code-line-probe.preferred-height;\n"
-  <> "                    x: 0; width: 3px; height: code-line-probe.preferred-height;\n"
-  <> "                    background: diag.severity == 1 ? #d05050 : #d0a040;\n"
-  <> "                  }\n"
-  <> "                  for line in root.code-lines: Rectangle {\n"
-  <> "                    y: line.index * code-line-probe.preferred-height;\n"
-  <> "                    x: 0; width: 100%; height: code-line-probe.preferred-height;\n"
-  <> "                    HorizontalLayout { padding-left: 10px; padding-right: 10px; alignment: start; spacing: 0px;\n"
-  <> "                      for token in line.tokens: Text {\n"
-  <> "                        text: token.text;\n"
-  <> "                        font-family: root.editor-font; font-size: root.editor-font-size;\n"
-  <> "                        color: token.kind == \"comment\" ? root.code-comment : token.kind == \"keyword\" ? root.code-keyword : token.kind == \"string\" ? root.code-string : token.kind == \"number\" ? root.code-number : token.kind == \"type\" ? root.code-type : token.kind == \"punct\" ? root.code-punct : root.code-name;\n"
-  <> "                        wrap: TextWrap.no-wrap;\n"
-  <> "                        overflow: clip;\n"
-  <> "                      }\n"
-  <> "                    }\n"
-  <> "                  }\n"
-  <> "                  code-input := TextInput {\n"
-  <> "                    text <=> root.code-text;\n"
-  <> "                    x: 10px; y: 0;\n"
-  <> "                    width: self.preferred-width;\n"
-  <> "                    height: parent.height;\n"
-  <> "                    single-line: false;\n"
-  <> "                    wrap: TextWrap.no-wrap;\n"
-  <> "                    color: transparent;\n"
-  <> "                    selection-background-color: root.theme-tint;\n"
-  <> "                    selection-foreground-color: root.theme-fg;\n"
-  <> "                    font-family: root.editor-font; font-size: root.editor-font-size;\n"
-  <> "                    edited => { root.code-edit(\"\\{code-caret-line};\\{code-caret-col};\" + self.text); }\n"
-  <> "                    cursor-position-changed(cpos) => {\n"
-  <> "                      code-caret-line = round(cpos.y / code-line-probe.preferred-height);\n"
-  <> "                      code-caret-col = round(cpos.x / code-char-probe.preferred-width);\n"
-  <> "                      code-caret-x = cpos.x + 10px;\n"
-  <> "                      code-caret-y = cpos.y;\n"
-  <> "                      if (cpos.x + code-scroll.viewport-x < 12px) { code-scroll.viewport-x = min(0px, max(code-scroll.visible-width - self.width, -cpos.x + 12px)); }\n"
-  <> "                      else if (cpos.x + code-scroll.viewport-x > code-scroll.visible-width - 12px) { code-scroll.viewport-x = min(0px, max(code-scroll.visible-width - self.width, code-scroll.visible-width - cpos.x - 12px)); }\n"
-  <> "                      if (cpos.y + code-scroll.viewport-y < 12px) { code-scroll.viewport-y = min(0px, max(code-scroll.visible-height - self.height, -cpos.y + 12px)); }\n"
-  <> "                      else if (cpos.y + code-scroll.viewport-y > code-scroll.visible-height - 12px) { code-scroll.viewport-y = min(0px, max(code-scroll.visible-height - self.height, code-scroll.visible-height - cpos.y - 12px)); }\n"
-  <> "                    }\n"
-  <> "                  }\n"
-  <> "                }\n"
-  <> "              }\n"
-  <> "              HorizontalLayout { height: 12px; padding: 4px; spacing: 6px;\n"
-  <> "                Rectangle { horizontal-stretch: 1; }\n"
-  <> "              }\n"
-  <> "            }\n"
-  <> "            if root.completions-open: Rectangle {\n"
-  <> "              x: min(max(8px, code-caret-x + code-scroll.viewport-x), parent.width - 292px);\n"
-  <> "              y: min(max(40px, code-caret-y + code-scroll.viewport-y + code-line-probe.preferred-height + 32px), parent.height - 200px);\n"
-  <> "              width: 280px; height: min(root.completion-items.length * 24px + 8px, 184px);\n"
-  <> "              background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 4px; clip: true;\n"
-  <> "              VerticalLayout { padding: 4px; spacing: 1px;\n"
-  <> "                for item[index] in root.completion-items: Rectangle {\n"
-  <> "                  height: 24px;\n"
-  <> "                  background: index == root.completion-index ? root.theme-tint : transparent;\n"
-  <> "                  HorizontalLayout { padding-left: 8px; padding-right: 8px; spacing: 8px;\n"
-  <> "                    Text { text: item.label; color: root.theme-fg; vertical-alignment: center; overflow: elide; }\n"
-  <> "                    Rectangle { horizontal-stretch: 1; }\n"
-  <> "                    Text { text: item.detail; color: root.code-comment; vertical-alignment: center; overflow: elide; }\n"
-  <> "                  }\n"
-  <> "                  TouchArea { clicked => { root.completion-click(\"\\{index};\" + code-input.text); } }\n"
-  <> "                }\n"
-  <> "              }\n"
-  <> "            }\n"
-  <> "          }\n"
-}
-
-fn right_pane() -> String {
-  "      VerticalLayout { width: 320px; spacing: 6px; padding: 8px;\n"
-  <> "        HorizontalLayout { height: 30px; spacing: 2px;\n"
-  <> "          Rectangle { border-radius: 4px; background: !root.events-tab ? root.theme-tint : transparent;\n"
-  <> "            Text { text: \"⚙ Properties\"; color: root.theme-fg; font-weight: !root.events-tab ? 600 : 400; vertical-alignment: center; horizontal-alignment: center; }\n"
-  <> "            TouchArea { clicked => { root.tab-properties(); } }\n"
-  <> "            "
-  <> hint("Properties")
-  <> "\n"
-  <> "          }\n"
-  <> "          Rectangle { border-radius: 4px; background: root.events-tab ? root.theme-tint : transparent;\n"
-  <> "            Text { text: \"⚡ Events\"; color: root.theme-fg; font-weight: root.events-tab ? 600 : 400; vertical-alignment: center; horizontal-alignment: center; }\n"
-  <> "            TouchArea { clicked => { root.tab-events(); } }\n"
-  <> "            "
-  <> hint("Events")
-  <> "\n"
-  <> "          }\n"
-  <> "        }\n"
-  <> "        Rectangle { height: 1px; background: root.theme-border; }\n"
-  <> "        HorizontalLayout { height: 32px; spacing: 6px;\n"
-  <> "          Text { text: root.insp-selection; font-weight: 600; color: root.theme-fg; horizontal-stretch: 1; vertical-alignment: center; }\n"
-  <> "          if root.has-selection: Rectangle { width: 38px; height: 28px; border-width: 1px; border-color: root.theme-border; border-radius: 4px; background: trash-hover.has-hover ? root.theme-tint : transparent;\n"
-  <> "            trash-hover := TouchArea { clicked => { root.delete-selected(); } }\n"
-  <> "            Path { x: (parent.width - 14px) / 2; y: (parent.height - 16px) / 2; width: 14px; height: 16px;\n"
-  <> "              stroke: root.theme-fg; stroke-width: 1.2px; fill: transparent;\n"
-  <> "              commands: \"M 1 4 L 13 4 M 5 4 L 5 1 L 9 1 L 9 4 M 2.5 4 L 3.5 15 L 10.5 15 L 11.5 4 M 5.5 7 L 5.5 12 M 8.5 7 L 8.5 12\";\n"
-  <> "            }\n"
-  <> "            "
-  <> hint("Delete (Del)")
-  <> "\n"
-  <> "          }\n"
-  <> "        }\n"
-  <> "        if root.project-selected: VerticalLayout { spacing: 6px;\n"
-  <> "          HorizontalLayout { height: 54px; spacing: 8px;\n"
-  <> "            for project in root.project-items: Rectangle { width: project.active ? 48px : 0px; height: project.active ? 48px : 0px; clip: true;\n"
-  <> "              border-width: project.active ? 1px : 0px; border-color: root.theme-border; border-radius: 4px; background: root.theme-surface;\n"
-  <> "              if project.active && project.has-icon: Image { x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px; source: project.icon; image-fit: contain; }\n"
-  <> "              if project.active && !project.has-icon: Text { x: 0; y: 0; width: 100%; height: 100%; text: \"▤\"; font-size: 22px; horizontal-alignment: center; vertical-alignment: center; color: root.theme-fg; }\n"
-  <> "            }\n"
-  <> "            VerticalLayout { spacing: 4px;\n"
-  <> "              Button { text: \"Choose icon…\"; height: 26px; clicked => { root.browse-project-icon(); } "
-  <> hint("Choose an image for this project")
-  <> " }\n"
-  <> "              Button { text: \"Clear icon\"; height: 26px; clicked => { root.clear-project-icon(); } "
-  <> hint("Remove icon")
-  <> " }\n"
-  <> "            }\n"
-  <> "          }\n"
-  <> field("Title", "project-title", "field-project-title")
-  <> "          Text { text: \"Path\"; color: root.theme-fg; }\n"
-  <> "          Text { text: root.project-path; color: root.theme-fg; overflow: elide; }\n"
-  <> "          Rectangle { vertical-stretch: 1; }\n"
-  <> "        }\n"
-  <> "        if !root.project-selected: PropGrid {\n"
-  <> "          rows: root.events-tab ? root.event-items : root.prop-items;\n"
-  <> "          show-hints: root.show-hints;\n"
-  <> "          theme-fg: root.theme-fg; theme-border: root.theme-border; theme-surface: root.theme-surface; theme-tint: root.theme-tint;\n"
-  <> "          prop-edit(key, value) => { root.prop-edit(key + \";\" + value); }\n"
-  <> "          prop-open(key) => { root.prop-open(key); }\n"
-  <> "        }\n"
-  <> "      }\n"
-}
-
-fn field(label: String, property: String, callback: String) -> String {
-  "          HorizontalLayout { height: 30px; spacing: 6px;\n"
-  <> "            Text { text: "
-  <> quote(label)
-  <> "; width: 64px; vertical-alignment: center; color: root.theme-fg; }\n"
-  <> "            LineEdit { text <=> root."
-  <> property
-  <> "; horizontal-stretch: 1; accepted(text) => { root."
-  <> callback
-  <> "(text); } }\n"
-  <> "          }\n"
-}
-
-fn status_bar() -> String {
-  "    HorizontalLayout { height: 26px; padding-left: 10px; padding-right: 10px; spacing: 8px;\n"
-  <> "      Text { text: root.status; color: root.theme-fg; vertical-alignment: center; }\n"
-  <> "      Rectangle { horizontal-stretch: 1; }\n"
-  <> "      Text { text: root.path-text; color: root.theme-fg; vertical-alignment: center; }\n"
-  <> "    }\n"
-}
-
-fn hint(text: String) -> String {
-  " if root.show-hints: Tooltip { text: @markdown(" <> quote(text) <> "); }"
-}
-
-// Palette hints deliberately avoid Slint's Tooltip: its dwell timer restarts
-// on every pointer move, so a human hand (which never holds perfectly still)
-// never sees the tooltip. The chip below is driven by hover state instead.
-fn palette_hint_overlay() -> String {
-  "  if root.palette-hint != \"\" && root.show-hints: Rectangle {\n"
-  <> "    x: 236px; y: 50px; height: 28px;\n"
-  <> "    width: min(root.width - 244px, palette-hint-text.preferred-width + 20px);\n"
-  <> "    background: root.theme-surface; border-width: 1px; border-color: root.theme-border; border-radius: 4px;\n"
-  <> "    palette-hint-text := Text { x: 10px; y: 0; height: 100%; text: root.palette-hint; color: root.theme-fg; vertical-alignment: center; }\n"
-  <> "  }\n"
-}
-
-fn settings_overlay() -> String {
-  "  if root.settings-open: Rectangle {\n"
-  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
-  <> "    Rectangle { x: (root.width - self.width) / 2; y: 120px; width: 520px; height: 330px;\n"
-  <> "      background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 6px;\n"
-  <> "      VerticalLayout { padding: 18px; spacing: 12px;\n"
-  <> "        Text { text: \"Editor settings\"; font-size: 18px; font-weight: 600; color: root.theme-fg; }\n"
-  <> "        HorizontalLayout { height: fp.open ? 32px + 142px : 32px; spacing: 8px;\n"
-  <> "          Text { text: \"Font\"; width: 110px; vertical-alignment: center; color: root.theme-fg; }\n"
-  <> "          fp := FontPicker { value: root.editor-font; options: "
-  <> string_list(fonts)
-  <> "; theme-fg: root.theme-fg; theme-border: root.theme-border; theme-surface: root.theme-surface; theme-tint: root.theme-tint; picked(name) => { root.font-selected(name); } }\n"
-  <> "        }\n"
-  <> "        HorizontalLayout { height: 32px; spacing: 8px;\n"
-  <> "          Text { text: \"Font size\"; width: 110px; vertical-alignment: center; color: root.theme-fg; }\n"
-  <> "          ComboBox { model: "
-  <> string_list(sizes)
-  <> "; current-index: root.size-index; selected => { root.font-size-selected(self.current-value); } }\n"
-  <> "        }\n"
-  <> "        HorizontalLayout { height: 32px; spacing: 8px;\n"
-  <> "          Text { text: \"Color scheme\"; width: 110px; vertical-alignment: center; color: root.theme-fg; }\n"
-  <> "          ComboBox { model: [\"Dark\", \"Light\", \"Solarized\"]; current-index: root.scheme-index; selected => { root.scheme-selected(self.current-value); } }\n"
-  <> "        }\n"
-  <> "        HorizontalLayout { height: 32px; spacing: 8px;\n"
-  <> "          Text { text: \"UI\"; width: 110px; vertical-alignment: center; color: root.theme-fg; }\n"
-  <> "          CheckBox { text: \"Show UI hints\"; checked: root.show-hints; toggled => { root.toggle-hints(self.checked); }"
-  <> hint("Enable button tooltips and palette hints")
-  <> " }\n"
-  <> "        }\n"
-  <> "        Rectangle { vertical-stretch: 1; }\n"
-  <> "        HorizontalLayout { spacing: 8px;\n"
-  <> "          Button { text: \"Close\"; primary: true; height: 32px; clicked => { root.close-settings(); }"
-  <> hint("Close the settings dialog")
-  <> " }\n"
-  <> "          Rectangle { horizontal-stretch: 1; }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-}
-
-fn project_dialog_overlay() -> String {
-  "  if root.project-dialog-open: Rectangle {\n"
-  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
-  <> "    Rectangle { x: (root.width - self.width) / 2; y: 160px; width: 460px; height: 240px;\n"
-  <> "      background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 6px;\n"
-  <> "      VerticalLayout { padding: 18px; spacing: 12px;\n"
-  <> "        Text { text: \"Projects\"; font-size: 18px; font-weight: 600; color: root.theme-fg; }\n"
-  <> "        Text { text: \"Create a new project or open an existing project into this workspace.\"; color: root.theme-fg; height: 32px; wrap: word-wrap; }\n"
-  <> "        Button { text: \"Create new project\"; primary: true; height: 32px; clicked => { root.dialog-new-project(); }"
-  <> hint("Create a new project in the workspace")
-  <> " }\n"
-  <> "        Button { text: \"Open existing project…\"; height: 32px; clicked => { root.dialog-open-project(); }"
-  <> hint("Open a project file into the workspace")
-  <> " }\n"
-  <> "        Rectangle { vertical-stretch: 1; }\n"
-  <> "        HorizontalLayout {\n"
-  <> "          Button { text: \"Cancel\"; clicked => { root.close-project-dialog(); }"
-  <> hint("Cancel")
-  <> " }\n"
-  <> "          Rectangle { horizontal-stretch: 1; }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-}
-
-fn agent_overlay() -> String {
-  "  if root.agent-open: Rectangle {\n"
-  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
-  <> "    Rectangle { x: (root.width - self.width) / 2; y: 140px; width: 560px; height: 300px;\n"
-  <> "      background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 6px;\n"
-  <> "      VerticalLayout { padding: 18px; spacing: 12px;\n"
-  <> "        Text { text: \"Agent settings\"; font-size: 18px; font-weight: 600; color: root.theme-fg; }\n"
-  <> "        CheckBox { text: \"Enable MCP server\"; checked: root.mcp-enabled; toggled => { root.toggle-mcp(self.checked); }"
-  <> hint("Expose Campy tools over local MCP")
-  <> " }\n"
-  <> "        HorizontalLayout { height: 32px; spacing: 8px;\n"
-  <> "          Text { text: \"Port\"; width: 110px; vertical-alignment: center; color: root.theme-fg; }\n"
-  <> "          port-input := LineEdit { text <=> root.mcp-port-text; horizontal-stretch: 1; accepted(text) => { root.mcp-port(text); } }\n"
-  <> "        }\n"
-  <> "        Text { text: root.mcp-status; color: root.theme-fg; }\n"
-  <> "        Text { text: \"Endpoint: http://127.0.0.1:\" + root.mcp-port-text + \"/mcp\"; color: root.theme-fg; }\n"
-  <> "        Text { text: \"Disabled by default. The server listens on localhost only.\"; color: root.theme-fg; }\n"
-  <> "        Rectangle { vertical-stretch: 1; }\n"
-  <> "        HorizontalLayout { spacing: 8px;\n"
-  <> "          Button { text: \"Close\"; primary: true; height: 32px; clicked => { root.close-agent(); }"
-  <> hint("Close the agent settings")
-  <> " }\n"
-  <> "          Rectangle { horizontal-stretch: 1; }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-}
-
-fn popup_overlay() -> String {
-  "  if root.popup-open: Rectangle {\n"
-  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
-  <> "    Rectangle { x: (root.width - self.width) / 2; y: 100px; width: 520px; height: 420px;\n"
-  <> "      background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 6px;\n"
-  <> "      VerticalLayout { padding: 16px; spacing: 10px;\n"
-  <> "        Text { text: root.popup-title; font-size: 18px; font-weight: 600; color: root.theme-fg; }\n"
-  <> "        HorizontalLayout { spacing: 6px;\n"
-  <> "          Button { text: \"⌂\"; width: 34px; clicked => { root.browser-home(); } "
-  <> hint("Go to the home directory")
-  <> " }\n"
-  <> "          Button { text: \"+ Dir\"; width: 54px; clicked => { root.browser-new-dir(); } "
-  <> hint("Create a folder named as the Name field")
-  <> " }\n"
-  <> "          Text { text: root.browser-dir; color: root.theme-fg; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }\n"
-  <> "          Button { text: \"↑\"; width: 34px; clicked => { root.browser-up(); } "
-  <> hint("Go to the parent directory")
-  <> " }\n"
-  <> "        }\n"
-  <> "        Rectangle { border-width: 1px; border-color: root.theme-border; border-radius: 4px; vertical-stretch: 1;\n"
-  <> "          ListView {\n"
-  <> "            for entry in root.browser-items: Rectangle {\n"
-  <> "              height: 28px;\n"
-  <> "              background: browser-row.has-hover ? root.theme-tint : transparent;\n"
-  <> "              HorizontalLayout { padding-left: 10px; padding-right: 8px; spacing: 8px;\n"
-  <> "                Text { text: entry.is-dir ? \"▸\" : \"·\"; width: 14px; color: root.theme-fg; vertical-alignment: center; }\n"
-  <> "                Text { text: entry.name; color: root.theme-fg; vertical-alignment: center; overflow: elide; }\n"
-  <> "              }\n"
-  <> "              browser-row := TouchArea { clicked => { root.browser-pick(entry.name + \";\" + (entry.is-dir ? \"1\" : \"0\")); } }\n"
-  <> "            }\n"
-  <> "          }\n"
-  <> "        }\n"
-  <> "        HorizontalLayout { spacing: 6px;\n"
-  <> "          Text { text: \"Name\"; color: root.theme-fg; vertical-alignment: center; }\n"
-  <> "          name-field := LineEdit { text: root.browser-name; edited => { root.browser-set-name(self.text); } horizontal-stretch: 1; }\n"
-  <> "        }\n"
-  <> "        HorizontalLayout { spacing: 8px;\n"
-  <> "          Button { text: root.popup-action; primary: true; clicked => { root.browser-accept(); } "
-  <> hint("Confirm")
-  <> " }\n"
-  <> "          Button { text: \"Cancel\"; clicked => { root.file-cancel(); } "
-  <> hint("Cancel")
-  <> " }\n"
-  <> "          Rectangle { horizontal-stretch: 1; }\n"
-  <> "        }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
-}
-
-// Navigator context menu overlay: project/module rows, delete included.
-fn nav_context_overlay() -> String {
-  "  if root.nav-context-open: Rectangle {\n"
-  <> "    x: 0; y: 0; width: 100%; height: 100%;\n"
-  <> "    TouchArea { clicked => { root.nav-context-close(); } }\n"
-  <> "    Rectangle { x: max(0px, min(root.nav-context-x, root.width - 158px)); y: max(0px, min(root.nav-context-y, root.height - 96px)); width: 150px; height: root.nav-context-project ? 36px : 88px;\n"
-  <> "      background: root.theme-bg; border-width: 1px; border-color: root.theme-border; border-radius: 4px;\n"
-  <> "      VerticalLayout { padding: 4px; spacing: 1px;\n"
-  <> "        if root.nav-context-project: MenuRow { label: \"Remove\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.nav-delete(); } }\n"
-  <> "        if !root.nav-context-project: MenuRow { label: \"Open module\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.nav-context-close(); } }\n"
-  <> "        if !root.nav-context-project: MenuRow { label: \"Delete\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.nav-delete(); } }\n"
-  <> "        if !root.nav-context-project: MenuRow { label: \"Close tab\"; theme-fg: root.theme-fg; theme-tint: root.theme-tint; activated() => { root.nav-close-tab(); } }\n"
-  <> "      }\n"
-  <> "    }\n"
-  <> "  }\n"
+/// The wire id of one shell section (the module doc's glossary names them).
+pub fn section_id(name: String) -> Int {
+  campy_form.wire_id(name)
 }
 
 // ---------------------------------------------------------------------------
-// Values used by both updates() and the baked defaults
+// Row vocabulary
 // ---------------------------------------------------------------------------
 
-fn dot_range() -> String {
-  "[" <> string.join(list.map(int_range(0, 23), int.to_string), ", ") <> "]"
+/// How an inspector row is edited.
+pub type RowKind {
+  TextRow
+  NumberRow
+  BoolRow
+  ChoiceRow
+  OpenRow
 }
 
-fn int_range(from: Int, to: Int) -> List(Int) {
-  case from > to {
-    True -> []
-    False -> [from, ..int_range(from + 1, to)]
+/// The editor kind for one inspector key. Fixed per key so the row control's
+/// kind never changes (the diff would otherwise need a reload).
+pub fn row_kind(key: String) -> RowKind {
+  case key {
+    "x"
+    | "y"
+    | "w"
+    | "h"
+    | "width"
+    | "height"
+    | "border"
+    | "transparency"
+    | "current-index"
+    | "minimum"
+    | "maximum"
+    | "value" -> NumberRow
+    "enabled" | "visible" | "checked" | "read-only" | "line-numbers" -> BoolRow
+    "color" | "align" | "layout" -> ChoiceRow
+    "picture" -> OpenRow
+    "changed" | "clicked" | "edited" | "selected" | "toggled" -> OpenRow
+    _ -> TextRow
   }
+}
+
+/// The `PropItem.kind` display string for one key ("event" for event rows).
+pub fn row_kind_key(key: String) -> String {
+  case list.contains(event_keys(), key) {
+    True -> "event"
+    False ->
+      case row_kind(key) {
+        TextRow -> "text"
+        NumberRow -> "number"
+        BoolRow -> "bool"
+        ChoiceRow -> "choice"
+        OpenRow -> "picture"
+      }
+  }
+}
+
+/// The label shown for one inspector key: IDE keys first, then the label the
+/// CCL catalog declares for the property or event.
+pub fn row_label(key: String) -> String {
+  case key {
+    "name" -> "Name"
+    "text" -> "Text"
+    "title" -> "Title"
+    "width" -> "Width"
+    "height" -> "Height"
+    "x" -> "X"
+    "y" -> "Y"
+    "w" -> "W"
+    "h" -> "H"
+    "border" -> "Border"
+    "transparency" -> "Transp. %"
+    "color" -> "Color"
+    "align" -> "Align"
+    "layout" -> "Layout"
+    "enabled" -> "Enabled"
+    "visible" -> "Visible"
+    "picture" -> "Picture"
+    "changed" -> "OnChange"
+    "clicked" -> "OnClicked"
+    "edited" -> "OnEdited"
+    "selected" -> "OnSelect"
+    "toggled" -> "OnToggle"
+    _ -> catalog_label(key)
+  }
+}
+
+fn catalog_label(key: String) -> String {
+  campy_ccl.all()
+  |> list.find_map(fn(component) {
+    case list.find(component.properties, fn(property) { property.key == key }) {
+      Ok(property) -> Ok(property.label)
+      Error(_) ->
+        case list.find(component.events, fn(event) { event.key == key }) {
+          Ok(event) -> Ok(event.label)
+          Error(_) -> Error(Nil)
+        }
+    }
+  })
+  |> result.unwrap(key)
+}
+
+fn catalog_property_keys() -> List(String) {
+  campy_ccl.all()
+  |> list.flat_map(fn(component) {
+    list.map(component.properties, fn(property) { property.key })
+  })
+  |> list.unique
+}
+
+fn catalog_event_keys() -> List(String) {
+  campy_ccl.all()
+  |> list.flat_map(fn(component) {
+    list.map(component.events, fn(event) { event.key })
+  })
+  |> list.unique
+}
+
+/// The property-row pool, in a stable order: the IDE's own rows first, then the
+/// CCL schema keys, then the window rows.
+pub fn prop_keys() -> List(String) {
+  list.unique(list.append(
+    [
+      "name", "text", "picture", "transparency", "x", "y", "w", "h", "color",
+      "align", "layout", "border", "enabled", "visible",
+    ],
+    list.append(catalog_property_keys(), ["title", "width", "height"]),
+  ))
+}
+
+/// The event-row pool.
+pub fn event_keys() -> List(String) {
+  list.unique(list.append(catalog_event_keys(), []))
+}
+
+// ---------------------------------------------------------------------------
+// The document
+// ---------------------------------------------------------------------------
+
+/// The whole IDE window: one root (id 0) whose children are the shell sections
+/// and the hidden dialogs/overlays.
+pub fn desc(view: ShellView) -> List(ControlDesc) {
+  let root =
+    node("ide-root", "panel", "", 0, 0, window_width, window_height)
+    |> with_class("campy-ide-root")
+    |> with_children(list.append(
+      [menu_bar(view), rule("menu-rule", 0, 46, window_width, 1)],
+      list.append(
+        [navigator(view)],
+        list.append(centre(view), [
+          right_pane(view),
+          status_bar(view),
+          settings_dialog(view),
+          agent_dialog(view),
+          project_dialog(view),
+          browser_dialog(view),
+          context_menu(view),
+          align_menu(view),
+          nav_context(view),
+        ]),
+      ),
+    ))
+  [ControlDesc(..root, id: campy_form.window_id)]
+}
+
+// --- menu bar ---------------------------------------------------------------
+
+fn menu_bar(view: ShellView) -> ControlDesc {
+  node("menu-bar", "panel", "", 0, 0, window_width, 46)
+  |> with_class("campy-menubar")
+  |> with_props([layout_prop("row")])
+  |> with_children([
+    menu("menu-file", "File", 8, 58, file_menu(), "New, open, save"),
+    menu("menu-edit", "Edit", 70, 58, edit_menu(), "Undo, redo, clipboard"),
+    menu("menu-settings", "Settings", 132, 90, settings_menu(), "Editor, agent"),
+    palette(),
+    node("run", "button", "▶", 1198, 7, 34, 32)
+      |> with_class("campy-run")
+      |> with_props([hint_prop("Run (F5)")])
+      |> enabled_as(!view.running),
+    node("stop", "button", "■", 1238, 7, 34, 32)
+      |> with_class("campy-stop")
+      |> with_props([hint_prop("Stop (Shift+F5)")])
+      |> enabled_as(view.running),
+  ])
+}
+
+fn menu(
+  name: String,
+  label: String,
+  x: Int,
+  w: Int,
+  items: List(String),
+  hint: String,
+) -> ControlDesc {
+  node(name, "menu", label, x, 7, w, 32)
+  |> with_class("campy-menu")
+  |> with_props([hint_prop(hint), model_prop(list.map(items, WireText))])
+}
+
+fn file_menu() -> List(String) {
+  [
+    "New project    Ctrl+N",
+    "New module    Ctrl+Shift+N",
+    separator(),
+    "Open…    Ctrl+O",
+    "Save    Ctrl+S",
+    "Save As…    Ctrl+Shift+S",
+    separator(),
+    "Quit    Ctrl+Q",
+  ]
+}
+
+fn edit_menu() -> List(String) {
+  [
+    "Undo    Ctrl+Z",
+    "Redo    Ctrl+Shift+Z",
+    separator(),
+    "Copy component    Ctrl+C",
+    "Cut component    Ctrl+X",
+    "Paste component    Ctrl+V",
+    separator(),
+    "Delete component    Del",
+    separator(),
+    "Bring to front",
+    "Move to back",
+    separator(),
+    "Update running app    F7",
+    "Reload Campy code    F6",
+  ]
+}
+
+fn settings_menu() -> List(String) {
+  ["Editor…", "Agent…"]
+}
+
+fn separator() -> String {
+  "—"
+}
+
+fn palette() -> ControlDesc {
+  let tiles =
+    campy_ccl.all()
+    |> list.index_map(fn(component: campy_ccl.Component, index: Int) {
+      node(
+        "tile:" <> component.key,
+        "button",
+        component.icon,
+        4 + index * 44,
+        3,
+        40,
+        32,
+      )
+      |> with_class("campy-palette-tile")
+      |> with_props([
+        #("kind", WireText(component.key)),
+        #(
+          "label",
+          WireText(
+            component.label <> " — click, then drag on the form to place it",
+          ),
+        ),
+        hint_prop(component.label),
+      ])
+    })
+  node("palette", "panel", "", 228, 4, 960, 38)
+  |> with_class("campy-palette")
+  |> with_props([layout_prop("row")])
+  |> with_children(tiles)
+}
+
+// --- navigator --------------------------------------------------------------
+
+fn navigator(view: ShellView) -> ControlDesc {
+  node("nav", "panel", "", 0, 47, 190, 787)
+  |> with_class("campy-nav")
+  |> with_props([layout_prop("column")])
+  |> with_children([
+    node("nav-projects-title", "label", "Projects", 8, 8, 90, 28)
+      |> with_class("campy-title"),
+    node("project-delete", "button", "⌫", 124, 10, 26, 24)
+      |> with_class("campy-icon-button")
+      |> with_props([hint_prop("Remove project")])
+      |> enabled_as(view.can_delete_project),
+    node("project-add", "button", "+", 156, 10, 26, 24)
+      |> with_class("campy-icon-button")
+      |> with_props([hint_prop("Add project")]),
+    list_node(
+      "projects-nav",
+      8,
+      40,
+      174,
+      110,
+      list.map(view.projects, fn(item: ProjectItem) {
+        WireStruct([
+          #("text", WireText(item.title)),
+          #("id", WireText(item.id)),
+          #("active", WireBool(item.active)),
+          #("icon", WireText(item.icon)),
+        ])
+      }),
+    )
+      |> with_class("campy-nav-list"),
+    rule("nav-rule", 8, 156, 174, 1),
+    node("nav-modules-title", "label", "Modules", 8, 162, 90, 28)
+      |> with_class("campy-title"),
+    node("module-add", "button", "+", 156, 164, 26, 26)
+      |> with_class("campy-icon-button")
+      |> with_props([hint_prop("New module")]),
+    list_node(
+      "modules-nav",
+      8,
+      196,
+      174,
+      579,
+      list.map(view.modules, fn(item: ModuleItem) {
+        WireStruct([
+          #("text", WireText(item.name)),
+          #("id", WireText(item.id)),
+          #("active", WireBool(item.active)),
+        ])
+      }),
+    )
+      |> with_class("campy-nav-list"),
+  ])
+}
+
+// --- centre -----------------------------------------------------------------
+
+fn centre(view: ShellView) -> List(ControlDesc) {
+  [
+    list_node(
+      "module-tabs",
+      191,
+      47,
+      740,
+      32,
+      list.map(view.tabs, fn(item: TabItem) {
+        WireStruct([
+          #("text", WireText(item.name)),
+          #("id", WireText(item.id)),
+          #("active", WireBool(item.active)),
+        ])
+      }),
+    )
+      |> with_class("campy-tabs"),
+    node("tab-close", "button", "×", 935, 51, 24, 24)
+      |> with_class("campy-icon-button")
+      |> with_props([hint_prop("Close tab")]),
+    canvas(view),
+    node("raw-view", "memo", view.code_source, 191, 79, 768, 550)
+      |> with_class("campy-raw")
+      |> with_props([
+        #("language", WireText("gleam")),
+        #("read-only", WireBool(True)),
+      ])
+      |> shown(!view.code_view && view.raw_tab),
+    rule("canvas-rule", 191, 629, 768, 1) |> shown(!view.code_view),
+    node("form-tab", "button", "▦ Form", 195, 633, 90, 30)
+      |> with_class("campy-tab-button")
+      |> with_props([hint_prop("Design canvas")])
+      |> shown(!view.code_view),
+    node("raw-tab", "button", "⌨ Raw", 289, 633, 90, 30)
+      |> with_class("campy-tab-button")
+      |> with_props([hint_prop("Module source")])
+      |> shown(!view.code_view),
+    node("view-toggle", "button", toggle_glyph(view), 915, 86, 36, 36)
+      |> with_class("campy-view-toggle")
+      |> with_props([hint_prop("Toggle form/code (Ctrl+Tab)")]),
+    node("code-title", "label", "Handler code", 201, 87, 100, 20)
+      |> with_class("campy-code-title")
+      |> shown(view.code_view),
+    node("code-handler", "label", view.code_handler, 305, 87, 400, 20)
+      |> with_class("campy-code-handler")
+      |> shown(view.code_view),
+    node("code-view", "code_editor", view.code_source, 191, 111, 768, 552)
+      |> with_class("campy-code")
+      |> with_props([
+        #("language", WireText("gleam")),
+        #("line-numbers", WireBool(True)),
+        #("read-only", WireBool(False)),
+      ])
+      |> shown(view.code_view),
+    list_node(
+      "completions",
+      500,
+      300,
+      280,
+      184,
+      list.map(view.completions, fn(item: CompletionItem) {
+        WireStruct([
+          #("text", WireText(item.label)),
+          #("detail", WireText(item.detail)),
+          #("insert", WireText(item.insert)),
+        ])
+      }),
+    )
+      |> with_class("campy-completions")
+      |> shown(view.code_view && !list.is_empty(view.completions)),
+    console_pane(view),
+  ]
+}
+
+fn toggle_glyph(view: ShellView) -> String {
+  case view.code_view {
+    True -> "▦"
+    False -> "⌨"
+  }
+}
+
+fn canvas(view: ShellView) -> ControlDesc {
+  let #(form_w, form_h) = canvas_size(view.canvas)
+  let form_children = case view.canvas {
+    [root, ..] -> root.children
+    [] -> []
+  }
+  let #(sx, sy, sw, sh) = view.canvas_selection
+  node("canvas", "surface", "", 191, 79, 768, 550)
+  |> with_class("campy-canvas")
+  |> with_props([layout_prop("free")])
+  |> shown(!view.code_view && !view.raw_tab)
+  |> with_children([
+    node(
+      "canvas-title",
+      "label",
+      view.form_title,
+      view.window_x,
+      view.window_y,
+      form_w,
+      28,
+    )
+      |> with_class("campy-canvas-title"),
+    node(
+      "canvas-form",
+      "panel",
+      view.form_title,
+      view.window_x,
+      view.window_y + 28,
+      form_w,
+      form_h,
+    )
+      |> with_class("campy-canvas-form")
+      |> with_props(form_props(view.canvas))
+      |> with_children(form_children),
+    node("selection-rect", "panel", "", sx, sy, sw, sh)
+      |> with_class("campy-selected")
+      |> shown(view.has_selection),
+    node("marquee-rect", "panel", "", 0, 0, 0, 0)
+      |> with_class("campy-marquee")
+      |> shown(False),
+  ])
+}
+
+// The form root's layout props, so the renderer enters the form's own
+// Free/Column/Row mode at the canvas form.
+fn form_props(document: List(ControlDesc)) -> List(#(String, WireValue)) {
+  case document {
+    [root, ..] ->
+      list.filter(root.props, fn(prop) {
+        let #(key, _) = prop
+        key == "layout" || key == "border"
+      })
+    [] -> [layout_prop("free"), #("border", WireInt(0))]
+  }
+}
+
+fn canvas_size(document: List(ControlDesc)) -> #(Int, Int) {
+  case document {
+    [root, ..] -> #(root.w, root.h)
+    [] -> #(0, 0)
+  }
+}
+
+// --- console ----------------------------------------------------------------
+
+fn console_pane(view: ShellView) -> ControlDesc {
+  node("console-pane", "panel", "", 191, 663, 768, 171)
+  |> with_class("campy-console-pane")
+  |> with_props([layout_prop("free")])
+  |> with_children([
+    node("console-title", "label", "Console", 10, 4, 70, 24)
+      |> with_class("campy-console-title"),
+    node(
+      "console-state",
+      "label",
+      case view.running {
+        True -> "running"
+        False -> "stopped"
+      },
+      84,
+      4,
+      80,
+      24,
+    )
+      |> with_class("campy-console-state"),
+    node("console-clear", "button", "Clear", 700, 2, 60, 26)
+      |> with_class("campy-console-clear")
+      |> with_props([hint_prop("Clear console")]),
+    node("console", "console", "", 0, 30, 768, 141)
+      |> with_class("campy-console"),
+  ])
+}
+
+// --- right pane -------------------------------------------------------------
+
+fn right_pane(view: ShellView) -> ControlDesc {
+  node("right-pane", "panel", "", 960, 47, 320, 787)
+  |> with_class("campy-inspector-pane")
+  |> with_props([layout_prop("column")])
+  |> with_children([
+    node("insp-tab-properties", "button", "⚙ Properties", 8, 8, 150, 30)
+      |> with_class("campy-insp-tab")
+      |> with_props([hint_prop("Properties")]),
+    node("insp-tab-events", "button", "⚡ Events", 162, 8, 150, 30)
+      |> with_class("campy-insp-tab")
+      |> with_props([hint_prop("Events")]),
+    rule("insp-rule", 0, 42, 320, 1),
+    node("insp-selection", "label", view.selection_label, 8, 50, 240, 32)
+      |> with_class("campy-insp-selection"),
+    node("insp-delete", "button", "⌫", 272, 50, 40, 28)
+      |> with_class("campy-icon-button")
+      |> with_props([hint_prop("Delete (Del)")])
+      |> shown(view.has_selection),
+    project_panel(view),
+    inspector("inspector", view.props, !view.events_tab, False, view),
+    inspector("inspector-events", view.events, view.events_tab, True, view),
+  ])
+}
+
+fn project_panel(view: ShellView) -> ControlDesc {
+  node("project-panel", "panel", "", 0, 88, 320, 699)
+  |> with_class("campy-project-panel")
+  |> with_props([layout_prop("column")])
+  |> shown(view.project_selected)
+  |> with_children([
+    node("project-icon", "picture", "", 8, 8, 48, 48)
+      |> with_class("campy-project-icon")
+      |> with_props([#("source", WireImage(view.project_icon))])
+      |> shown(view.has_project_icon),
+    node("project-icon-glyph", "label", "▤", 8, 8, 48, 48)
+      |> with_class("campy-project-icon-glyph")
+      |> shown(!view.has_project_icon),
+    node("project-icon-choose", "button", "Choose icon…", 64, 8, 150, 26)
+      |> with_class("campy-project-icon-action")
+      |> with_props([hint_prop("Choose an image for this project")]),
+    node("project-icon-clear", "button", "Clear icon", 64, 38, 150, 26)
+      |> with_class("campy-project-icon-action")
+      |> with_props([hint_prop("Remove icon")]),
+    node("project-title-label", "label", "Title", 8, 70, 64, 28)
+      |> with_class("campy-field-label"),
+    node("project-title", "edit", view.project_title, 76, 70, 236, 28)
+      |> with_class("campy-field-edit"),
+    node("project-path-label", "label", "Path", 8, 102, 64, 28)
+      |> with_class("campy-field-label"),
+    node("project-path", "label", view.project_path, 76, 102, 236, 28)
+      |> with_class("campy-field-text"),
+  ])
+}
+
+fn inspector(
+  name: String,
+  items: List(PropItem),
+  active: Bool,
+  is_events: Bool,
+  view: ShellView,
+) -> ControlDesc {
+  let keys = case is_events {
+    True -> event_keys()
+    False -> prop_keys()
+  }
+  let rows =
+    keys
+    |> list.flat_map(fn(key: String) {
+      let slot = index_of_item(items, key)
+      inspector_row(key, item_at(items, slot), slot, is_events)
+    })
+  node(name, "panel", "", 0, 88, 320, 699)
+  |> with_class("campy-inspector")
+  |> with_props([layout_prop("column")])
+  |> shown(active && !view.project_selected)
+  |> with_children(rows)
+}
+
+fn inspector_row(
+  key: String,
+  item: Option(PropItem),
+  slot: Option(Int),
+  is_events: Bool,
+) -> List(ControlDesc) {
+  let row_name = "insp:" <> key
+  let visible = slot != None
+  let y = case slot {
+    Some(index) -> 8 + index * 30
+    None -> 0
+  }
+  let label =
+    node(row_name <> ":label", "label", row_label(key), 8, y, 96, 28)
+    |> with_class("campy-insp-label")
+    |> shown(visible)
+  let editor = case row_kind(key) {
+    TextRow | NumberRow ->
+      node(row_name, "edit", item_text(item), 108, y, 204, 28)
+      |> with_class("campy-insp-text")
+    BoolRow ->
+      node(row_name, "checkbox", "", 108, y, 204, 28)
+      |> with_class("campy-insp-bool")
+      |> with_props([#("checked", WireBool(item_checked(item)))])
+    ChoiceRow ->
+      node(row_name, "combo", option_text(item), 108, y, 204, 28)
+      |> with_class("campy-insp-choice")
+      |> with_props([model_prop(choice_options(key, item))])
+    OpenRow ->
+      node(row_name, "button", item_text(item), 108, y, 204, 28)
+      |> with_class(case is_events {
+        True -> "campy-insp-event"
+        False -> "campy-insp-open"
+      })
+  }
+  [
+    label,
+    ControlDesc(
+      ..editor,
+      visible: visible,
+      x: case visible {
+        True -> 108
+        False -> 0
+      },
+      w: case visible {
+        True -> 204
+        False -> 0
+      },
+      h: case visible {
+        True -> 28
+        False -> 0
+      },
+    ),
+  ]
+}
+
+fn item_at(items: List(PropItem), slot: Option(Int)) -> Option(PropItem) {
+  case slot {
+    Some(index) -> at(items, index)
+    None -> None
+  }
+}
+
+fn index_of_item(items: List(PropItem), key: String) -> Option(Int) {
+  index_of_loop(items, key, 0)
+}
+
+fn index_of_loop(
+  items: List(PropItem),
+  key: String,
+  index: Int,
+) -> Option(Int) {
+  case items {
+    [] -> None
+    [first, ..rest] ->
+      case first.key == key {
+        True -> Some(index)
+        False -> index_of_loop(rest, key, index + 1)
+      }
+  }
+}
+
+fn item_text(item: Option(PropItem)) -> String {
+  case item {
+    Some(value) -> value.value
+    None -> ""
+  }
+}
+
+fn item_checked(item: Option(PropItem)) -> Bool {
+  case item {
+    Some(value) -> value.checked
+    None -> False
+  }
+}
+
+fn option_text(item: Option(PropItem)) -> String {
+  case item {
+    Some(value) ->
+      case value.index >= 0 {
+        True -> at(value.options, value.index) |> option.unwrap("")
+        False -> ""
+      }
+    None -> ""
+  }
+}
+
+fn choice_options(key: String, item: Option(PropItem)) -> List(WireValue) {
+  let options = case item {
+    Some(value) ->
+      case value.options {
+        [] -> default_options(key)
+        options -> options
+      }
+    None -> default_options(key)
+  }
+  list.map(options, WireText)
+}
+
+fn default_options(key: String) -> List(String) {
+  case key {
+    "color" -> color_options
+    "align" -> align_options
+    "layout" -> layout_options
+    _ -> []
+  }
+}
+
+fn at(items: List(a), index: Int) -> Option(a) {
+  case items {
+    [] -> None
+    [first, ..rest] ->
+      case index <= 0 {
+        True -> Some(first)
+        False -> at(rest, index - 1)
+      }
+  }
+}
+
+// --- status bar -------------------------------------------------------------
+
+fn status_bar(view: ShellView) -> ControlDesc {
+  node("status-bar", "panel", "", 0, 834, window_width, 26)
+  |> with_class("campy-status-bar")
+  |> with_props([layout_prop("row")])
+  |> with_children([
+    node("status", "label", view.status, 10, 3, 700, 20)
+      |> with_class("campy-status"),
+    node("status-path", "label", view.path, 720, 3, 550, 20)
+      |> with_class("campy-status-path"),
+  ])
+}
+
+// --- dialogs and overlays ---------------------------------------------------
+
+fn settings_dialog(view: ShellView) -> ControlDesc {
+  node("settings-panel", "panel", "", 380, 120, 520, 330)
+  |> with_class("campy-dialog")
+  |> with_props([layout_prop("column")])
+  |> shown(view.settings_open)
+  |> with_children([
+    node("settings-title", "label", "Editor settings", 18, 16, 480, 24)
+      |> with_class("campy-dialog-title"),
+    node("settings-font-label", "label", "Font", 18, 56, 110, 32)
+      |> with_class("campy-dialog-label"),
+    node("settings-font", "combo", view.font, 136, 56, 366, 32)
+      |> with_class("campy-dialog-choice")
+      |> with_props([model_prop(list.map(fonts, WireText))]),
+    node("settings-size-label", "label", "Font size", 18, 96, 110, 32)
+      |> with_class("campy-dialog-label"),
+    node(
+      "settings-size",
+      "combo",
+      int.to_string(view.font_size),
+      136,
+      96,
+      366,
+      32,
+    )
+      |> with_class("campy-dialog-choice")
+      |> with_props([model_prop(list.map(sizes, WireText))]),
+    node("settings-scheme-label", "label", "Color scheme", 18, 136, 110, 32)
+      |> with_class("campy-dialog-label"),
+    node(
+      "settings-scheme",
+      "combo",
+      at(schemes, view.scheme_index) |> option.unwrap("Dark"),
+      136,
+      136,
+      366,
+      32,
+    )
+      |> with_class("campy-dialog-choice")
+      |> with_props([model_prop(list.map(schemes, WireText))]),
+    node("settings-hints", "checkbox", "Show UI hints", 136, 176, 366, 32)
+      |> with_class("campy-dialog-check")
+      |> with_props([
+        #("checked", WireBool(view.hints)),
+        hint_prop("Enable button tooltips and palette hints"),
+      ]),
+    node("settings-close", "button", "Close", 18, 270, 100, 32)
+      |> with_class("campy-dialog-primary")
+      |> with_props([hint_prop("Close the settings dialog")]),
+  ])
+}
+
+fn agent_dialog(view: ShellView) -> ControlDesc {
+  node("agent-panel", "panel", "", 360, 140, 560, 300)
+  |> with_class("campy-dialog")
+  |> with_props([layout_prop("column")])
+  |> shown(view.agent_open)
+  |> with_children([
+    node("agent-title", "label", "Agent settings", 18, 16, 520, 24)
+      |> with_class("campy-dialog-title"),
+    node("agent-mcp", "checkbox", "Enable MCP server", 18, 52, 520, 32)
+      |> with_class("campy-dialog-check")
+      |> with_props([
+        #("checked", WireBool(view.mcp_enabled)),
+        hint_prop("Expose Campy tools over local MCP"),
+      ]),
+    node("agent-port-label", "label", "Port", 18, 92, 110, 32)
+      |> with_class("campy-dialog-label"),
+    node("agent-port", "edit", view.mcp_port, 136, 92, 400, 32)
+      |> with_class("campy-dialog-edit"),
+    node("agent-status", "label", view.mcp_status, 18, 132, 520, 20)
+      |> with_class("campy-dialog-text"),
+    node(
+      "agent-endpoint",
+      "label",
+      "Endpoint: http://127.0.0.1:" <> view.mcp_port <> "/mcp",
+      18,
+      156,
+      520,
+      20,
+    )
+      |> with_class("campy-dialog-text"),
+    node(
+      "agent-note",
+      "label",
+      "Disabled by default. The server listens on localhost only.",
+      18,
+      180,
+      520,
+      20,
+    )
+      |> with_class("campy-dialog-text"),
+    node("agent-close", "button", "Close", 18, 248, 100, 32)
+      |> with_class("campy-dialog-primary")
+      |> with_props([hint_prop("Close the agent settings")]),
+  ])
+}
+
+fn project_dialog(view: ShellView) -> ControlDesc {
+  node("project-dialog", "panel", "", 410, 160, 460, 240)
+  |> with_class("campy-dialog")
+  |> with_props([layout_prop("column")])
+  |> shown(view.project_dialog_open)
+  |> with_children([
+    node("project-dialog-title", "label", "Projects", 18, 16, 420, 24)
+      |> with_class("campy-dialog-title"),
+    node(
+      "project-dialog-body",
+      "label",
+      "Create a new project or open an existing project into this workspace.",
+      18,
+      48,
+      420,
+      32,
+    )
+      |> with_class("campy-dialog-text"),
+    node("project-new", "button", "Create new project", 18, 92, 420, 32)
+      |> with_class("campy-dialog-primary")
+      |> with_props([hint_prop("Create a new project in the workspace")]),
+    node("project-open", "button", "Open existing project…", 18, 132, 420, 32)
+      |> with_class("campy-dialog-action")
+      |> with_props([hint_prop("Open a project file into the workspace")]),
+    node("project-dialog-cancel", "button", "Cancel", 18, 188, 100, 32)
+      |> with_class("campy-dialog-action")
+      |> with_props([hint_prop("Cancel")]),
+  ])
+}
+
+fn browser_dialog(view: ShellView) -> ControlDesc {
+  node("browser-panel", "panel", "", 380, 100, 520, 420)
+  |> with_class("campy-dialog")
+  |> with_props([layout_prop("column")])
+  |> shown(view.popup_open)
+  |> with_children([
+    node("browser-title", "label", view.popup_title, 16, 12, 480, 24)
+      |> with_class("campy-dialog-title"),
+    node("browser-home", "button", "⌂", 16, 44, 34, 28)
+      |> with_class("campy-dialog-icon")
+      |> with_props([hint_prop("Go to the home directory")]),
+    node("browser-new-dir", "button", "+ Dir", 56, 44, 54, 28)
+      |> with_class("campy-dialog-icon")
+      |> with_props([hint_prop("Create a folder named as the Name field")]),
+    node("browser-dir", "label", view.browser_dir, 118, 44, 300, 28)
+      |> with_class("campy-dialog-text"),
+    node("browser-up", "button", "↑", 452, 44, 34, 28)
+      |> with_class("campy-dialog-icon")
+      |> with_props([hint_prop("Go to the parent directory")]),
+    list_node(
+      "browser-entries",
+      16,
+      80,
+      488,
+      240,
+      list.map(view.browser_items, fn(item: BrowserItem) {
+        WireStruct([
+          #("text", WireText(item.name)),
+          #("is-dir", WireBool(item.is_dir)),
+        ])
+      }),
+    )
+      |> with_class("campy-dialog-list"),
+    node("browser-name-label", "label", "Name", 16, 328, 60, 28)
+      |> with_class("campy-dialog-label"),
+    node("browser-name", "edit", view.browser_name, 82, 328, 422, 28)
+      |> with_class("campy-dialog-edit"),
+    node("browser-accept", "button", view.popup_action, 16, 370, 120, 32)
+      |> with_class("campy-dialog-primary")
+      |> with_props([hint_prop("Confirm")]),
+    node("browser-cancel", "button", "Cancel", 144, 370, 120, 32)
+      |> with_class("campy-dialog-action")
+      |> with_props([hint_prop("Cancel")]),
+  ])
+}
+
+fn context_menu(view: ShellView) -> ControlDesc {
+  node("context-menu", "panel", "", view.context_x, view.context_y, 150, 142)
+  |> with_class("campy-context-menu")
+  |> shown(view.context_open)
+  |> with_children([
+    menu_row("ctx-cut", "Cut", 2, 2, view.has_selection),
+    menu_row("ctx-copy", "Copy", 2, 28, view.has_selection),
+    menu_row("ctx-paste", "Paste", 2, 54, True),
+    menu_row("ctx-delete", "Delete", 2, 80, view.has_selection),
+    menu_row("ctx-align", "Align ▸", 2, 106, view.selection_count > 1),
+  ])
+}
+
+fn align_menu(view: ShellView) -> ControlDesc {
+  node(
+    "align-menu",
+    "panel",
+    "",
+    view.context_x + 150,
+    view.context_y,
+    110,
+    166,
+  )
+  |> with_class("campy-context-menu")
+  |> shown(view.context_open && view.context_align && view.selection_count > 1)
+  |> with_children([
+    menu_row("align-left", "Left", 2, 2, True),
+    menu_row("align-right", "Right", 2, 28, True),
+    menu_row("align-center", "Center", 2, 54, True),
+    menu_row("align-top", "Top", 2, 80, True),
+    menu_row("align-bottom", "Down", 2, 106, True),
+    menu_row("align-middle", "Middle", 2, 132, True),
+  ])
+}
+
+fn nav_context(view: ShellView) -> ControlDesc {
+  node("nav-context", "panel", "", 0, 0, 150, 112)
+  |> with_class("campy-context-menu")
+  |> shown(view.nav_context_open)
+  |> with_children([
+    menu_row("nav-ctx-remove", "Remove", 2, 2, view.nav_context_project),
+    menu_row("nav-ctx-open", "Open module", 2, 28, !view.nav_context_project),
+    menu_row("nav-ctx-delete", "Delete", 2, 54, !view.nav_context_project),
+    menu_row("nav-ctx-close-tab", "Close tab", 2, 80, !view.nav_context_project),
+  ])
+}
+
+fn menu_row(
+  name: String,
+  label: String,
+  x: Int,
+  y: Int,
+  active: Bool,
+) -> ControlDesc {
+  node(name, "button", label, x, y, 146, 26)
+  |> with_class("campy-menu-row")
+  |> shown(active)
+}
+
+// ---------------------------------------------------------------------------
+// Construction helpers
+// ---------------------------------------------------------------------------
+
+fn node(
+  name: String,
+  kind: String,
+  text: String,
+  x: Int,
+  y: Int,
+  w: Int,
+  h: Int,
+) -> ControlDesc {
+  ControlDesc(
+    id: campy_form.wire_id(name),
+    kind: kind,
+    text: text,
+    x: x,
+    y: y,
+    w: w,
+    h: h,
+    enabled: True,
+    visible: True,
+    props: [],
+    children: [],
+  )
+}
+
+fn rule(name: String, x: Int, y: Int, w: Int, h: Int) -> ControlDesc {
+  node(name, "panel", "", x, y, w, h)
+  |> with_class("campy-rule")
+}
+
+fn list_node(
+  name: String,
+  x: Int,
+  y: Int,
+  w: Int,
+  h: Int,
+  items: List(WireValue),
+) -> ControlDesc {
+  node(name, "list", "", x, y, w, h)
+  |> with_props([model_prop(items)])
+}
+
+fn with_class(desc: ControlDesc, name: String) -> ControlDesc {
+  with_props(desc, [#("class", WireText(name))])
+}
+
+fn with_props(
+  desc: ControlDesc,
+  props: List(#(String, WireValue)),
+) -> ControlDesc {
+  ControlDesc(..desc, props: list.append(desc.props, props))
+}
+
+fn with_children(
+  desc: ControlDesc,
+  children: List(ControlDesc),
+) -> ControlDesc {
+  ControlDesc(..desc, children: children)
+}
+
+fn shown(desc: ControlDesc, visible: Bool) -> ControlDesc {
+  ControlDesc(..desc, visible: visible)
+}
+
+fn enabled_as(desc: ControlDesc, enabled: Bool) -> ControlDesc {
+  ControlDesc(..desc, enabled: enabled)
+}
+
+fn model_prop(items: List(WireValue)) -> #(String, WireValue) {
+  #("model", WireList(items))
+}
+
+fn layout_prop(layout: String) -> #(String, WireValue) {
+  #("layout", WireText(layout))
+}
+
+fn hint_prop(text: String) -> #(String, WireValue) {
+  #("hint", WireText(text))
 }
