@@ -14,6 +14,9 @@ zgui-terminal.workspace = true
 # the version zgui-editor builds against; LanguageFn bridges the ABI).
 tree-sitter = "0.26"
 tree-sitter-gleam = "1.0.0"
+# The console kind's channel transport (same version/features as
+# zgui-terminal's own use).
+flume = { version = "0.12", default-features = false }
 # The embedder builds its own event loop (with_any_thread) driving zgui's
 # public WinitApp; same version the platform backend uses.
 zgui-platform-winit = { git = "https://github.com/zortax/zgui" }

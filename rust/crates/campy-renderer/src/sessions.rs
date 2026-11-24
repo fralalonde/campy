@@ -515,14 +515,14 @@ fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
             handle.set_text(source);
         }
         Op::AppendConsole { control, bytes } => {
-            let signals = control_of(control)?;
-            let mut next = signals.buffer.get_untracked();
-            next.push_str(bytes);
-            let cap = wire::MAX_TEXT_BYTES;
-            if next.len() > cap {
-                next = next[next.len() - cap..].to_owned();
-            }
-            signals.buffer.set(next);
+            let feed = host
+                .consoles
+                .borrow()
+                .get(control)
+                .cloned()
+                .ok_or_else(|| format!("Control {control} is not a console"))?;
+            feed.send(bytes.clone().into_bytes())
+                .map_err(|_| "The console feed is closed".to_string())?;
         }
         Op::SetMarks { control, .. } => {
             // Editor mark layers arrive with the editor integration (Z3.1).
@@ -539,7 +539,6 @@ fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
                         format!("{}", signals.value.get_untracked()),
                     );
                 }
-                "buffer" => host.emit_read(*control, "buffer", signals.buffer.get_untracked()),
                 "source" => {
                     let handle = host.editors.borrow().get(control).cloned();
                     match handle {

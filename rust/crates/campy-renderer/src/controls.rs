@@ -15,6 +15,7 @@ use zgui::geom::{Css, CssPx, Point};
 use zgui::prelude::*;
 use zgui::view::{AnyView, AttrName, ClassName, events};
 use zgui_editor::{EditorEvent, EditorHandle, EditorProps, LanguageConfig, LanguageRegistry};
+use zgui_terminal::TerminalProps;
 use zgui_ui::prelude::*;
 
 use crate::wire::{ControlDesc, PropValue, UiDocument};
@@ -36,6 +37,11 @@ pub struct Host {
     pub controls: RefCell<HashMap<u64, ControlSignals>>,
     /// Live editor handles (`memo` / `code_editor` kinds).
     pub editors: RefCell<HashMap<u64, EditorHandle>>,
+    /// Live console feeds (`console` kind): AppendConsole bytes go here.
+    pub consoles: RefCell<HashMap<u64, flume::Sender<Vec<u8>>>>,
+    /// The current generation, mirrored for threads the sink may be
+    /// called from (console input pumps).
+    pub live_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// This window's handle once the view is running (`use_window`).
     pub window: RefCell<Option<zgui::runtime::windows::WindowHandle>>,
     /// The NIF-visible session flag (close reasons ride it, v1 rule:
@@ -52,6 +58,8 @@ impl Host {
             document: RwSignal::new_local(None),
             controls: RefCell::new(HashMap::new()),
             editors: RefCell::new(HashMap::new()),
+            consoles: RefCell::new(HashMap::new()),
+            live_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             window: RefCell::new(None),
             control: RefCell::new(None),
         })
@@ -104,6 +112,15 @@ impl Host {
         self.send(format!("control:{control}:{event}"), payload.into());
     }
 
+    /// The sink + ids a non-UI thread (console pump) emits with.
+    pub fn thread_sink(&self) -> (EventSink, u64, std::sync::Arc<std::sync::atomic::AtomicU64>) {
+        (
+            self.sink.borrow().clone(),
+            self.session,
+            self.live_generation.clone(),
+        )
+    }
+
     /// A control-scoped reply: `read:<id>:<key>`.
     pub fn emit_read(&self, control: u64, key: &str, payload: impl Into<String>) {
         self.send(format!("read:{control}:{key}"), payload.into());
@@ -127,8 +144,6 @@ pub struct ControlSignals {
     pub rect: RwSignal<(f64, f64, f64, f64), LocalStorage>,
     pub enabled: RwSignal<bool, LocalStorage>,
     pub visible: RwSignal<bool, LocalStorage>,
-    /// Console line buffer (the `console` kind stub until zgui-terminal).
-    pub buffer: RwSignal<String, LocalStorage>,
 }
 
 fn checked_of(value: bool) -> Checked {
@@ -218,7 +233,6 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
         rect: RwSignal::new_local((desc.x, desc.y, desc.w, desc.h)),
         enabled: RwSignal::new_local(desc.enabled),
         visible: RwSignal::new_local(desc.visible),
-        buffer: RwSignal::new_local(String::new()),
     };
     host.controls.borrow_mut().insert(desc.id, signals.clone());
 
@@ -464,8 +478,34 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         }
 
         "console" => {
-            let buffer = signals.buffer.clone();
-            AnyView::new(r#box().class("campy-console").child(move || buffer.get()))
+            // A real terminal over channels: AppendConsole bytes arrive on
+            // `output`; the terminal's keyboard flows back on `input`, and
+            // a pump thread forwards it to the BEAM as console input. ANSI
+            // escapes pass through, so preview logs render colored.
+            let (feed, output) = flume::unbounded::<Vec<u8>>();
+            let (input, keyboard) = flume::unbounded::<Vec<u8>>();
+            host.consoles.borrow_mut().insert(id, feed);
+            let (sink, session, generation) = host.thread_sink();
+            std::thread::spawn(move || {
+                while let Ok(bytes) = keyboard.recv() {
+                    let text = String::from_utf8_lossy(&bytes)
+                        .trim_end_matches(['\r', '\n'])
+                        .to_string();
+                    (sink)(
+                        session,
+                        generation.load(std::sync::atomic::Ordering::Acquire),
+                        format!("console:{id}:input"),
+                        text,
+                    );
+                }
+            });
+            let terminal = view! {
+                Terminal(
+                    transport = zgui_terminal::transport::Channels::new(input, output),
+                    class = "campy-console",
+                ) {}
+            };
+            AnyView::new(terminal)
         }
 
         _other => {
