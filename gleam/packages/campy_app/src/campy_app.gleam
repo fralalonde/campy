@@ -2,7 +2,7 @@
 ////
 //// A `Config` carries the app identity, the form it was designed from, the
 //// module that holds its ABI v1 handlers, and a report callback. `start` opens
-//// one bridge session, applies the form's live-preview snapshot, and keeps the
+//// one bridge session, loads the form's protocol-v2 document, and keeps the
 //// app actor under a `gleam_otp` supervisor. Events are pushed in with
 //// `deliver`; this actor never polls, so the single poll owner in the VM (the
 //// IDE loop today, the runner process later) stays the only `bridge.poll`
@@ -10,8 +10,8 @@
 ////
 //// ## P1 state limit
 ////
-//// An app holds no state of its own beyond the form and its applied snapshot.
-//// When the actor is restarted after a crash it rebuilds that state from its
+//// An app holds no state of its own beyond the form it was started with. When
+//// the actor is restarted after a crash it rebuilds that state from its
 //// `Config`; anything a handler might have kept elsewhere is not recovered.
 //// Persistent app state is future work.
 ////
@@ -23,7 +23,6 @@ import campy_app/handler
 import campy_app/preview_apply
 import campy_bridge as bridge
 import campy_form
-import campy_form/live_preview
 import gleam/erlang/process
 import gleam/int
 import gleam/option.{type Option, None, Some}
@@ -162,9 +161,9 @@ pub fn deliver(ref: Ref, event: bridge.NativeEvent) -> Nil {
   process.send(subject, DeliverEvent(event))
 }
 
-// Ask the actor to apply a new form snapshot. Fire-and-forget: success arrives
-// as an `Applied` report and failure as a `Console` line, leaving the previous
-// snapshot live.
+// Ask the actor to load a new form. Fire-and-forget: success arrives as an
+// `Applied` report and failure as a `Console` line, leaving the previous
+// document live.
 pub fn apply_snapshot(ref: Ref, form: campy_form.Form) -> Nil {
   let Ref(subject) = ref
   process.send(subject, ApplySnapshot(form))
@@ -274,26 +273,20 @@ fn initialise_actor(
   case bridge.open_session() {
     Error(error) -> actor_start_failed(watcher, None, error)
     Ok(session) -> {
-      case bridge.submit(session, bridge.LoadUi(1, live_preview.to_slint())) {
+      case preview_apply.apply(session, 1, config.form) {
         Error(error) -> actor_start_failed(watcher, Some(session), error)
         Ok(Nil) -> {
-          let snapshot = live_preview.snapshot(config.form)
-          case preview_apply.apply(session, snapshot) {
-            Error(error) -> actor_start_failed(watcher, Some(session), error)
-            Ok(Nil) -> {
-              config.report(Started(config.app, config.version, config.digest))
-              config.report(Applied(config.app))
-              Ok(
-                actor.initialised(ActorState(
-                  config: config,
-                  watcher: watcher,
-                  form: config.form,
-                  session: session,
-                  generation: 1,
-                )),
-              )
-            }
-          }
+          config.report(Started(config.app, config.version, config.digest))
+          config.report(Applied(config.app))
+          Ok(
+            actor.initialised(ActorState(
+              config: config,
+              watcher: watcher,
+              form: config.form,
+              session: session,
+              generation: 1,
+            )),
+          )
         }
       }
     }
@@ -331,8 +324,7 @@ fn handle_actor_message(
       actor.continue(state)
     }
     ActorApply(form) -> {
-      let snapshot = live_preview.snapshot(form)
-      case preview_apply.apply(state.session, snapshot) {
+      case preview_apply.apply(state.session, state.generation + 1, form) {
         Ok(Nil) -> {
           state.config.report(Applied(state.config.app))
           actor.continue(
@@ -340,7 +332,7 @@ fn handle_actor_message(
           )
         }
         Error(error) -> {
-          // The old snapshot stays live; the app process must not die for a
+          // The old document stays live; the app process must not die for a
           // rejected update.
           state.config.report(Console(error))
           actor.continue(state)
@@ -355,12 +347,28 @@ fn handle_actor_message(
   }
 }
 
+// Protocol-v2 control events: `control:<wire id>:<event key>`. The wire id maps
+// back to the form model control (no document bookkeeping), then ABI v1 resolves
+// the handler from the control's name.
+pub fn control_event(kind: String) -> Option(#(Int, String)) {
+  case string.split(kind, ":") {
+    ["control", wire_id, event_key] ->
+      case int.parse(wire_id) {
+        Ok(id) -> Some(#(id, event_key))
+        Error(_) -> None
+      }
+    _ -> None
+  }
+}
+
 fn dispatch_event(state: ActorState, event: bridge.NativeEvent) {
-  case event.kind {
-    "callback:event" ->
-      case string.split_once(event.payload, ":") {
-        Ok(#(control_id, event_key)) ->
-          case handler.name_for(state.form, control_id, event_key) {
+  case control_event(event.kind) {
+    None -> Nil
+    Some(#(id, event_key)) ->
+      case campy_form.find_control_by_wire_id(state.form, id) {
+        None -> Nil
+        Some(control) ->
+          case handler.name_for(state.form, control.id, event_key) {
             None -> Nil
             Some(name) ->
               case handler.apply_handler(state.config.handlers_module, name) {
@@ -372,9 +380,7 @@ fn dispatch_event(state: ActorState, event: bridge.NativeEvent) {
                   ))
               }
           }
-        Error(Nil) -> Nil
       }
-    _ -> Nil
   }
 }
 

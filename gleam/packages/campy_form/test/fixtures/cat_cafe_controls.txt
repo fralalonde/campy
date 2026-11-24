@@ -1,0 +1,11 @@
+# Cat Café form → ControlDesc document (golden, Z2.1).
+# One node per line, children indented: kind id= text= xy= wh= enabled= visible= props=.
+# Regenerate after a deliberate emitter change: CAMPY_UPDATE_FIXTURE=1 gleam test
+panel id=0 text="Cat Café" xy=0,0 wh=640x420 enabled=true visible=true props=layout:"free" border:0
+  panel id=461263348 text="Cat Café" xy=24,24 wh=560x360 enabled=true visible=true props=layout:"free" border:0
+    picture id=728734912 text="assets/cat.png" xy=20,44 wh=200x150 enabled=true visible=true props=source:image("assets/cat.png") fit:"contain" transparency:0
+    label id=1723611363 text="Mochi says hello!" xy=240,44 wh=280x24 enabled=true visible=true props=-
+    list id=192493727 text="Resident cats" xy=240,80 wh=280x78 enabled=true visible=true props=model:["Resident cats"]
+    edit id=2138536974 text="" xy=240,168 wh=280x32 enabled=true visible=true props=placeholder:"" read-only:false
+    button id=1918332855 text="Pet the cat" xy=20,212 wh=140x32 enabled=true visible=true props=variant:"solid"
+    button id=1517422018 text="Feed the cat" xy=172,212 wh=140x32 enabled=true visible=true props=variant:"solid"

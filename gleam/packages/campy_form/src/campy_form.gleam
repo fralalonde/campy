@@ -21,18 +21,21 @@ pub type Kind {
   GroupBox
   Picture
   Menu
+  CodeEditor
+  Console
 }
 
 // How the form arranges its controls. Free is absolute (the classic designer);
-// Column and Row delegate placement to Slint layouts.
+// Column and Row delegate placement to the renderer's box layout.
 pub type Layout {
   Free
   Column
   Row
 }
 
-// LCL-style alignment, expressed with Slint's layout model. Aligned Free-layout
-// controls follow the form's width/height; Column/Row layouts ignore alignment.
+// LCL-style alignment, expressed with the renderer's layout model. Aligned
+// Free-layout controls follow the form's width/height; Column/Row layouts
+// ignore alignment.
 pub type Align {
   NoAlign
   Top
@@ -157,6 +160,8 @@ pub fn kind_key(kind: Kind) -> String {
     GroupBox -> "group"
     Picture -> "picture"
     Menu -> "menu"
+    CodeEditor -> "code_editor"
+    Console -> "console"
   }
 }
 
@@ -176,7 +181,52 @@ pub fn kind_from_key(key: String) -> Option(Kind) {
     "group" -> Some(GroupBox)
     "picture" -> Some(Picture)
     "menu" -> Some(Menu)
+    "code_editor" -> Some(CodeEditor)
+    "console" -> Some(Console)
     _ -> None
+  }
+}
+
+// Wire identity. The form model names controls with strings (`button-1`); the
+// protocol addresses them with `ControlDesc.id` integers. `wire_id` is the
+// stable derivation: a 31-bit hash of the name, so the same control keeps its
+// id across `LoadUi` reloads, a loop can map an event id back to the form
+// without keeping the loaded document, and ids never depend on list order.
+// 0 is reserved for the window root (`live_preview.window_id`); a name that
+// hashes to 0 maps to 1.
+pub const window_id = 0
+
+const wire_hash_modulus = 4_294_967_296
+
+const wire_id_mask = 2_147_483_647
+
+pub fn wire_id(name: String) -> Int {
+  let hash =
+    name
+    |> string.to_utf_codepoints
+    |> list.fold(5381, fn(hash, codepoint) {
+      let value = string.utf_codepoint_to_int(codepoint)
+      { hash * 33 + value } % wire_hash_modulus
+    })
+  let id = hash % wire_id_mask
+  case id == window_id {
+    True -> 1
+    False -> id
+  }
+}
+
+pub fn control_wire_id(control: Control) -> Int {
+  wire_id(control.id)
+}
+
+// The form control an event's wire id refers to (`None` for the window root or
+// an unknown id).
+pub fn find_control_by_wire_id(form: Form, id: Int) -> Option(Control) {
+  case
+    list.find(form.controls, fn(control) { control_wire_id(control) == id })
+  {
+    Ok(control) -> Some(control)
+    Error(Nil) -> None
   }
 }
 
@@ -226,8 +276,9 @@ pub fn align_key(align: Align) -> String {
 }
 
 // Effective geometry used by the designer and live preview, including design
-// alignment. Column/Row layouts position controls with Slint, so their stored
-// geometry is returned for editor-side hit testing only.
+// alignment. Column/Row layouts position controls with the renderer's box
+// layout, so their stored geometry is returned for editor-side hit testing
+// only.
 pub fn border_of(form: Form, parent_id: String) -> Int {
   case list.find(form.borders, fn(entry) { entry.0 == parent_id }) {
     Ok(entry) -> int.max(0, entry.1)
@@ -988,6 +1039,7 @@ pub fn validate(form: Form) -> Result(Form, String) {
     True -> {
       let names = list.map(form.controls, fn(control) { control.name })
       let ids = list.map(form.controls, fn(control) { control.id })
+      let wire_ids = list.map(form.controls, control_wire_id)
       case list.all(names, valid_name) {
         False -> Error("Control names must be valid Gleam identifiers")
         True ->
@@ -996,7 +1048,13 @@ pub fn validate(form: Form) -> Result(Form, String) {
             True ->
               case list.length(ids) == list.length(list.unique(ids)) {
                 False -> Error("Control IDs must be unique")
-                True -> Ok(form)
+                True ->
+                  case
+                    list.length(wire_ids) == list.length(list.unique(wire_ids))
+                  {
+                    False -> Error("Control IDs must map to unique wire ids")
+                    True -> Ok(form)
+                  }
               }
           }
       }

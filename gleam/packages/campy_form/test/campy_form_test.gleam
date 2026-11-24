@@ -1,5 +1,6 @@
+import campy_bridge.{WireImage, WireInt, WireText}
 import campy_form
-import campy_form/preview
+import campy_form/live_preview
 import campy_form/project
 import campy_form/syntax
 import campy_form/workspace
@@ -205,79 +206,6 @@ pub fn tokenizer_classifies_keywords_strings_and_comments_test() {
   |> should.equal([syntax.Token(syntax.Str, "\"text\"")])
 }
 
-pub fn preview_emits_window_controls_and_callbacks_test() {
-  let form =
-    campy_form.Form(
-      "campy.form",
-      "A \"title\" \\{x}",
-      320,
-      200,
-      campy_form.Free,
-      [
-        campy_form.Control(
-          "button-1",
-          "save",
-          campy_form.Button,
-          10,
-          12,
-          80,
-          30,
-          "Save \"now\"",
-          True,
-          True,
-          [],
-        ),
-        campy_form.Control(
-          "edit-1",
-          "email",
-          campy_form.EditBox,
-          10,
-          60,
-          120,
-          30,
-          "",
-          True,
-          True,
-          [],
-        ),
-        campy_form.Control(
-          "label-1",
-          "caption",
-          campy_form.Label,
-          10,
-          100,
-          120,
-          20,
-          "Hi",
-          True,
-          True,
-          [],
-        ),
-      ],
-      [],
-      [],
-      [],
-      [],
-      [],
-      [],
-    )
-  let assert Ok(source) = preview.to_slint(form)
-  string.contains(source, "export component CampyPreview inherits Window")
-  |> should.be_true
-  string.contains(source, "callback save_clicked();") |> should.be_true
-  string.contains(source, "callback email_edited(string);")
-  |> should.be_true
-  string.contains(source, "callback email_accepted(string);")
-  |> should.be_true
-  string.contains(source, "edited(text) => { root.email_edited(text); }")
-  |> should.be_true
-  string.contains(source, "clicked => { root.save_clicked(); }")
-  |> should.be_true
-  string.contains(source, "title: \"A \\\"title\\\" \\\\{x}\";")
-  |> should.be_true
-  string.contains(source, "text: \"Save \\\"now\\\"\";") |> should.be_true
-}
-
 pub fn workspace_roundtrip_test() {
   let ws = workspace.new(project.campy())
   workspace.count(ws) |> should.equal(1)
@@ -388,41 +316,6 @@ pub fn set_parent_refuses_cycles_and_missing_parents_test() {
   campy_form.parent_of(next, "panel-1") |> should.equal("")
   let next = campy_form.set_parent(form, "panel-1", "panel-2")
   campy_form.parent_of(next, "panel-1") |> should.equal("")
-}
-
-pub fn aligned_controls_follow_the_window_test() {
-  let form =
-    campy_form.Form(
-      "campy.form",
-      "Aligned",
-      400,
-      300,
-      campy_form.Free,
-      [
-        campy_form.Control(
-          "button-1",
-          "save",
-          campy_form.Button,
-          10,
-          10,
-          80,
-          30,
-          "Save",
-          True,
-          True,
-          [],
-        ),
-      ],
-      [],
-      [#("button-1", campy_form.Bottom)],
-      [],
-      [],
-      [],
-      [],
-    )
-  let assert Ok(source) = preview.to_slint(form)
-  string.contains(source, "x: 0px; y: 270px; width: 400px; height: 30px")
-  |> should.be_true
 }
 
 pub fn project_roundtrip_preserves_modules_test() {
@@ -803,13 +696,6 @@ pub fn fill_uses_space_between_siblings_test() {
   #(x, y, w, h) |> should.equal(#(10, 30, 280, 140))
 }
 
-pub fn form_border_pads_column_layout_test() {
-  let bordered = campy_form.set_border_for(campy_form.new_form(), "", 12)
-  let form = campy_form.Form(..bordered, layout: campy_form.Column)
-  let assert Ok(source) = preview.to_slint(form)
-  string.contains(source, "padding: 12px") |> should.be_true
-}
-
 // Z-order: siblings render in controls-list order, so bring-to-front moves a
 // control after its overlapping siblings and send-to-back before them.
 pub fn bring_to_front_reorders_siblings_test() {
@@ -857,47 +743,6 @@ pub fn transparency_accessors_test() {
   let cleared = campy_form.set_transparency_for(set, "under", 0)
   campy_form.transparency_of(cleared, "under") |> should.equal(0)
   cleared.transparencies |> should.equal([])
-}
-
-// The run window fades pictures by their transparency.
-pub fn preview_emits_picture_opacity_test() {
-  let form = campy_form.set_transparency_for(picture_form(), "pic-1", 60)
-  let assert Ok(source) = preview.to_slint(form)
-  string.contains(source, "opacity: 0.4;") |> should.be_true
-
-  let assert Ok(plain) = preview.to_slint(picture_form())
-  string.contains(plain, "opacity:") |> should.be_false
-}
-
-fn picture_form() -> campy_form.Form {
-  campy_form.Form(
-    "campy.form",
-    "Picture",
-    400,
-    300,
-    campy_form.Free,
-    [
-      campy_form.Control(
-        "pic-1",
-        "pic1",
-        campy_form.Picture,
-        20,
-        20,
-        200,
-        150,
-        "assets/cat.png",
-        True,
-        True,
-        [],
-      ),
-    ],
-    [],
-    [],
-    [],
-    [],
-    [],
-    [],
-  )
 }
 
 fn overlapping_form() -> campy_form.Form {

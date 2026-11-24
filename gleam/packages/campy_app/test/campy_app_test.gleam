@@ -3,6 +3,7 @@ import campy_app/handler
 import campy_bridge
 import campy_form
 import gleam/erlang/process
+import gleam/int
 import gleam/option.{None, Some}
 import gleam/string
 import gleeunit
@@ -189,6 +190,20 @@ pub fn report_line_rendering_test() {
   |> should.equal("[cat_cafe] raw line")
 }
 
+// Protocol v2 delivers `control:<wire id>:<event>`; everything else (lifecycle,
+// pointer, editor, console, lsp kinds) is not an ABI v1 handler event.
+pub fn control_event_parsing_test() {
+  campy_app.control_event("control:42:clicked")
+  |> should.equal(Some(#(42, "clicked")))
+  campy_app.control_event("control:7:toggled")
+  |> should.equal(Some(#(7, "toggled")))
+  campy_app.control_event("control:not-a-number:clicked")
+  |> should.equal(None)
+  campy_app.control_event("ui-loaded") |> should.equal(None)
+  campy_app.control_event("editor:7:changed") |> should.equal(None)
+  campy_app.control_event("callback:event") |> should.equal(None)
+}
+
 // --- Session-dependent tier ------------------------------------------------
 
 pub fn session_lifecycle_test() {
@@ -227,15 +242,10 @@ fn session_lifecycle() -> Nil {
   })
 
   // A working handler is silent; the raising handler must be contained and
-  // reported, not restart the actor.
-  campy_app.deliver(
-    ref,
-    campy_bridge.NativeEvent(1, 1, "callback:event", "pet-button:clicked"),
-  )
-  campy_app.deliver(
-    ref,
-    campy_bridge.NativeEvent(1, 1, "callback:event", "break-button:clicked"),
-  )
+  // reported, not restart the actor. Protocol v2 events carry the control's
+  // wire id, not its string id.
+  campy_app.deliver(ref, click_event("pet-button"))
+  campy_app.deliver(ref, click_event("break-button"))
   let assert campy_app.HandlerError(handler_name, reason) =
     await_report(reports, fn(report) {
       case report {
@@ -247,10 +257,7 @@ fn session_lifecycle() -> Nil {
   string.starts_with(reason, "error:") |> should.be_true
   string.contains(reason, "\n") |> should.be_false
 
-  campy_app.deliver(
-    ref,
-    campy_bridge.NativeEvent(1, 1, "callback:event", "missing-button:clicked"),
-  )
+  campy_app.deliver(ref, click_event("missing-button"))
   let assert campy_app.HandlerError("missing_button_clicked", "no handler") =
     await_report(reports, fn(report) {
       case report {
@@ -277,6 +284,15 @@ fn session_lifecycle() -> Nil {
       }
     })
   Nil
+}
+
+fn click_event(control_id: String) -> campy_bridge.NativeEvent {
+  campy_bridge.NativeEvent(
+    1,
+    1,
+    "control:" <> int.to_string(campy_form.wire_id(control_id)) <> ":clicked",
+    "",
+  )
 }
 
 fn await_report(
