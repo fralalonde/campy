@@ -25,6 +25,13 @@ ADR: `docs/adr/0003-zgui-migration.md` (read it first).
   `AppendConsole` feeds it, keyboard flows back as
   `console:<id>:input`; integration-tested. Remaining: resize
   propagation.
+- **Z2.2 merged** (shell emitter + ops layer, 21 shell tests). Its
+  review closed the keyboard gap in the renderer: modified/special keys
+  cross as `key` events (`ctrl+s`, `f6`, `delete`); plain typing stays
+  with the focused editor. Menu items/nav/tabs ride `model` +
+  `selected` payloads (no per-item controls); structural edits and
+  theme/title changes are `Reload`s (accepted mapping, see the Z2.2
+  report notes for G1).
 - **Wave 1 merged**: Z1.1 (CCL v2), Z1.2 (codec v12), Z1.3 (dogfood
   builder, `just dogfood` green and idempotent; a stale pre-v12
   `projects/workspace.campy` is backed up to `.bak` and replaced —
