@@ -51,6 +51,35 @@ impl PropValue {
     }
 }
 
+/// The bytes a value contributes to a description's size cap.
+pub fn prop_value_size(value: &PropValue) -> usize {
+    match value {
+        PropValue::Text(text) => text.len(),
+        PropValue::Bool(_) | PropValue::Int(_) | PropValue::Float(_) => 16,
+        PropValue::List(items) => items.iter().map(prop_value_size).sum::<usize>() + 8,
+        PropValue::Struct(fields) => {
+            fields
+                .iter()
+                .map(|(name, value)| name.len() + prop_value_size(value))
+                .sum::<usize>()
+                + 8
+        }
+        PropValue::Image(path) => path.len(),
+    }
+}
+
+/// A plain-text rendering used by list/console fallbacks.
+pub fn prop_value_text(value: &PropValue) -> String {
+    match value {
+        PropValue::Text(text) => text.clone(),
+        PropValue::Bool(value) => value.to_string(),
+        PropValue::Int(value) => value.to_string(),
+        PropValue::Float(value) => value.to_string(),
+        PropValue::List(_) | PropValue::Struct(_) => "[…]".into(),
+        PropValue::Image(path) => path.clone(),
+    }
+}
+
 /// One designed control (mirrors Gleam `ControlDesc`).
 #[derive(Debug, Clone)]
 pub struct ControlDesc {
@@ -69,7 +98,10 @@ pub struct ControlDesc {
 
 impl ControlDesc {
     pub fn prop(&self, key: &str) -> Option<&PropValue> {
-        self.props.iter().find(|(name, _)| name == key).map(|(_, value)| value)
+        self.props
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value)
     }
 }
 
@@ -88,18 +120,58 @@ pub struct UiDocument {
 #[derive(Debug, Clone)]
 pub enum Op {
     LoadUi(UiDocument),
-    SetText { control: u64, value: String },
-    SetBool { control: u64, key: String, value: bool },
-    SetInt { control: u64, key: String, value: i64 },
-    SetFloat { control: u64, key: String, value: f64 },
-    SetModel { control: u64, items: Vec<PropValue> },
-    SetGeometry { control: u64, x: f64, y: f64, w: f64, h: f64 },
-    SetCode { control: u64, source: String },
-    AppendConsole { control: u64, bytes: String },
+    SetText {
+        control: u64,
+        value: String,
+    },
+    SetBool {
+        control: u64,
+        key: String,
+        value: bool,
+    },
+    SetInt {
+        control: u64,
+        key: String,
+        value: i64,
+    },
+    SetFloat {
+        control: u64,
+        key: String,
+        value: f64,
+    },
+    SetModel {
+        control: u64,
+        items: Vec<PropValue>,
+    },
+    SetGeometry {
+        control: u64,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    SetCode {
+        control: u64,
+        source: String,
+    },
+    AppendConsole {
+        control: u64,
+        bytes: String,
+    },
     /// `items` are `(start, end, class)` byte spans on `layer`.
-    SetMarks { control: u64, layer: String, items: Vec<(u64, u64, String)> },
-    ReadText { control: u64, key: String },
-    Resize { width: f64, height: f64 },
+    SetMarks {
+        control: u64,
+        layer: String,
+        items: Vec<(u64, u64, String)>,
+    },
+    ReadText {
+        control: u64,
+        key: String,
+    },
+    Resize {
+        width: f64,
+        height: f64,
+    },
 }
 
 /// A native event (mirrors Gleam `NativeEvent`; the session layer fills
@@ -112,7 +184,10 @@ pub struct Event {
 
 impl Event {
     pub fn new(kind: impl Into<String>, payload: impl Into<String>) -> Self {
-        Self { kind: kind.into(), payload: payload.into() }
+        Self {
+            kind: kind.into(),
+            payload: payload.into(),
+        }
     }
 }
 

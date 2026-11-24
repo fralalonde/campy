@@ -652,8 +652,11 @@ dependencies = [
 name = "campy-renderer"
 version = "0.1.0"
 dependencies = [
+ "winit",
  "zgui",
  "zgui-editor",
+ "zgui-platform-headless",
+ "zgui-platform-winit",
  "zgui-terminal",
  "zgui-ui",
 ]
@@ -5560,6 +5563,18 @@ dependencies = [
  "thiserror 2.0.21",
  "web-time",
  "zgui-geom",
+ "zgui-vocab",
+]
+
+[[package]]
+name = "zgui-platform-headless"
+version = "0.1.0"
+source = "git+https://github.com/zortax/zgui#ee29c7dc66206eb04ba7bcf514058a278c9070ba"
+dependencies = [
+ "accesskit",
+ "web-time",
+ "zgui-geom",
+ "zgui-platform",
  "zgui-vocab",
 ]
 

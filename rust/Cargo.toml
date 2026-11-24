@@ -15,7 +15,8 @@ rustler = "=0.39.0"
 # pinned by the committed Cargo.lock; `just` builds pass --locked, so the
 # resolution never drifts silently). zgui-editor and zgui-terminal are not
 # published on crates.io; they themselves consume zgui from the same URL,
-# which keeps the whole tree on one source.
+# which keeps the whole tree on one source. zgui-terminal is wired up in
+# task Z3.2 (console kind); it rides here so the whole pin compiles together.
 zgui = { git = "https://github.com/zortax/zgui" }
 zgui-ui = { git = "https://github.com/zortax/zgui" }
 zgui-editor = { git = "https://github.com/zortax/zgui-editor" }

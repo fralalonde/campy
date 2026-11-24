@@ -4,6 +4,8 @@
 //! that flip custom properties; zgui-ui components bring their own sheets
 //! and inherit the cascade.
 
+use zgui::prelude::*;
+
 /// Base layout vocabulary: absolute (Free) and box (Column/Row) layout,
 /// plus the theme custom properties the BEAM can flip with a root class.
 pub const CAMPY_SHEET: &str = css!(
@@ -18,6 +20,18 @@ pub const CAMPY_SHEET: &str = css!(
      .campy-col { display: flex; flex-direction: column; gap: 8px; }
      .campy-row { display: flex; flex-direction: row; gap: 8px; }
      .campy-control { min-width: 0; min-height: 0; }
+     .campy-widget-button { padding: 6px 14px; border-radius: 6px;
+                             background: var(--campy-accent); color: #ffffff;
+                             border: 1px solid color-mix(in srgb, var(--campy-accent) 70%, #000);
+                             font-weight: 500; }
+     .campy-widget-button:hover { filter: brightness(1.08); }
+     .campy-widget-button:active { filter: brightness(0.94); }
+     .campy-check-row { align-items: center; gap: 8px; }
+     .campy-list-row { padding: 3px 8px; }
+     .campy-console { padding: 6px 10px; white-space: pre-wrap;
+                      font-family: 'JetBrains Mono', monospace; font-size: 13px;
+                      overflow: auto; }
+     .campy-editor { font-family: 'JetBrains Mono', monospace; }
      .campy-surface { position: relative; background: var(--campy-panel);
                       overflow: hidden; }
      .campy-surface-grid { position: absolute; inset: 0;

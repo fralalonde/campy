@@ -10,8 +10,14 @@ zgui.workspace = true
 zgui-ui.workspace = true
 zgui-editor.workspace = true
 zgui-terminal.workspace = true
+# The embedder builds its own event loop (with_any_thread) driving zgui's
+# public WinitApp; same version the platform backend uses.
+zgui-platform-winit = { git = "https://github.com/zortax/zgui" }
+winit = "0.30.13"
+# The headless smoke driver rides the same platform contract as winit.
+zgui-platform-headless = { git = "https://github.com/zortax/zgui", optional = true }
 
 [features]
 # Headless driver for the smoke suite: scripted surface events, virtual
-# clock, scene dumps — no window system required.
-ui-testing = []
+# clock, scene reads — no window system required.
+ui-testing = ["dep:zgui-platform-headless"]
