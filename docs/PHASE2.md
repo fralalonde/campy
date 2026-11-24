@@ -562,3 +562,38 @@ optional" note.
 
 Dispatch order: Z0.2 (coordinator) → Wave 1 parallel → G0 → Wave 2
 sequential (Z2.1 → Z2.2 → Z2.3) → G1 → Wave 3 parallel → Wave 4 → G2.
+
+**G1 manual-pass checklist** (run `just run` on a live desktop; every
+line must pass or become a filed punch item):
+
+1. Boot: shell renders once; console shows the session-opened line;
+   status bar path is correct.
+2. Menus: File/Edit/Settings open and every item from the old shell
+   fires (New / New module / Open / Save / Save As / Quit; Undo / Redo /
+   Copy / Cut / Paste); broken items become punch items.
+3. Palette: all 16 tiles visible; clicking places the control; hover
+   shows the old hint behavior (status line).
+4. Designer: click-select; drag-move with live preview committed on
+   release; eight-handle resize; marquee; right-click context menu
+   (canvas + control); alignment; Delete key; undo/redo of moves.
+5. Inspector: selection drives the `insp:` rows; text/bool/choice edits
+   apply; the window (empty-canvas click) shows title/size/layout; the
+   trashcan removes.
+6. Tabs/navigator: module tabs open/close/switch; projects navigator
+   switches; the new-module dialog works.
+7. Code view: handler source displays with Gleam highlighting; edits
+   mark dirty; Apply persists; diagnostics squiggles appear after an LS
+   round trip; completions reach the editor.
+8. Console: preview logs render (ANSI colors pass through); input line
+   round-trips.
+9. Run/F7/Stop on Cat Café: window opens, F7 live-updates, Stop closes.
+10. F6 on the IDE itself: rebuild + `LoadUi` swap; workspace survives.
+11. Keys: the full binding list from Z2.2's report (Ctrl+N/Shift+N/O/S/
+    Shift+S/Q, Z/Shift+Z, C/X/V, F4/F6/F7/F10, Esc, Delete, arrows,
+    Enter, Tab).
+12. **The zgui-ui A/B**: swap one `button` kind in the renderer to
+    zgui-ui `Button`, run, click it — if it fires on a real window,
+    zgui-ui is cleared for the shell upgrade wave; if not, file
+    upstream (their tests only dispatch via the component testkit).
+13. `just dogfood`: the campy-dev project opens in the IDE — modules
+    list, external sources display and edit.
