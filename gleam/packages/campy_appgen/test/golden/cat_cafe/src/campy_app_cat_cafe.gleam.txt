@@ -5,6 +5,7 @@
 //// forwards every event to `campy_app`.
 ////
 //// Handlers (ABI v1; resolved from the form at runtime):
+////   list-1 selected -> list1_selected
 ////   search-edit accepted -> search_edit_accepted
 ////   search-edit edited -> search_edit_edited
 ////   pet-button clicked -> pet_button_clicked

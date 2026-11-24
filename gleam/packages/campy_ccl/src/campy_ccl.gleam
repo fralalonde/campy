@@ -4,22 +4,49 @@ import gleam/result
 
 // CCL — the Campy Component Library.
 //
-// The catalog models Slint's component model: every component declares the
-// properties it exposes (name, editor kind, default) and the callbacks it
-// emits, matching the Slint standard widgets where one exists. Where Slint
-// has no widget (radio button, menu, picture) the closest Slint semantics
-// are used. Layout (Free/Column/Row), geometry, enabled/visible and color
-// are properties of every element and live on the form model, not here.
+// The catalog speaks wire protocol v2 (`docs/PHASE2.md` §1.4): every
+// component's `key` is a protocol `ControlDesc.kind`, its `properties` are the
+// props the renderer reads, and its `events` are the `control:<id>:<event>`
+// suffixes the host emits. Layout (Free/Column/Row), geometry, enabled,
+// visible and color are properties of every element and live on the form
+// model, not here.
+//
+// zgui mapping, one line per kind:
+//
+//   label        -> `text`
+//   edit         -> zgui-ui `Input` (`placeholder`, `read-only`; accepted/edited)
+//   memo         -> `editor` element (`read-only`; edited)
+//   button       -> campy-styled `control` button (`variant`; clicked)
+//   menu         -> button + `Menu` popup (`model`; clicked/selected)
+//   checkbox     -> zgui-ui `Checkbox` (`checked`; toggled)
+//   radio        -> `Checkbox` in the radio role (`checked`, `group`; toggled)
+//   combo        -> zgui-ui `Combobox` (`model`, `current-index`; selected)
+//   list         -> `VirtualList` rows of `label` (`model`; selected)
+//   slider       -> zgui-ui `Slider` (`minimum`, `maximum`, `value`; changed)
+//   progress     -> zgui-ui `Progress` (`value`, `maximum`; changed)
+//   picture      -> `image` (`source`, `fit`, `transparency`)
+//   panel, group -> `box` containers (`layout`, `border`; children at geometry)
+//   code_editor  -> zgui-editor `Editor` (`language`, `read-only`,
+//                   `line-numbers`; edited)
+//   console      -> zgui-terminal `Terminal` (input arrives as
+//                   `console:<id>:input`, not a `control:` event)
+//
+// `text` is the CCL-universal property: for every kind it is the primary
+// caption/value, carried as `ControlDesc.text` (not a `props` entry) and
+// edited through the inspector's text row.
+//
+// `surface` is deliberately absent: the designer canvas is IDE-internal and
+// never appears in the palette.
 //
 // No backward compatibility with pre-schema projects is preserved; Campy
 // itself is the only consumer.
 
 pub type PropType {
-  /// Single-line string, edited with a LineEdit.
+  /// Single-line string, edited with a text field.
   Text
-  /// Whole number, edited with a numeric LineEdit.
+  /// Whole number, edited with a numeric field.
   Number
-  /// True/false, edited with a CheckBox.
+  /// True/false, edited with a checkbox.
   Bool
 }
 
@@ -46,32 +73,80 @@ pub type Component {
   )
 }
 
-// Property keys reused across components.
+// Property keys reused across components. These are the wire `props` keys the
+// zgui host reads, not display strings.
 pub const text_key = "text"
 
-pub const placeholder_key = "placeholder-text"
+pub const placeholder_key = "placeholder"
 
 pub const read_only_key = "read-only"
 
 pub const checked_key = "checked"
 
+pub const group_key = "group"
+
+pub const model_key = "model"
+
+pub const current_index_key = "current-index"
+
 pub const minimum_key = "minimum"
 
 pub const maximum_key = "maximum"
 
-pub const current_index_key = "current-index"
+pub const value_key = "value"
 
-fn read_only_prop() -> Property {
-  Property(read_only_key, "Read only", Bool, "false")
+pub const variant_key = "variant"
+
+pub const layout_key = "layout"
+
+pub const border_key = "border"
+
+pub const source_key = "source"
+
+pub const fit_key = "fit"
+
+pub const transparency_key = "transparency"
+
+pub const language_key = "language"
+
+pub const line_numbers_key = "line-numbers"
+
+// The CCL-universal property: the control's primary caption/value.
+fn text_prop(default: String) -> Property {
+  Property(text_key, "Text", Text, default)
+}
+
+fn read_only_prop(default: Bool) -> Property {
+  Property(read_only_key, "Read only", Bool, bool_string(default))
 }
 
 fn checked_prop() -> Property {
   Property(checked_key, "Checked", Bool, "false")
 }
 
+fn bool_string(value: Bool) -> String {
+  case value {
+    True -> "true"
+    False -> "false"
+  }
+}
+
 pub fn all() -> List(Component) {
   [
-    Component("label", "Label", "T", "Common", 240, 24, "Label", False, [], []),
+    // zgui `text`: a plain caption.
+    Component(
+      "label",
+      "Label",
+      "T",
+      "Common",
+      240,
+      24,
+      "Label",
+      False,
+      [text_prop("Label")],
+      [],
+    ),
+    // zgui-ui `Input`: single-line text with a placeholder.
     Component(
       "edit",
       "Edit",
@@ -82,11 +157,13 @@ pub fn all() -> List(Component) {
       "",
       False,
       [
+        text_prop(""),
         Property(placeholder_key, "Placeholder", Text, ""),
-        read_only_prop(),
+        read_only_prop(False),
       ],
       [Event("accepted", "OnAccepted"), Event("edited", "OnEdited")],
     ),
+    // zgui-editor `editor` element: multi-line text.
     Component(
       "memo",
       "Memo",
@@ -96,15 +173,36 @@ pub fn all() -> List(Component) {
       100,
       "",
       False,
-      [read_only_prop()],
+      [text_prop(""), read_only_prop(False)],
       [Event("edited", "OnEdited")],
     ),
-    Component("button", "Button", "□", "Common", 110, 32, "Button", False, [], [
-      Event("clicked", "OnClicked"),
-    ]),
-    Component("menu", "Menu", "☰", "Common", 200, 28, "File", False, [], [
-      Event("selected", "OnSelect"),
-    ]),
+    // Campy-styled `control` button; `variant` picks solid/outline.
+    Component(
+      "button",
+      "Button",
+      "□",
+      "Common",
+      110,
+      32,
+      "Button",
+      False,
+      [text_prop("Button"), Property(variant_key, "Variant", Text, "solid")],
+      [Event("clicked", "OnClicked")],
+    ),
+    // `Button` with a `Menu` popup; `model` is the item list.
+    Component(
+      "menu",
+      "Menu",
+      "☰",
+      "Common",
+      200,
+      28,
+      "File",
+      False,
+      [text_prop("File"), Property(model_key, "Items", Text, "")],
+      [Event("clicked", "OnClicked"), Event("selected", "OnSelect")],
+    ),
+    // zgui-ui `Checkbox`.
     Component(
       "checkbox",
       "Check box",
@@ -114,9 +212,10 @@ pub fn all() -> List(Component) {
       28,
       "Check box",
       False,
-      [checked_prop()],
+      [text_prop("Check box"), checked_prop()],
       [Event("toggled", "OnToggle")],
     ),
+    // zgui-ui `Checkbox` in the radio role; `group` scopes exclusivity.
     Component(
       "radio",
       "Radio button",
@@ -126,9 +225,14 @@ pub fn all() -> List(Component) {
       28,
       "Radio button",
       False,
-      [checked_prop()],
+      [
+        text_prop("Radio button"),
+        checked_prop(),
+        Property(group_key, "Group", Text, ""),
+      ],
       [Event("toggled", "OnToggle")],
     ),
+    // zgui-ui `Combobox`; `model` is the item list.
     Component(
       "combo",
       "Combo box",
@@ -138,10 +242,27 @@ pub fn all() -> List(Component) {
       32,
       "",
       False,
-      [Property(current_index_key, "Current index", Number, "0")],
+      [
+        text_prop(""),
+        Property(model_key, "Items", Text, ""),
+        Property(current_index_key, "Current index", Number, "0"),
+      ],
       [Event("selected", "OnSelect")],
     ),
-    Component("list", "List", "≡", "Common", 300, 160, "", False, [], []),
+    // zgui-ui `VirtualList` of `label` rows; `model` is the row list.
+    Component(
+      "list",
+      "List",
+      "≡",
+      "Common",
+      300,
+      160,
+      "",
+      False,
+      [text_prop(""), Property(model_key, "Items", Text, "")],
+      [Event("selected", "OnSelect")],
+    ),
+    // zgui-ui `Slider`.
     Component(
       "slider",
       "Slider",
@@ -152,11 +273,14 @@ pub fn all() -> List(Component) {
       "50",
       False,
       [
+        text_prop("50"),
         Property(minimum_key, "Minimum", Number, "0"),
         Property(maximum_key, "Maximum", Number, "100"),
+        Property(value_key, "Value", Number, "50"),
       ],
-      [Event("changed", "OnChange"), Event("released", "OnRelease")],
+      [Event("changed", "OnChange")],
     ),
+    // zgui-ui `Progress`.
     Component(
       "progress",
       "Progress",
@@ -166,9 +290,14 @@ pub fn all() -> List(Component) {
       24,
       "60",
       False,
-      [],
-      [],
+      [
+        text_prop("60"),
+        Property(value_key, "Value", Number, "60"),
+        Property(maximum_key, "Maximum", Number, "100"),
+      ],
+      [Event("changed", "OnChange")],
     ),
+    // zgui `box` container; children position at their geometry.
     Component(
       "panel",
       "Panel",
@@ -178,9 +307,14 @@ pub fn all() -> List(Component) {
       200,
       "Panel",
       True,
-      [],
+      [
+        text_prop("Panel"),
+        Property(layout_key, "Layout", Text, "free"),
+        Property(border_key, "Border", Number, "0"),
+      ],
       [],
     ),
+    // zgui `box` container with a group caption.
     Component(
       "group",
       "Group box",
@@ -190,10 +324,62 @@ pub fn all() -> List(Component) {
       200,
       "Group",
       True,
-      [],
+      [
+        text_prop("Group"),
+        Property(layout_key, "Layout", Text, "free"),
+        Property(border_key, "Border", Number, "0"),
+      ],
       [],
     ),
-    Component("picture", "Picture", "▧", "Common", 200, 150, "", False, [], []),
+    // zgui `image`; `source` is a file path, `fit` a CSS object-fit value.
+    Component(
+      "picture",
+      "Picture",
+      "▧",
+      "Common",
+      200,
+      150,
+      "",
+      False,
+      [
+        text_prop(""),
+        Property(source_key, "Source", Text, ""),
+        Property(fit_key, "Fit", Text, "contain"),
+        Property(transparency_key, "Transparency", Number, "0"),
+      ],
+      [],
+    ),
+    // zgui-editor `Editor` with the Gleam grammar.
+    Component(
+      "code_editor",
+      "Code editor",
+      "⌨",
+      "Common",
+      400,
+      300,
+      "",
+      False,
+      [
+        text_prop(""),
+        Property(language_key, "Language", Text, "gleam"),
+        read_only_prop(False),
+        Property(line_numbers_key, "Line numbers", Bool, "true"),
+      ],
+      [Event("edited", "OnEdited")],
+    ),
+    // zgui-terminal `Terminal` over the BEAM-fed transport.
+    Component(
+      "console",
+      "Console",
+      "▥",
+      "Common",
+      480,
+      240,
+      "",
+      False,
+      [text_prop("")],
+      [],
+    ),
   ]
 }
 
