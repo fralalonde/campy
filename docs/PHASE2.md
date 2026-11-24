@@ -25,7 +25,9 @@ ADR: `docs/adr/0003-zgui-migration.md` (read it first).
   `AppendConsole` feeds it, keyboard flows back as
   `console:<id>:input`; integration-tested. Remaining: resize
   propagation.
-- Wave 1 (Z1.1 CCL, Z1.2 codec) dispatched; Z1.3 follows Z1.2.
+- **Z1.1 merged** (CCL v2 kinds/props); **Z1.2 merged** (codec v12,
+  external modules, no compat chain). Z1.3 (dogfood) dispatched after
+  Z1.2 landed.
 - Not started: Z2.* (the IDE emitters and loop), Z3.3 (LS↔editor),
   Z4.* (smoke suite port, packaging, docs).
 
@@ -442,6 +444,20 @@ unchanged), console feeding via `AppendConsole`, editor Apply flow
 (`ReadText`/editor-changed → LS → file writes for External modules),
 F6 (regenerate shell → LoadUi, BEAM module swap unchanged), snapshot
 harness green, smoke helpers updated.
+
+**Notes from the merged waves.**
+- **Workspace rejection is expected:** codec v12 has no upgrade chain,
+  so a stale `projects/workspace.campy` (or its embedded project
+  snapshots) loads with an error — treat that as "start a fresh
+  workspace" (log one console line), never a crash.
+- **`campy_runner`'s one failing test** (via the `campy_app` protocol
+  break) lands in this task's scope to re-green; it should be a small
+  fixture/expectation fix once `campy_app` compiles against Z2.1.
+- `Module.source` is now `source_origin: SourceOrigin` — the IDE's
+  module editor reads `External` paths from disk (existing FS FFI) and
+  writes back through the same codec.
+- `progress` has no events (display-only); the inspector shows its
+  properties but derives no handler stub for it.
 
 **Files.** `gleam/apps/campy_ide/src/**` (loop, state,
 `campy_native_smoke*`, `campy_gesture_probe*`), its tests.
