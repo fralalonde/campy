@@ -414,8 +414,13 @@ Row-id convention: every interactive element is its own control with a
 derived id, so events need no embedded keys — inspector rows are
 `insp:<prop-key>`, menu items `menu:<menu>:<item>`, palette tiles
 `tile:<kind>`, tabs `tab:<module>`, tab closers `tabx:<module>`. Payloads
-stay values only. Document the id grammar in the emitter's doc comment
-and keep it stable across Z2.3.
+stay values only. **Id mapping (from Z2.1): every shell id is a
+`campy_form.wire_id(<name>)` integer** (the same 31-bit hash the
+designed forms use; 0 = window root) — do NOT invent a fixed id table;
+derive all section ids through `campy_form.wire_id` and keep a
+name↔id glossary in the emitter's doc comment. Z2.3's loop parses
+`control:<wire id>:<event>` exactly like campy_app does
+(`find_control_by_wire_id`).
 
 **Goal.** Replace the Slint emitter with the builder above. Every
 interaction emits the §1.4 event kinds; the shell consumes scalar/model
