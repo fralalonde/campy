@@ -25,9 +25,14 @@ ADR: `docs/adr/0003-zgui-migration.md` (read it first).
   `AppendConsole` feeds it, keyboard flows back as
   `console:<id>:input`; integration-tested. Remaining: resize
   propagation.
-- **Z1.1 merged** (CCL v2 kinds/props); **Z1.2 merged** (codec v12,
-  external modules, no compat chain). Z1.3 (dogfood) dispatched after
-  Z1.2 landed.
+- **Wave 1 merged**: Z1.1 (CCL v2), Z1.2 (codec v12), Z1.3 (dogfood
+  builder, `just dogfood` green and idempotent; a stale pre-v12
+  `projects/workspace.campy` is backed up to `.bak` and replaced —
+  same rule the IDE gets in Z2.3). G0 passed.
+- **erl_eval trap for eval-based scripts** (found the hard way in
+  Z1.3's review): two top-level `case` clauses binding the same variable
+  name in ONE `-eval` sequence trip `unsafe_var` at boot — give each
+  case distinct variable names.
 - Not started: Z2.* (the IDE emitters and loop), Z3.3 (LS↔editor),
   Z4.* (smoke suite port, packaging, docs).
 
