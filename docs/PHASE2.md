@@ -15,9 +15,23 @@ ADR: `docs/adr/0003-zgui-migration.md` (read it first).
 
 ## Status
 
-Not started. Dispatch per §1.6 on `opencode-go/deepseek-v4.1-flash`
-subagents (one brief per session); Z0.* is foundation work owned by the
-coordinator (GLM-5.3) because everything else compiles against it.
+- **Z0.2 done** (see the brief's verified facts below).
+- **Z3.1 core done**: `code_editor`/`memo` render zgui-editor with the
+  Gleam tree-sitter grammar; `SetCode`/`ReadText(source)`/
+  `editor:<id>:changed` wired and integration-tested. Remaining from the
+  Z3.1 brief: `SetMarks` (diagnostics layers), read-only, debounce, and
+  the Resize/close-reaping polish.
+- **Z3.2 core done**: `console` renders zgui-terminal over `Channels`;
+  `AppendConsole` feeds it, keyboard flows back as
+  `console:<id>:input`; integration-tested. Remaining: resize
+  propagation.
+- Wave 1 (Z1.1 CCL, Z1.2 codec) dispatched; Z1.3 follows Z1.2.
+- Not started: Z2.* (the IDE emitters and loop), Z3.3 (LS↔editor),
+  Z4.* (smoke suite port, packaging, docs).
+
+Dispatch per §1.6 on `opencode-go/deepseek-v4.1-flash` subagents (one
+brief per session); the coordinator (GLM-5.3) owns the renderer between
+waves.
 
 ## 1. Shared context (paste this section into every dispatch prompt)
 
