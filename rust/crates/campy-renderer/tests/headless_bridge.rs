@@ -91,15 +91,18 @@ fn form() -> UiDocument {
 /// The pump is asynchronous: the UI thread services it on its own clock,
 /// so tests wait on the events rather than the call returning.
 fn wait_for(sink: &Sink, count: usize, prefix: &str) {
+    // Pump while waiting: the drain only runs on virtual-clock ticks, and
+    // multi-step sequences (deferred window builds, swaps) need several.
     for _ in 0..200 {
+        let _ = testing::test_pump(16);
         if events_of(sink, prefix).len() >= count {
             return;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
     panic!(
-        "timed out waiting for {count} `{prefix}` events; have {:?}",
-        events_of(sink, prefix)
+        "timed out waiting for {count} `{prefix}` events; all events: {:?}",
+        sink.0.lock().unwrap()
     );
 }
 
@@ -116,6 +119,7 @@ fn events_of(sink: &Sink, prefix: &str) -> Vec<String> {
 #[test]
 fn loads_updates_clicks_reads_and_rejects() {
     let (session, sink) = spawn_ui();
+    let first_sink = sink.clone();
 
     session
         .submit(Command {
@@ -192,4 +196,72 @@ fn loads_updates_clicks_reads_and_rejects() {
         .expect("enqueue");
     testing::test_pump(32).expect("a pump is enqueued");
     wait_for(&sink, 1, "command-failed");
+    // --- Second session: the deferred-window path (the IDE's preview) --
+    // A second registration opens its own window through the runtime's
+    // deferred `windows.open` flow. Loads swap that window (the reactive
+    // rebuild does not fire there), and commands stall until its first
+    // build. One runtime per process: this runs in the same test.
+    let preview_sink = Sink::default();
+    let events = preview_sink.0.clone();
+    let handle = Arc::new(
+        move |session: u64, generation: u64, kind: String, payload: String| {
+            events
+                .lock()
+                .unwrap()
+                .push((session, generation, kind, payload));
+        },
+    );
+    let preview = sessions::open(handle).expect("a second session opens");
+    preview
+        .submit(Command {
+            generation: 1,
+            op: Op::LoadUi(form()),
+        })
+        .expect("the preview loads");
+    wait_for(&preview_sink, 1, "ui-loaded");
+
+    // The reload adds a control; the swap must make it addressable.
+    let mut reloaded = form();
+    reloaded.controls.push(ControlDesc {
+        id: 7,
+        kind: "label".into(),
+        text: "Rebuilt".into(),
+        x: 600.0,
+        y: 16.0,
+        w: 180.0,
+        h: 24.0,
+        enabled: true,
+        visible: true,
+        props: vec![],
+        children: vec![],
+    });
+    preview
+        .submit(Command {
+            generation: 2,
+            op: Op::LoadUi(reloaded),
+        })
+        .expect("the preview reloads");
+    wait_for(&preview_sink, 2, "ui-loaded");
+    preview
+        .submit(Command {
+            generation: 2,
+            op: Op::ReadText {
+                control: 7,
+                key: "text".into(),
+            },
+        })
+        .expect("ReadText enqueues");
+    wait_for(&preview_sink, 1, "read:7:text");
+    let rebuilt = events_of(&preview_sink, "read:7:text");
+    assert_eq!(
+        rebuilt,
+        vec!["read:7:text Rebuilt".to_owned()],
+        "the swapped window rendered the new control"
+    );
+
+    // Both sessions stay healthy; closing the preview reaps only it.
+    assert_eq!(sessions::active_sessions(), 2);
+    preview.close(1);
+    wait_for(&preview_sink, 1, "closed");
+    let _ = first_sink;
 }

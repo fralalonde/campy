@@ -43,11 +43,21 @@ pub struct Host {
     pub editors: RefCell<HashMap<u64, EditorHandle>>,
     /// Live console feeds (`console` kind): AppendConsole bytes go here.
     pub consoles: RefCell<HashMap<u64, flume::Sender<Vec<u8>>>>,
+    /// Whether this session's window came through the runtime's
+    /// deferred `windows.open` flow (their reactive rebuilds do not fire;
+    /// loads swap the window instead — ADR 0003).
+    pub deferred_window: Cell<bool>,
     /// The current generation, mirrored for threads the sink may be
     /// called from (console input pumps).
     pub live_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// This window's handle once the view is running (`use_window`).
     pub window: RefCell<Option<zgui::runtime::windows::WindowHandle>>,
+    /// The command-drain interval for this session's window. Re-created
+    /// on every document rebuild: the reactive hole cleans the scope a
+    /// run's timer lives in, so each run arms its own (the chain is
+    /// self-sustaining: a rebuild only happens when a drain tick applied
+    /// a LoadUi).
+    pub drain_timer: RefCell<Option<zgui::view::time::IntervalHandle>>,
     /// The NIF-visible session flag (close reasons ride it, v1 rule:
     /// cleanup survives a full queue).
     pub(crate) control: RefCell<Option<std::sync::Arc<crate::sessions::Control>>>,
@@ -63,8 +73,10 @@ impl Host {
             controls: RefCell::new(HashMap::new()),
             editors: RefCell::new(HashMap::new()),
             consoles: RefCell::new(HashMap::new()),
+            deferred_window: Cell::new(false),
             live_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             window: RefCell::new(None),
+            drain_timer: RefCell::new(None),
             control: RefCell::new(None),
         })
     }
@@ -72,6 +84,11 @@ impl Host {
     /// The registration's control flag, once the NIF registers us.
     pub(crate) fn adopt_control(&self, control: std::sync::Arc<crate::sessions::Control>) {
         *self.control.borrow_mut() = Some(control);
+    }
+
+    /// The event channel, for the sessions layer's window swaps.
+    pub fn sink_handle(&self) -> EventSink {
+        self.sink.borrow().clone()
     }
 
     /// Whether a registration has been adopted (the sink arrived).

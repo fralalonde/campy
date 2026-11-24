@@ -24,7 +24,7 @@ use zgui_ui::prelude::Checked;
 
 use crate::controls::{self, EventSink, Host};
 use crate::sheet::CAMPY_SHEET;
-use crate::wire::{self, ControlDesc, Op};
+use crate::wire::{self, ControlDesc, Op, UiDocument};
 
 const DRAIN_COMMANDS_PER_TICK: usize = 32;
 const DRAIN_TICK: Duration = Duration::from_millis(8);
@@ -43,7 +43,7 @@ pub struct Event {
 }
 
 /// A queued command: the session id rides on the envelope.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Command {
     pub generation: u64,
     pub op: Op,
@@ -240,6 +240,10 @@ fn start() -> Result<Runtime, String> {
 /// Per-session window state (UI thread only).
 struct SessionWindow {
     host: Rc<Host>,
+    /// Commands held while the session's window has not built yet (the
+    /// window-open command is asynchronous in the runtime). FIFO with the
+    /// channel: pending drains first, then new arrivals append.
+    pending: RefCell<std::collections::VecDeque<Command>>,
 }
 
 /// Everything the drain timer sees (UI thread only).
@@ -248,14 +252,21 @@ pub(crate) struct ThreadState {
     receiver: RefCell<Option<Receiver<(u64, Command)>>>,
     windows: RefCell<Option<zgui::runtime::windows::Windows>>,
     sessions: RefCell<HashMap<u64, SessionWindow>>,
-    /// Kept alive so the drain interval is not cancelled by handle drop.
-    drain_timer: RefCell<Option<zgui::view::time::IntervalHandle>>,
 }
 
 /// The window content of one session: the current document as a reactive
 /// hole, rebuilt by zgui when the host's document signal changes.
 fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
     move || {
+        // Arm this run's drain: the reactive hole cleans the previous
+        // run's scope (and with it that run's timer) on every rebuild,
+        // so every run re-arms its own. Dropping the old handle first
+        // cancels it cleanly.
+        {
+            let drain_host = host.clone();
+            let timer = set_interval(DRAIN_TICK, move || drain_session(&drain_host));
+            *host.drain_timer.borrow_mut() = Some(timer);
+        }
         if host.window.borrow().is_none() {
             *host.window.borrow_mut() = Some(use_window());
             let close_host = host.clone();
@@ -277,9 +288,9 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
         receiver: RefCell::new(Some(receiver)),
         windows: RefCell::new(None),
         sessions: RefCell::new(HashMap::new()),
-        drain_timer: RefCell::new(None),
     });
 
+    SESSION_STATE.with(|cell| *cell.borrow_mut() = Some(ui.clone()));
     #[allow(unused_mut)]
     let mut app = zgui::app()
         .with_title("Campy")
@@ -297,13 +308,13 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
             // sink arrives with registration), and start the command drain.
             *view_ui.windows.borrow_mut() = Some(use_windows());
             let host = Host::new(INITIAL_SESSION, Arc::new(|_, _, _, _| {}));
-            view_ui
-                .sessions
-                .borrow_mut()
-                .insert(INITIAL_SESSION, SessionWindow { host: host.clone() });
-            let drain_ui = view_ui.clone();
-            let timer = set_interval(DRAIN_TICK, move || drain(&drain_ui));
-            *view_ui.drain_timer.borrow_mut() = Some(timer);
+            view_ui.sessions.borrow_mut().insert(
+                INITIAL_SESSION,
+                SessionWindow {
+                    host: host.clone(),
+                    pending: RefCell::default(),
+                },
+            );
             session_view(host.clone())
         })
         .map_err(|error| format!("Cannot install zgui application: {error}"))?;
@@ -354,12 +365,76 @@ fn ui_event_loop() -> Result<winit::event_loop::EventLoop<zgui_platform_winit::U
         .map_err(|error| format!("Cannot open the event loop: {error}"))
 }
 
+/// `LoadUi` application. v1 parity: a live window is *swapped* — a fresh
+/// window with the new document is opened and the old one closed, which
+/// is the reliable path (a deferred window built with its document
+/// renders correctly, while a rebuild of an existing deferred window
+/// rides a reactive-tracking path that does not fire in the runtime's
+/// window-open flow; ADR 0003 records the finding).
+fn swap_load(
+    host: &Rc<Host>,
+    doc: UiDocument,
+    windows: &Option<zgui::runtime::windows::Windows>,
+) -> Option<Rc<Host>> {
+    let old_handle = host.window.borrow().clone();
+    let Some(handle) = old_handle else {
+        // The window is not built yet: the deferred build renders the
+        // document directly.
+        host.document.set(Some(doc));
+        return None;
+    };
+    let Some(windows) = windows.as_ref() else {
+        host.document.set(Some(doc));
+        return None;
+    };
+    let size = handle.size().get_untracked();
+    let sink = host.sink_handle();
+    let control = host
+        .control
+        .borrow()
+        .as_ref()
+        .map(|control| Arc::clone(control));
+    let replacement = Host::new(host.session, sink);
+    if let Some(control) = control {
+        replacement.adopt_control(control);
+    }
+    replacement.generation.set(host.generation.get());
+    replacement
+        .live_generation
+        .store(host.generation.get(), Ordering::Release);
+    replacement.document.set(Some(doc.clone()));
+    let _new_handle = windows.open(
+        zgui::runtime::windows::WindowOptions::new(doc.title.clone())
+            .with_size(size.width.0, size.height.0),
+        session_view(replacement.clone()),
+    );
+    handle.close();
+    host.window.borrow_mut().take();
+    Some(replacement)
+}
+
 /// Adopts newly registered sessions, applies queued commands, reaps
 /// closed ones.
 fn drain(ui: &Rc<ThreadState>) {
     adopt_registrations(ui);
     apply_commands(ui);
     reap_closed(ui);
+}
+
+/// One session's drain (the per-window timer path).
+fn drain_session(host: &Rc<Host>) {
+    // Registrations and reaping stay app-wide; the per-session tick only
+    // applies that session's queue.
+    if let Some(state) = SESSION_STATE.with(|cell| cell.borrow().clone()) {
+        adopt_registrations(&state);
+        apply_commands(&state);
+        reap_closed(&state);
+    }
+    let _ = host;
+}
+
+thread_local! {
+    static SESSION_STATE: RefCell<Option<Rc<ThreadState>>> = const { RefCell::new(None) };
 }
 
 fn adopt_registrations(ui: &Rc<ThreadState>) {
@@ -383,12 +458,19 @@ fn adopt_registrations(ui: &Rc<ThreadState>) {
             continue;
         };
         let host = Host::new(*id, registration.sink.clone());
+        host.deferred_window.set(true);
         host.adopt_control(registration.control.clone());
         let _handle = windows.open(
             zgui::runtime::windows::WindowOptions::new("Campy").with_size(900.0, 640.0),
             session_view(host.clone()),
         );
-        sessions.insert(*id, SessionWindow { host });
+        sessions.insert(
+            *id,
+            SessionWindow {
+                host,
+                pending: RefCell::default(),
+            },
+        );
         (registration.sink)(*id, 0, "session-opened".into(), "window".into());
     }
 }
@@ -397,41 +479,165 @@ fn apply_commands(ui: &Rc<ThreadState>) {
     let Some(receiver) = ui.receiver.borrow_mut().take() else {
         return;
     };
+    let windows = ui.windows.borrow().clone();
+    // Stage this tick's arrivals per session, preserving channel order;
+    // a session whose window has not built yet holds its commands.
+    let mut arrivals: HashMap<u64, Vec<Command>> = HashMap::new();
     for _ in 0..DRAIN_COMMANDS_PER_TICK {
         let Ok((id, command)) = receiver.try_recv() else {
             break;
         };
-        let result = {
+        arrivals.entry(id).or_default().push(command);
+    }
+    let order: Vec<u64> = {
+        let sessions = ui.sessions.borrow();
+        let mut order = Vec::with_capacity(sessions.len() + arrivals.len());
+        for (id, window) in sessions.iter() {
+            if !window.pending.borrow().is_empty() || arrivals.contains_key(id) {
+                order.push(*id);
+            }
+        }
+        for id in arrivals.keys() {
+            if !sessions.contains_key(id) {
+                order.push(*id);
+            }
+        }
+        order
+    };
+    for id in order {
+        let saturated = {
+            let sessions = ui.sessions.borrow();
+            let mut saturated = false;
+            if let Some(window) = sessions.get(&id) {
+                let mut pending = window.pending.borrow_mut();
+                if let Some(commands) = arrivals.get_mut(&id) {
+                    for command in commands.drain(..) {
+                        if pending.len() >= wire::QUEUE_CAPACITY {
+                            saturated = true;
+                            break;
+                        }
+                        pending.push_back(command);
+                    }
+                }
+            }
+            saturated
+        };
+        if saturated {
+            let sessions = ui.sessions.borrow();
+            if let Some(window) = sessions.get(&id) {
+                window
+                    .host
+                    .emit_raw("command-failed", "Session queue is saturated");
+            }
+        }
+        apply_session_commands(ui, &windows, id);
+    }
+    *ui.receiver.borrow_mut() = Some(receiver);
+}
+
+/// Applies one session's pending queue, stalling while its window has
+/// not built yet (the first `session_view` run marks readiness).
+fn apply_session_commands(
+    ui: &Rc<ThreadState>,
+    windows: &Option<zgui::runtime::windows::Windows>,
+    id: u64,
+) {
+    loop {
+        let command = {
             let sessions = ui.sessions.borrow();
             let Some(window) = sessions.get(&id) else {
-                continue;
+                return;
+            };
+            let Some(command) = window.pending.borrow_mut().pop_front() else {
+                return;
+            };
+            if window.host.window.borrow().is_none() && window.host.adopted() {
+                // Not built yet: put it back and wait for the build.
+                window.pending.borrow_mut().push_front(command);
+                return;
+            }
+            command
+        };
+        // A LoadUi may swap the live window for a fresh one; carry the
+        // pending queue and the sessions entry over to the replacement.
+        let load = {
+            let sessions = ui.sessions.borrow();
+            let Some(window) = sessions.get(&id) else {
+                return;
             };
             let host = &window.host;
             let generation = command.generation;
-            if let Op::LoadUi(doc) = &command.op {
-                if generation <= host.generation.get() {
-                    host.emit_raw("command-failed", "UI generation must increase");
-                    continue;
+            let load_doc = match &command.op {
+                Op::LoadUi(doc) => Some(doc),
+                _ => None,
+            };
+            match load_doc {
+                None => None,
+                Some(_) if generation <= host.generation.get() => {
+                    Some(Err("UI generation must increase".to_string()))
                 }
-                host.generation.set(generation);
-                host.document.set(Some(doc.clone()));
-                host.emit_raw("ui-loaded", format!("controls={}", doc.controls.len()));
-                continue;
+                Some(doc) => {
+                    host.generation.set(generation);
+                    host.live_generation.store(generation, Ordering::Release);
+                    Some(Ok(doc.clone()))
+                }
             }
-            if generation != host.generation.get() {
-                host.emit_raw("command-failed", "Stale UI generation");
-                continue;
-            }
-            apply_op(host, &command.op)
         };
-        if let Err(error) = result {
+        let Some(load) = load else {
+            // An ordinary op: apply it to the current host.
+            {
+                let sessions = ui.sessions.borrow();
+                if let Some(window) = sessions.get(&id) {
+                    let host = &window.host;
+                    if command.generation != host.generation.get() {
+                        host.emit_raw("command-failed", "Stale UI generation");
+                    } else if let Err(error) = apply_op(host, &command.op) {
+                        host.emit_raw("command-failed", error);
+                    }
+                }
+            }
+            continue;
+        };
+        let doc = match load {
+            Ok(doc) => doc,
+            Err(error) => {
+                let sessions = ui.sessions.borrow();
+                if let Some(window) = sessions.get(&id) {
+                    window.host.emit_raw("command-failed", error);
+                }
+                continue;
+            }
+        };
+        // Swap (or first-time set) and carry the pending queue over.
+        let (new_host, pending_rest) = {
             let sessions = ui.sessions.borrow();
-            if let Some(window) = sessions.get(&id) {
-                window.host.emit_raw("command-failed", error);
+            let Some(window) = sessions.get(&id) else {
+                return;
+            };
+            let new_host = swap_load(&window.host, doc, windows);
+            // The LoadUi itself was already popped; carry the rest.
+            let pending_rest: Vec<Command> = window.pending.borrow().iter().cloned().collect();
+            (new_host, pending_rest)
+        };
+        let mut ui_loaded_host = None;
+        {
+            let mut sessions = ui.sessions.borrow_mut();
+            if let Some(window) = sessions.get_mut(&id) {
+                if let Some(new_host) = new_host {
+                    window.host = new_host.clone();
+                    ui_loaded_host = Some(new_host);
+                }
+                *window.pending.borrow_mut() = pending_rest.into();
             }
         }
+        let host = ui_loaded_host
+            .or_else(|| {
+                let sessions = ui.sessions.borrow();
+                sessions.get(&id).map(|window| window.host.clone())
+            })
+            .expect("the session exists");
+        host.emit_raw("ui-loaded", "swapped-or-set");
     }
-    *ui.receiver.borrow_mut() = Some(receiver);
 }
 
 fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
