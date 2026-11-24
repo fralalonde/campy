@@ -381,27 +381,45 @@ if it lands first).
 
 - Depends: Z2.1, Z1.1 · Size: L · Risk: high (flagged G1) · Branch: `z2/z2.2-shell-v2`
 
-**Goal.** The 1,600-line Slint emitter becomes a protocol-v2 description
-builder. Structure preserved exactly: menu bar (File/Edit/View/Project
-menus), CCL palette row with hover hints, view toggle + Run/Stop,
-Projects navigator, module tabs (closable), the designer canvas
-(`surface` kind wrapping the module's controls + selection/marquee
-driven by `SetGeometry`), object inspector (rows of edit/bool/choice per
-CCL), the code view (`code_editor`), generated-source view, console
-(`console` kind), settings/project dialogs (hidden by `visible`), and a
-`group` root with theme class handling. Every interaction emits the
-§1.4 event kinds; the shell consumes scalar/model diffs via the granular
-ops (`SetText`/`SetModel` per section id) — same data-driven discipline
-as today, no LoadUi for ordinary edits. The shell description is loaded
-once; F6 re-LoadUi's it.
+### Z2.2 — IDE shell v2: `campy_ide/ide_ui/shell.gleam` becomes a ControlDesc emitter
+
+- Depends: Z2.1, Z1.1 · Size: L · Risk: high (flagged G1) · Branch: `z2/z2.2-shell-v2`
+
+**Shell wire contract (the section ids the IDE loop routes by; keep
+these exact — they are the Rust-side control ids the granular ops
+address):**
+
+| id | kind | content / behavior |
+| --- | --- | --- |
+| `menu-bar` | `panel` (row) | File/Edit/View/Project buttons, each a `menu` control whose `model` is its item list; emits `control:<id>:selected` |
+| `palette` | `panel` (row) | one `button` per CCL entry (class `campy-palette-tile`), click → designer placement; hover hint via the status line |
+| `view-toggle`, `run`, `stop` | `button` | form/code view switch; Run/Stop |
+| `status` | `label` | the status line (SetText) |
+| `projects-nav` | `panel` (column) | project entries (`list`-styled rows via `SetModel`) |
+| `module-tabs` | `panel` (row) | open modules: tab label + close × per entry (`SetModel`) |
+| `canvas` | `surface` | the designer canvas; children = the module's controls at their geometry; raw `pointer:canvas:*` drives select/drag/marquee (Gleam hit-tests); selection rectangle + marquee are extra rects updated by `SetGeometry` |
+| `inspector` | `panel` (column) | per-CCL property rows: `edit`/`checkbox`/`combo` per PropType; emits edited/toggled/selected with the row key in the payload convention below |
+| `code-view` | `code_editor` | the handler source (SetCode / editor-changed / SetMarks from LS) |
+| `console` | `console` | fed by `AppendConsole`; input lines arrive as `console:console:input` |
+| `dialogs…` | `panel` (visible=false) | settings + project dialogs, shown by SetBool |
+
+Row-id convention: every interactive element is its own control with a
+derived id, so events need no embedded keys — inspector rows are
+`insp:<prop-key>`, menu items `menu:<menu>:<item>`, palette tiles
+`tile:<kind>`, tabs `tab:<module>`, tab closers `tabx:<module>`. Payloads
+stay values only. Document the id grammar in the emitter's doc comment
+and keep it stable across Z2.3.
+
+**Goal.** Replace the Slint emitter with the builder above. Every
+interaction emits the §1.4 event kinds; the shell consumes scalar/model
+diffs via the granular ops (`SetText`/`SetModel` per section id) — the
+same data-driven discipline as today, no LoadUi for ordinary edits. The
+shell description is loaded once; F6 re-LoadUi's it.
 
 **Note from Z1.1.** `campy_ccl` declares `text` as a universal property
 row; the inspector's unknown-key routing (`set_control_prop`) would
 shadow the `text` FIELD edit, so the shell's inspector rows must treat
 `text` specially (route it to the same editor the field edit uses).
-`progress` declares `changed` (the renderer does not emit it yet);
-disable or hide the inspector's event wiring for it until the renderer
-grows it.
 
 **Files.** `gleam/apps/campy_ide/src/campy_ide/ide_ui.gleam`,
 `ide_ui/shell.gleam` (rewritten), `campy_ide_snapshot.gleam` (port the
