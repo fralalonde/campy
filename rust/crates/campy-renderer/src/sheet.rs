@@ -168,6 +168,11 @@ pub const CAMPY_SHEET: &str = css!(
                         border: 1px solid var(--campy-border); border-radius: 5px;
                         padding: 0 8px; }",
     ".campy-insp-text:hover { border-color: var(--campy-muted); }",
+    ".campy-control > .campy-check-row { width: 100%; height: 100%; }
+     .campy-insp-bool .campy-check-row { justify-content: flex-start; padding: 0 8px;
+                                        background: var(--campy-raised);
+                                        border: 1px solid var(--campy-border);
+                                        border-radius: 5px; }",
     ".campy-insp-open .campy-widget-button { justify-content: flex-start;
                                              background: transparent;
                                              border-color: var(--campy-border);
