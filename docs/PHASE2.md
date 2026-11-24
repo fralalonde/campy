@@ -183,17 +183,29 @@ signals); Column/Row wrap children in `column`/`row` boxes.
 1. Gleam packages follow the existing layout/registration rules (see
    `PHASE1.md` §1.4 — packages go in `gleam/packages/<name>` and are
    registered in `scripts/workspace.py` `PACKAGES`).
-2. Run `just fmt` and `just check` before finishing. Pure-Gleam briefs
-   must keep `just check` green without a display (session-dependent
-   tests skip unless `DISPLAY`/`WAYLAND_DISPLAY` is set — keep that
-   convention).
-3. Stay inside your brief's Files list. Ambiguity → stop and report.
-4. Each task runs in its own worktree: `git worktree add
-   ../campy-wt-<id> z2/<task-id>` created from `zgui-migration`, commit
-   there on branch `z2/<task-id>`, and report the commit hash. The
-   coordinator merges.
-5. Rust-side work beyond your brief's Files list is out of bounds (the
+2. **Transition-window acceptance** (until Z2.3 lands): the full-tree
+   `just check` is temporarily red because the IDE still speaks protocol v1
+   against the v2 NIF. Your brief is done when **your package and every
+   package it depends on or breaks** passes its own build and tests:
+   `cd gleam/packages/<pkg> && gleam build && gleam test`. Rust must stay
+   `cargo check` green (`cd rust && cargo check`). Do not "fix" unrelated
+   packages; do not touch `campy_ide`, `campy_app`, or the Rust tree
+   outside your brief.
+3. Run `just fmt` before finishing (or `cd gleam/packages/<pkg> && gleam
+   format` for scoped work). Session-dependent tests skip unless
+   `DISPLAY`/`WAYLAND_DISPLAY` is set — keep that convention.
+4. Stay inside your brief's Files list. Ambiguity → stop and report.
+5. Each task runs in its own worktree: `git worktree add -b z2/<task-id>
+   ../campy-wt-<id>` created from `zgui-migration`, commit there, and
+   report the commit hash. The coordinator merges.
+6. Rust-side work beyond your brief's Files list is out of bounds (the
    coordinator owns the renderer between waves).
+7. **Control rendering rule (from Z0.2):** campy's interactive controls
+   render as campy-styled base elements (`control`, `field`), which are the
+   path verified end-to-end through real surface input. zgui-ui components
+   (`Button`, `Input`, `Checkbox`, …) are NOT wired in the renderer yet;
+   they get their live-window A/B in Z2.2 — write Gleam-side emitters
+   against the CCL kind table only, never against zgui-ui names.
 
 ### 1.6 Dispatch template
 
@@ -209,17 +221,26 @@ signals); Column/Row wrap children in `column`/`row` boxes.
 
 ### Z0.2 — `campy-bridge`/`campy-renderer`: protocol v2 host
 
-Done by the coordinator on `zgui-migration` directly (it is the contract
-everything compiles against). Contents: git-pinned zgui stack in
-`rust/Cargo.toml`; `wire.rs` (rustler-decodable protocol v2); sessions
-v2 (one `Runtime`, winit loop via `WinitApp` + `with_any_thread`,
-`set_interval` drain, per-session window `BridgeState`, `Show`-based
-rebuild on `LoadUi`, signal-registry granular ops, control builders for
-every kind in §1.4 with `code_editor`/`console` initially stubbed,
-event marshalling, campy CSS sheet with light/dark themes, headless
-`ui-testing` driver mode). Acceptance: `cargo build` green; a headless
-integration test opens a session, `LoadUi`s a form, `SetText`s,
-delivers a click via scripted surface events, and asserts the scene.
+**Done** (commit "Z0.2: protocol v2 host"). Verified facts future briefs
+may rely on:
+
+- The zgui stack is pinned to one git source (Cargo.lock carries
+  `ee29c7dc`); zgui-editor and zgui-terminal compile against it.
+- `with_any_thread` needs no zgui fork: the UI thread builds its own
+  winit loop and drives the public `WinitApp`.
+- The headless `ui-testing` driver works: scripted surface events with
+  **monotonic timestamps** (a stale `Timestamp::ORIGIN` silently breaks
+  click synthesis), a null renderer, and `test_pump`/`test_pointer`/
+  `test_resize` NIFs. One runtime per process — smoke scenarios run
+  sequentially.
+- `LoadUi` applies through the per-session document signal (zgui
+  rebuilds the document incrementally); granular ops hit the per-control
+  signal registry; events flow as §1.4 specifies (envelope unchanged).
+- Interactive controls are campy-styled **base elements** (see §1.5.7).
+  `code_editor`/`memo` render a zgui-editor `Editor` (set-text and
+  changed-events wired; marks/registry are Z3.1), `console` is a styled
+  text box until Z3.2, `surface` forwards pointer phases with window CSS
+  coordinates. `Resize` and window close-reaping land with Z3.1.
 
 ## 3. Wave 1 — pure Gleam, parallelizable after Z0.2 lands
 
