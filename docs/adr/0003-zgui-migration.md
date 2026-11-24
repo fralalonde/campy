@@ -66,6 +66,21 @@ paid ≈ 44 ms per `LoadUi` compile plus a full-window CPU raster.
    `dispatch_event` injection, which zgui's winit path has no equivalent
    of. A display is no longer required for the automated smoke test.
 
+## Platform findings (recorded so nobody relearns them)
+
+1. **Scripted input needs monotonic timestamps.** Under
+   `zgui-platform-headless`, surface events stamped with a stale
+   `Timestamp::ORIGIN` can silently stop being recognized as clicks once
+   the virtual clock has advanced; the driver stamps each event relative
+   to the accumulated clock.
+2. **zgui-ui components are unverified through surface input.** Their own
+   tests dispatch through the component testkit, not the platform
+   pipeline. In our headless harness a styled base `control` with
+   `on:click` fires reliably while a zgui-ui `Button` did not; campy's
+   interactive controls therefore render as campy-styled base elements,
+   and zgui-ui components get a live-window A/B at gate G1 before the IDE
+   shell adopts any of them (and an upstream issue if it reproduces).
+
 ## Consequences
 
 - F6 keeps its BEAM semantics (module swap on the VM, unchanged
