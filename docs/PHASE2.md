@@ -563,6 +563,15 @@ optional" note.
 Dispatch order: Z0.2 (coordinator) → Wave 1 parallel → G0 → Wave 2
 sequential (Z2.1 → Z2.2 → Z2.3) → G1 → Wave 3 parallel → Wave 4 → G2.
 
+**Punch-list status after Z2.3 (updated by the coordinator's gap-3 fix):**
+gap 3 (Reload) is CLOSED — per-run drain timers, deferred-session window
+swaps (v1 parity), and build-race stalls; integration-tested for both
+the initial and the deferred window. Still open for G1/Wave 4: gap 1
+(`list` rows emit nothing — the renderer needs row activation), gap 2
+(`menu` has no popup), gaps 4/5 (pointer payload lacks button and
+modifiers — right-click and ctrl-click; keyboard mitigations exist),
+gaps 6/7 (hover, console-goto), and Z4.1 (smoke-native PNG removal).
+
 **G1 manual-pass checklist** (run `just run` on a live desktop; every
 line must pass or become a filed punch item):
 
