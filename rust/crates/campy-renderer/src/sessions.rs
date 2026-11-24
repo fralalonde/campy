@@ -88,10 +88,18 @@ fn measure_controls(controls: &[ControlDesc], size: &mut usize) {
     }
 }
 
-struct Control {
-    id: u64,
+pub(crate) struct Control {
+    pub(crate) id: u64,
     /// Cleanup cannot be lost when the command queue is full (v1 rule).
-    close_reason: AtomicU8,
+    pub(crate) close_reason: AtomicU8,
+}
+
+impl Control {
+    pub(crate) fn mark_close(&self, reason: u8) {
+        let _ = self
+            .close_reason
+            .compare_exchange(0, reason, Ordering::AcqRel, Ordering::Acquire);
+    }
 }
 
 struct Registration {
@@ -142,12 +150,7 @@ impl Session {
     }
 
     pub fn close(&self, reason: u8) {
-        let _ = self.control.close_reason.compare_exchange(
-            0,
-            reason,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        self.control.mark_close(reason);
     }
 }
 
@@ -237,8 +240,6 @@ fn start() -> Result<Runtime, String> {
 /// Per-session window state (UI thread only).
 struct SessionWindow {
     host: Rc<Host>,
-    control: Arc<Control>,
-    handle: RefCell<Option<zgui::runtime::windows::WindowHandle>>,
 }
 
 /// Everything the drain timer sees (UI thread only).
@@ -254,9 +255,19 @@ pub(crate) struct ThreadState {
 /// The window content of one session: the current document as a reactive
 /// hole, rebuilt by zgui when the host's document signal changes.
 fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
-    move || match host.document.get() {
-        None => AnyView::new(r#box().class("campy-root")),
-        Some(doc) => controls::build_document(&doc, &host),
+    move || {
+        if host.window.borrow().is_none() {
+            *host.window.borrow_mut() = Some(use_window());
+            let close_host = host.clone();
+            let _guard = on_close_request(move || {
+                close_host.request_close();
+                zgui::prelude::CloseResponse::Close
+            });
+        }
+        match host.document.get() {
+            None => AnyView::new(r#box().class("campy-root")),
+            Some(doc) => controls::build_document(&doc, &host),
+        }
     }
 }
 
@@ -286,17 +297,10 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
             // sink arrives with registration), and start the command drain.
             *view_ui.windows.borrow_mut() = Some(use_windows());
             let host = Host::new(INITIAL_SESSION, Arc::new(|_, _, _, _| {}));
-            view_ui.sessions.borrow_mut().insert(
-                INITIAL_SESSION,
-                SessionWindow {
-                    host: host.clone(),
-                    control: Arc::new(Control {
-                        id: INITIAL_SESSION,
-                        close_reason: AtomicU8::new(0),
-                    }),
-                    handle: RefCell::new(None),
-                },
-            );
+            view_ui
+                .sessions
+                .borrow_mut()
+                .insert(INITIAL_SESSION, SessionWindow { host: host.clone() });
             let drain_ui = view_ui.clone();
             let timer = set_interval(DRAIN_TICK, move || drain(&drain_ui));
             *view_ui.drain_timer.borrow_mut() = Some(timer);
@@ -366,12 +370,12 @@ fn adopt_registrations(ui: &Rc<ThreadState>) {
     for (id, registration) in registrations.iter() {
         let mut sessions = ui.sessions.borrow_mut();
         if let Some(window) = sessions.get_mut(id) {
-            if Arc::ptr_eq(&window.control, &registration.control) {
+            if window.host.adopted() {
                 continue; // already adopted
             }
             // The initial window adopts its registration.
             window.host.adopt_sink(registration.sink.clone());
-            window.control = registration.control.clone();
+            window.host.adopt_control(registration.control.clone());
             (registration.sink)(*id, 0, "session-opened".into(), "initial-window".into());
             continue;
         }
@@ -379,18 +383,12 @@ fn adopt_registrations(ui: &Rc<ThreadState>) {
             continue;
         };
         let host = Host::new(*id, registration.sink.clone());
-        let handle = windows.open(
+        host.adopt_control(registration.control.clone());
+        let _handle = windows.open(
             zgui::runtime::windows::WindowOptions::new("Campy").with_size(900.0, 640.0),
             session_view(host.clone()),
         );
-        sessions.insert(
-            *id,
-            SessionWindow {
-                host,
-                control: registration.control.clone(),
-                handle: RefCell::new(Some(handle)),
-            },
-        );
+        sessions.insert(*id, SessionWindow { host });
         (registration.sink)(*id, 0, "session-opened".into(), "window".into());
     }
 }
@@ -560,10 +558,12 @@ fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
                 other => return Err(format!("Unsupported read key: {other}")),
             }
         }
-        Op::Resize { .. } => {
-            // The window handle's request_size arrives with the handle
-            // wiring (Z3.1); the BEAM's window sizing flows through it.
-            return Err("Resize is not wired yet".into());
+        Op::Resize { width, height } => {
+            let handle = host.window.borrow().clone();
+            let Some(handle) = handle else {
+                return Err("The window handle is not ready yet".into());
+            };
+            handle.request_size(*width as f32, *height as f32);
         }
     }
     Ok(())
@@ -574,8 +574,7 @@ fn reap_closed(ui: &Rc<ThreadState>) {
     {
         let sessions = ui.sessions.borrow();
         for (id, window) in sessions.iter() {
-            let reason = window.control.close_reason.load(Ordering::Acquire);
-            if reason != 0 {
+            if let Some(reason) = window.host.close_reason() {
                 closed.push((*id, reason));
             }
         }
@@ -587,7 +586,7 @@ fn reap_closed(ui: &Rc<ThreadState>) {
     for (id, reason) in closed {
         if let Some(window) = sessions.remove(&id) {
             let _ = window.host.emit_raw("closed", format!("reason={reason}"));
-            if let Some(handle) = window.handle.borrow().as_ref() {
+            if let Some(handle) = window.host.window.borrow().as_ref() {
                 handle.close();
             }
         }

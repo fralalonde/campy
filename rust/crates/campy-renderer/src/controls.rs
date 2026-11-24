@@ -31,11 +31,16 @@ pub struct Host {
     sink: RefCell<EventSink>,
     /// The current UI document; `LoadUi` writes it and the window's
     /// reactive hole rebuilds incrementally.
-    pub document: RwSignal<Option<UiDocument>>,
+    pub document: RwSignal<Option<UiDocument>, LocalStorage>,
     /// Live per-control signals, refilled on every document build.
     pub controls: RefCell<HashMap<u64, ControlSignals>>,
     /// Live editor handles (`memo` / `code_editor` kinds).
     pub editors: RefCell<HashMap<u64, EditorHandle>>,
+    /// This window's handle once the view is running (`use_window`).
+    pub window: RefCell<Option<zgui::runtime::windows::WindowHandle>>,
+    /// The NIF-visible session flag (close reasons ride it, v1 rule:
+    /// cleanup survives a full queue).
+    pub(crate) control: RefCell<Option<std::sync::Arc<crate::sessions::Control>>>,
 }
 
 impl Host {
@@ -44,10 +49,45 @@ impl Host {
             session,
             generation: Cell::new(0),
             sink: RefCell::new(sink),
-            document: RwSignal::new(None),
+            document: RwSignal::new_local(None),
             controls: RefCell::new(HashMap::new()),
             editors: RefCell::new(HashMap::new()),
+            window: RefCell::new(None),
+            control: RefCell::new(None),
         })
+    }
+
+    /// The registration's control flag, once the NIF registers us.
+    pub fn adopt_control(&self, control: std::sync::Arc<crate::sessions::Control>) {
+        *self.control.borrow_mut() = Some(control);
+    }
+
+    /// Whether a registration has been adopted (the sink arrived).
+    pub fn adopted(&self) -> bool {
+        // The placeholder host is swapped for the registered one, so this
+        // only ever asks the real one.
+        self.control.borrow().is_some()
+    }
+
+    /// The close reason the NIF side marked, if any.
+    pub fn close_reason(&self) -> Option<u8> {
+        self.control
+            .borrow()
+            .as_ref()
+            .map(|control| {
+                control
+                    .close_reason
+                    .load(std::sync::atomic::Ordering::Acquire)
+            })
+            .filter(|reason| *reason != 0)
+    }
+
+    /// The window's X button: close through the normal reap path so the
+    /// BEAM sees `closed` with reason 4 (v1 parity).
+    pub fn request_close(&self) {
+        if let Some(control) = self.control.borrow().as_ref() {
+            control.mark_close(4);
+        }
     }
 
     /// The initial window's sink arrives with its registration.
