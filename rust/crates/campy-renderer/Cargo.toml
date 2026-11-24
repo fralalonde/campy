@@ -6,14 +6,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-slint-interpreter.workspace = true
-spin_on.workspace = true
-
-slint.workspace = true
-png.workspace = true
-tree-sitter = "0.25"
-tree-sitter-gleam = "1.0"
-tree-sitter-language = "0.1"
+zgui.workspace = true
+zgui-ui.workspace = true
+zgui-editor.workspace = true
+zgui-terminal.workspace = true
 
 [features]
+# Headless driver for the smoke suite: scripted surface events, virtual
+# clock, scene dumps — no window system required.
 ui-testing = []
