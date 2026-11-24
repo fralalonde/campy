@@ -1,309 +1,201 @@
+// The IDE shell's data side, protocol v2.
+//
+// `snapshot` turns IDE state into the shell's `ShellView` (what every section
+// displays); `shell.desc` turns that view into the `ControlDesc` document.
+// `ops` diffs two views and returns the granular wire ops that move the loaded
+// window from one to the other — `SetText`/`SetBool`/`SetInt`/`SetModel`/
+// `SetGeometry`/`SetCode`/`AppendConsole`/`SetMarks`, addressed by section wire
+// id. When the canvas subtree changes shape (a control is added or removed, or
+// another module with a different form is opened) or a LoadUi-level value
+// changes (the window title or the light/dark theme), no granular op can
+// express it, so `ops` returns a single `Reload` (the same LoadUi path F6
+// uses); the caller must reset its diff baseline after reloading, which also
+// replays the console and the diagnostic marks on the next sync.
+//
+// The shell document is loaded once at startup (`load_commands`) and the
+// document is never rebuilt for ordinary edits.
+//
+// Control ids are `campy_form.wire_id(<section name>)`; the names are listed in
+// `campy_ide/shell`'s module doc. `Reload` carries the whole view, so `commands`
+// can rebuild the document without the IDE state.
+
 import campy_bridge as bridge
 import campy_ccl
-import campy_form.{type Form}
-import campy_form/preview.{quote}
+import campy_form
+import campy_form/live_preview
 import campy_form/project
 import campy_form/syntax
 import campy_ide/shell
 import campy_ide/state.{
   type Popup, type Scheme, type State, CodeView, Dark, FormView, Light, NoPopup,
   OpenFile, PickPicture, PickProjectIcon, SaveAs, Solarized, active_form,
-  active_module, active_name, can_redo, can_undo, is_events_tab, selection_label,
+  active_module, is_events_tab, selection_label,
 }
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 
-// The IDE shell is emitted once. Scalar state and theme colors are root
-// properties; modules, tabs, canvas controls, palette rows, and code lines are
-// Slint models. Nothing reloads the window after startup.
-pub type Update {
-  TextUpdate(name: String, value: String)
-  BoolUpdate(name: String, value: Bool)
-  IntUpdate(name: String, value: Int)
-  ScalarIntUpdate(name: String, value: Int)
-  ColorUpdate(name: String, value: String)
+pub type Snapshot =
+  shell.ShellView
+
+pub type ProjectItem =
+  shell.ProjectItem
+
+pub type ModuleItem =
+  shell.ModuleItem
+
+pub type TabItem =
+  shell.TabItem
+
+pub type ControlItem =
+  shell.ControlItem
+
+pub type TokenItem =
+  shell.TokenItem
+
+pub type LineItem =
+  shell.LineItem
+
+pub type CompletionItem =
+  shell.CompletionItem
+
+pub type DiagItem =
+  shell.DiagItem
+
+pub type BrowserItem =
+  shell.BrowserItem
+
+pub type PropItem =
+  shell.PropItem
+
+/// One granular change to the loaded shell. Wire ids, no generations.
+pub type UiOp {
+  SetText(control: Int, value: String)
+  SetBool(control: Int, key: String, value: Bool)
+  SetInt(control: Int, key: String, value: Int)
+  SetModel(control: Int, items: List(bridge.WireValue))
+  SetGeometry(control: Int, x: Int, y: Int, w: Int, h: Int)
+  SetCode(control: Int, source: String)
+  AppendConsole(control: Int, bytes: String)
+  SetMarks(control: Int, layer: String, items: List(#(Int, Int, String)))
+  /// The document must be rebuilt (structural change); the old shell's F6 path.
+  Reload(view: Snapshot)
 }
 
-pub type ProjectItem {
-  ProjectItem(
-    id: String,
-    title: String,
-    active: Bool,
-    icon: String,
-    has_icon: Bool,
-  )
-}
-
-pub type ModuleItem {
-  ModuleItem(id: String, name: String, active: Bool)
-}
-
-pub type TabItem {
-  TabItem(id: String, name: String, active: Bool)
-}
-
-pub type ControlItem {
-  ControlItem(
-    id: String,
-    kind: String,
-    text: String,
-    x: Int,
-    y: Int,
-    w: Int,
-    h: Int,
-    enabled: Bool,
-    visible: Bool,
-    selected: Bool,
-    primary: Bool,
-    picture: String,
-    value: Int,
-    transparency: Int,
-    arranged: Bool,
-    checked: Bool,
-    placeholder: String,
-    read_only: Bool,
-    minimum: Int,
-    maximum: Int,
-    current_index: Int,
-    items: List(String),
-  )
-}
-
-pub type TokenItem {
-  TokenItem(text: String, kind: String)
-}
-
-pub type CompletionItem {
-  CompletionItem(label: String, detail: String, insert: String)
-}
-
-pub type DiagItem {
-  DiagItem(line: Int, severity: Int, message: String)
-}
-
-pub type BrowserItem {
-  BrowserItem(name: String, is_dir: Bool)
-}
-
-pub type LineItem {
-  LineItem(tokens: List(TokenItem))
-}
-
-// One row of the inspector grid: a property (or event) name on the left and a
-// value display/editor on the right. `kind` selects the editor: "text" and
-// "number" are line edits, "bool" a checkbox, "choice" a combo box, and
-// "picture"/"event" are click-to-open cells. Blank values mean "differs across
-// the selection"; a negative `index` is a mixed choice.
-pub type PropItem {
-  PropItem(
-    key: String,
-    label: String,
-    kind: String,
-    value: String,
-    checked: Bool,
-    index: Int,
-    options: List(String),
-    hint: String,
-  )
-}
-
-pub type Snapshot {
-  Snapshot(
-    scalars: List(Update),
-    projects: List(ProjectItem),
-    modules: List(ModuleItem),
-    tabs: List(TabItem),
-    controls: List(ControlItem),
-    code: List(LineItem),
-    props: List(PropItem),
-    events: List(PropItem),
-    completions: List(CompletionItem),
-    diagnostics: List(DiagItem),
-    code_module: String,
-    code_view: Bool,
-    browser_items: List(BrowserItem),
-    console_lines: List(String),
-  )
-}
+// ---------------------------------------------------------------------------
+// State → view
+// ---------------------------------------------------------------------------
 
 pub fn snapshot(model: State) -> Snapshot {
-  Snapshot(
-    scalars: scalars(model),
-    projects: list.map(model.workspace.projects, fn(project) {
-      ProjectItem(
-        project.path,
-        project.title,
-        project.path == model.project.path,
-        project.icon,
-        project.icon != "",
-      )
-    }),
-    modules: list.map(model.project.modules, fn(module) {
-      ModuleItem(module.id, module.name, module.id == model.active)
-    }),
-    tabs: tabs(model),
-    controls: controls(model),
-    code: code(model),
-    props: prop_items(model),
-    events: event_items(model),
-    completions: completions(model),
-    diagnostics: diagnostics(model),
-    code_module: model.active,
-    code_view: is_code_view(model),
-    browser_items: browser_items(model),
-    console_lines: console_lines(model),
-  )
-}
-
-// After the initial LoadUi the shell already has the scalar defaults; only the
-// models need to be pushed.
-pub fn without_models(snapshot: Snapshot) -> Snapshot {
-  Snapshot(
-    ..snapshot,
-    projects: [],
-    modules: [],
-    tabs: [],
-    controls: [],
-    code: [],
-    props: [],
-    events: [],
-    completions: [],
-    diagnostics: [],
-    code_module: "",
-    code_view: False,
-    browser_items: [],
-    console_lines: [],
-  )
-}
-
-// Force the next sync to send every scalar and model (used after a UI reload).
-pub fn empty_snapshot() -> Snapshot {
-  Snapshot(
-    scalars: [],
-    projects: [],
-    modules: [],
-    tabs: [],
-    controls: [],
-    code: [],
-    props: [],
-    events: [],
-    completions: [],
-    diagnostics: [],
-    code_module: "",
-    code_view: False,
-    browser_items: [],
-    console_lines: [],
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Values
-// ---------------------------------------------------------------------------
-
-fn scalars(model: State) -> List(Update) {
   let form = active_form(model)
   let title = case form {
     Some(value) -> value.title
     None -> ""
   }
-  let slint_source = case form {
-    Some(value) ->
-      case preview.to_slint(value) {
-        Ok(source) -> source
-        Error(error) -> "// Generated Slint unavailable: " <> error
-      }
-    None -> "// No module"
-  }
-  list.append(
-    [
-      TextUpdate("status", model.status),
-      TextUpdate("path-text", model.project.path),
-      BoolUpdate("running", is_running(model)),
-      BoolUpdate("code-view", is_code_view(model)),
-      BoolUpdate("events-tab", is_events_tab(model)),
-      BoolUpdate("slint-tab", is_slint_tab(model)),
-      BoolUpdate("layout-free", layout_is(form, campy_form.Free)),
-      BoolUpdate("layout-column", layout_is(form, campy_form.Column)),
-      BoolUpdate("layout-row", layout_is(form, campy_form.Row)),
-      BoolUpdate("has-selection", !list.is_empty(model.selection)),
-      TextUpdate("insp-selection", selection_label(model)),
-      IntUpdate("canvas-w", form_width(form)),
-      IntUpdate("canvas-h", form_height(form)),
-      IntUpdate("form-border-size", form_border_size(model)),
-      IntUpdate("window-x", window_x(model)),
-      IntUpdate("window-y", window_y(model)),
-      IntUpdate(
-        "surface-w",
-        int.max(window_x(model) + form_width(form) + 80, 900),
-      ),
-      IntUpdate(
-        "surface-h",
-        int.max(window_y(model) + form_height(form) + 28 + 80, 700),
-      ),
-      TextUpdate("code-handler", code_handler_label(model)),
-      TextUpdate("browser-dir", browser_dir(model)),
-      TextUpdate("browser-name", browser_name(model)),
-      TextUpdate("slint-source", slint_source),
-      TextUpdate("console-text", state.console_text(model)),
-      TextUpdate("popup-title", popup_title(model.popup)),
-      TextUpdate("popup-action", popup_action(model.popup)),
-      BoolUpdate("popup-open", popup_open(model.popup)),
-      BoolUpdate("settings-open", model.settings_open),
-      BoolUpdate("can-undo", can_undo(model)),
-      BoolUpdate("can-redo", can_redo(model)),
-      BoolUpdate(
-        "can-delete-project",
-        list.length(model.workspace.projects) > 1,
-      ),
-      BoolUpdate("show-hints", model.hints),
-      BoolUpdate("agent-open", model.agent_open),
-      BoolUpdate("project-selected", model.selected_project),
-      BoolUpdate("project-dialog-open", model.project_dialog_open),
-      TextUpdate("project-title", model.project.title),
-      TextUpdate("project-path", model.project.path),
-      BoolUpdate("context-open", model.context_open),
-      IntUpdate("context-x", model.context_x),
-      IntUpdate("context-y", model.context_y),
-      BoolUpdate("mcp-enabled", model.mcp_enabled),
-      TextUpdate("mcp-port-text", int.to_string(model.mcp_port)),
-      TextUpdate("mcp-status", model.mcp_status),
-      TextUpdate("pending-kind", pending_kind_key(model)),
-      BoolUpdate("drop-active", model.drop_active),
-      TextUpdate("drop-candidate", model.drop_candidate),
-      ScalarIntUpdate("selection-count", list.length(model.selection)),
-      BoolUpdate("dark-mode", is_dark_scheme(model.scheme)),
-      TextUpdate("editor-font", model.font),
-      IntUpdate("editor-font-size", model.font_size),
-      ScalarIntUpdate("font-index", index_of(shell.fonts, model.font)),
-      ScalarIntUpdate(
-        "size-index",
-        index_of(shell.sizes, int.to_string(model.font_size)),
-      ),
-      ScalarIntUpdate("scheme-index", scheme_index(model.scheme)),
-      TextUpdate("form-title", title),
-      BoolUpdate("context-align", model.context_align),
-      BoolUpdate("nav-context-open", model.nav_context_open),
-      BoolUpdate("nav-context-project", model.nav_kind == "project"),
-      IntUpdate("code-scroll-y", code_scroll_y(model)),
-      IntUpdate("code-jump-line", code_jump_line(model)),
-      ScalarIntUpdate("code-jump-nonce", model.code_jump_nonce),
-      BoolUpdate("completions-open", !list.is_empty(model.completions)),
-      ScalarIntUpdate("completion-index", model.completion_index),
-    ],
-    theme_colors(model.scheme),
+  let #(window_x, window_y) = state.window_position(model)
+  shell.ShellView(
+    title: model.project.title,
+    theme: case is_dark_scheme(model.scheme) {
+      True -> "dark"
+      False -> "light"
+    },
+    status: model.status,
+    path: model.project.path,
+    running: is_running(model),
+    code_view: is_code_view(model),
+    raw_tab: model.slint_tab,
+    events_tab: is_events_tab(model),
+    hints: model.hints,
+    has_selection: !list.is_empty(model.selection),
+    selection_label: selection_label(model),
+    can_delete_project: list.length(model.workspace.projects) > 1,
+    has_project_icon: model.project.icon != "",
+    project_icon: model.project.icon,
+    project_title: model.project.title,
+    project_path: model.project.path,
+    project_selected: model.selected_project,
+    settings_open: model.settings_open,
+    agent_open: model.agent_open,
+    project_dialog_open: model.project_dialog_open,
+    mcp_enabled: model.mcp_enabled,
+    mcp_port: int.to_string(model.mcp_port),
+    mcp_status: model.mcp_status,
+    context_open: model.context_open,
+    context_align: model.context_align,
+    context_x: model.context_x,
+    context_y: model.context_y,
+    selection_count: list.length(model.selection),
+    nav_context_open: model.nav_context_open,
+    nav_context_project: model.nav_kind == "project",
+    popup_open: popup_open(model.popup),
+    popup_title: popup_title(model.popup),
+    popup_action: popup_action(model.popup),
+    browser_dir: browser_dir(model),
+    browser_name: browser_name(model),
+    font: model.font,
+    font_size: model.font_size,
+    scheme_index: scheme_index(model.scheme),
+    form_title: title,
+    window_x: window_x,
+    window_y: window_y,
+    projects: projects(model),
+    modules: modules(model),
+    tabs: tabs(model),
+    controls: controls(model),
+    canvas: canvas(model),
+    canvas_selection: canvas_selection(model),
+    props: prop_items(model),
+    events: event_items(model),
+    completions: completions(model),
+    diagnostics: diagnostics(model),
+    browser_items: browser_items(model),
+    code: code(model),
+    code_source: code_source(model),
+    code_handler: code_handler_label(model),
+    console_lines: model.console,
   )
+}
+
+/// The diff baseline (everything empty).
+pub fn empty_snapshot() -> Snapshot {
+  shell.empty_view()
+}
+
+fn projects(model: State) -> List(ProjectItem) {
+  list.map(model.workspace.projects, fn(project) {
+    shell.ProjectItem(
+      id: project.path,
+      title: project.title,
+      active: project.path == model.project.path,
+      icon: project.icon,
+    )
+  })
+}
+
+fn modules(model: State) -> List(ModuleItem) {
+  list.map(model.project.modules, fn(module) {
+    shell.ModuleItem(module.id, module.name, module.id == model.active)
+  })
 }
 
 fn tabs(model: State) -> List(TabItem) {
   list.filter_map(model.opened, fn(id) {
     case project.find_module(model.project, id) {
       Some(module) ->
-        Ok(TabItem(module.id, module.name, module.id == model.active))
+        Ok(shell.TabItem(module.id, module.name, module.id == model.active))
       None -> Error(Nil)
     }
   })
+}
+
+// The designer canvas document: the active form's `ControlDesc` tree (window
+// root included; `shell.desc` re-keys the root and keeps the designed wire ids).
+fn canvas(model: State) -> List(bridge.ControlDesc) {
+  case active_form(model) {
+    Some(form) -> live_preview.to_controls(form)
+    None -> []
+  }
 }
 
 fn controls(model: State) -> List(ControlItem) {
@@ -312,38 +204,88 @@ fn controls(model: State) -> List(ControlItem) {
     Some(form) ->
       list.map(campy_form.render_controls(form), fn(control) {
         let #(x, y, w, h) = campy_form.bounds(form, control)
-        ControlItem(
-          control.id,
-          campy_form.kind_key(control.kind),
-          control.text,
-          x,
-          y,
-          w,
-          h,
-          control.enabled,
-          control.visible,
-          list.contains(model.selection, control.id),
-          model.selected == Some(control.id),
-          case control.kind {
+        shell.ControlItem(
+          id: control.id,
+          kind: campy_form.kind_key(control.kind),
+          text: control.text,
+          x: x,
+          y: y,
+          w: w,
+          h: h,
+          enabled: control.enabled,
+          visible: control.visible,
+          selected: list.contains(model.selection, control.id),
+          primary: model.selected == Some(control.id),
+          picture: case control.kind {
             campy_form.Picture -> control.text
             _ -> ""
           },
-          control_value(control),
-          campy_form.transparency_of(form, control.id),
-          campy_form.layout_of(form, campy_form.parent_of(form, control.id))
+          value: control_value(control),
+          transparency: campy_form.transparency_of(form, control.id),
+          arranged: campy_form.layout_of(
+            form,
+            campy_form.parent_of(form, control.id),
+          )
             != campy_form.Free,
-          prop_bool(control, "checked"),
-          prop(control, "placeholder-text"),
-          prop_bool(control, "read-only"),
-          prop_int(control, "minimum", 0),
-          prop_int(control, "maximum", 100),
-          prop_int(control, "current-index", 0),
-          string.split(control.text, ",")
-            |> list.map(string.trim)
-            |> list.filter(fn(item) { item != "" }),
+          checked: prop_bool(control, "checked"),
+          placeholder: prop(control, "placeholder"),
+          read_only: prop_bool(control, "read-only"),
+          minimum: prop_int(control, "minimum", 0),
+          maximum: prop_int(control, "maximum", 100),
+          current_index: prop_int(control, "current-index", 0),
+          items: item_list(control),
         )
       })
   }
+}
+
+fn item_list(control: campy_form.Control) -> List(String) {
+  control.text
+  |> string.split(",")
+  |> list.map(string.trim)
+  |> list.filter(fn(item) { item != "" })
+}
+
+// The selection outline in canvas coordinates (form window offset + borders).
+fn canvas_selection(model: State) -> #(Int, Int, Int, Int) {
+  case active_form(model) {
+    None -> #(0, 0, 0, 0)
+    Some(form) -> {
+      let #(window_x, window_y) = state.window_position(model)
+      let boxes =
+        model.selection
+        |> list.filter_map(fn(id) {
+          case campy_form.find_control(form, id) {
+            Some(control) -> {
+              let #(x, y, w, h) = campy_form.bounds(form, control)
+              Ok(#(window_x + x, window_y + 28 + y, w, h))
+            }
+            None -> Error(Nil)
+          }
+        })
+      union_boxes(boxes)
+    }
+  }
+}
+
+fn union_boxes(boxes: List(#(Int, Int, Int, Int))) -> #(Int, Int, Int, Int) {
+  case boxes {
+    [] -> #(0, 0, 0, 0)
+    [first, ..rest] -> list.fold(rest, first, union_box)
+  }
+}
+
+fn union_box(
+  outer: #(Int, Int, Int, Int),
+  inner: #(Int, Int, Int, Int),
+) -> #(Int, Int, Int, Int) {
+  let #(x1, y1, w1, h1) = outer
+  let #(x2, y2, w2, h2) = inner
+  let left = int.min(x1, x2)
+  let top = int.min(y1, y2)
+  let right = int.max(x1 + w1, x2 + w2)
+  let bottom = int.max(y1 + h1, y2 + h2)
+  #(left, top, right - left, bottom - top)
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +294,8 @@ fn controls(model: State) -> List(ControlItem) {
 
 // Properties tab: one row per property of the selection (common keys only
 // when several components are selected), or the module window's properties
-// when nothing is selected.
+// when nothing is selected. Row kinds/labels come from `shell`, so the row
+// pool and the visible rows can never disagree.
 pub fn prop_items(model: State) -> List(PropItem) {
   case model.selected_project, model.selection, active_form(model) {
     True, _, _ -> []
@@ -408,26 +351,25 @@ fn uniform_row(row: PropItem, others: List(PropItem)) -> PropItem {
     })
   case same {
     True -> row
-    False -> PropItem(..row, value: "", checked: False, index: -1)
+    False -> shell.PropItem(..row, value: "", checked: False, index: -1)
   }
 }
 
-fn control_rows(form: Form, id: String) -> List(PropItem) {
+fn control_rows(form: campy_form.Form, id: String) -> List(PropItem) {
   case campy_form.find_control(form, id) {
     None -> []
     Some(control) -> {
       let geometry = [
-        number_row("x", "X", int.to_string(control.x)),
-        number_row("y", "Y", int.to_string(control.y)),
-        number_row("w", "W", int.to_string(control.width)),
-        number_row("h", "H", int.to_string(control.height)),
+        number_row("x", int.to_string(control.x)),
+        number_row("y", int.to_string(control.y)),
+        number_row("w", int.to_string(control.width)),
+        number_row("h", int.to_string(control.height)),
       ]
       let picture = case control.kind {
         campy_form.Picture -> [
-          open_row("picture", "Picture", control.text),
+          open_row("picture", control.text),
           number_row(
             "transparency",
-            "Transp. %",
             int.to_string(campy_form.transparency_of(form, id)),
           ),
         ]
@@ -437,8 +379,7 @@ fn control_rows(form: Form, id: String) -> List(PropItem) {
         campy_form.Free -> [
           choice_row(
             "align",
-            "Align",
-            ["Free", "Top", "Bottom", "Left", "Right", "Client", "Fill"],
+            shell.align_options,
             index_of(
               ["none", "top", "bottom", "left", "right", "client", "fill"],
               campy_form.align_key(campy_form.align_of(form, id)),
@@ -451,65 +392,78 @@ fn control_rows(form: Form, id: String) -> List(PropItem) {
         True -> [
           choice_row(
             "layout",
-            "Layout",
-            ["Free", "Column", "Row"],
+            shell.layout_options,
             layout_index_of(campy_form.layout_of(form, id)),
           ),
-          number_row(
-            "border",
-            "Border",
-            int.to_string(campy_form.border_of(form, id)),
-          ),
+          number_row("border", int.to_string(campy_form.border_of(form, id))),
         ]
         False -> []
       }
-      let color = case campy_form.color_of(form, id) {
-        "" -> color_row("color", "Color", "")
-        hex -> color_row("color", "Color", hex)
+      let color = [
+        color_row("color", campy_form.color_of(form, id)),
+      ]
+      // Component properties from the CCL schema: one row per declared
+      // property, edited per its declared type. The universal `text` row and
+      // the container layout/border rows are already covered above (Z1.1 note:
+      // `text` must route to the same editor as the control's text field).
+      let skip = case campy_form.accepts_children(control.kind) {
+        True -> ["text", "layout", "border"]
+        False -> ["text"]
       }
-      // Component properties from the CCL schema (Slint semantics): one row
-      // per declared property, edited per its declared type.
       let schema =
         campy_ccl.properties(campy_form.kind_key(control.kind))
+        |> list.filter(fn(property: campy_ccl.Property) {
+          !list.contains(skip, property.key)
+        })
         |> list.map(fn(property: campy_ccl.Property) {
           let value =
             campy_form.control_prop(control, property.key, property.default)
           case property.kind {
-            campy_ccl.Text -> text_row(property.key, property.label, value)
-            campy_ccl.Number -> number_row(property.key, property.label, value)
-            campy_ccl.Bool ->
-              bool_row(property.key, property.label, value == "true")
+            campy_ccl.Text -> text_row(property.key, value)
+            campy_ccl.Number -> number_row(property.key, value)
+            campy_ccl.Bool -> bool_row(property.key, value == "true")
           }
         })
-      list.flatten([
-        [
-          text_row("name", "Name", control.name),
-          text_row("text", "Text", control.text),
-        ],
-        schema,
-        picture,
-        geometry,
-        [color],
-        align,
-        container,
-        [
-          bool_row("enabled", "Enabled", control.enabled),
-          bool_row("visible", "Visible", control.visible),
-        ],
-      ])
+      dedupe_rows(
+        list.flatten([
+          [text_row("name", control.name), text_row("text", control.text)],
+          schema,
+          picture,
+          geometry,
+          color,
+          align,
+          container,
+          [
+            bool_row("enabled", control.enabled),
+            bool_row("visible", control.visible),
+          ],
+        ]),
+      )
     }
   }
 }
 
-fn control_event_rows(form: Form, id: String) -> List(PropItem) {
+// One row per key (the schema and the IDE's own rows can overlap).
+fn dedupe_rows(rows: List(PropItem)) -> List(PropItem) {
+  case rows {
+    [] -> []
+    [first, ..rest] ->
+      case list.any(rest, fn(row) { row.key == first.key }) {
+        True -> dedupe_rows(rest)
+        False -> [first, ..dedupe_rows(rest)]
+      }
+  }
+}
+
+fn control_event_rows(form: campy_form.Form, id: String) -> List(PropItem) {
   case campy_form.find_control(form, id) {
     None -> []
     Some(control) ->
       campy_ccl.events(campy_form.kind_key(control.kind))
       |> list.map(fn(event: campy_ccl.Event) {
-        PropItem(
+        shell.PropItem(
           event.key,
-          event.label,
+          shell.row_label(event.key),
           "event",
           campy_form.handler_name(control, event.key),
           False,
@@ -525,20 +479,11 @@ fn window_rows(model: State) -> List(PropItem) {
   case active_form(model) {
     None -> []
     Some(form) -> [
-      text_row("title", "Title", form.title),
-      number_row("width", "Width", int.to_string(form.width)),
-      number_row("height", "Height", int.to_string(form.height)),
-      choice_row(
-        "layout",
-        "Layout",
-        ["Free", "Column", "Row"],
-        layout_index_of(form.layout),
-      ),
-      number_row(
-        "border",
-        "Border",
-        int.to_string(campy_form.border_of(form, "")),
-      ),
+      text_row("title", form.title),
+      number_row("width", int.to_string(form.width)),
+      number_row("height", int.to_string(form.height)),
+      choice_row("layout", shell.layout_options, layout_index_of(form.layout)),
+      number_row("border", int.to_string(campy_form.border_of(form, ""))),
     ]
   }
 }
@@ -551,33 +496,86 @@ fn layout_index_of(layout: campy_form.Layout) -> Int {
   }
 }
 
-fn text_row(key: String, label: String, value: String) -> PropItem {
-  PropItem(key, label, "text", value, False, 0, [], hint_of(key))
+fn text_row(key: String, value: String) -> PropItem {
+  shell.PropItem(
+    key,
+    shell.row_label(key),
+    shell.row_kind_key(key),
+    value,
+    False,
+    0,
+    [],
+    hint_of(key),
+  )
 }
 
-fn number_row(key: String, label: String, value: String) -> PropItem {
-  PropItem(key, label, "number", value, False, 0, [], hint_of(key))
+fn number_row(key: String, value: String) -> PropItem {
+  shell.PropItem(
+    key,
+    shell.row_label(key),
+    shell.row_kind_key(key),
+    value,
+    False,
+    0,
+    [],
+    hint_of(key),
+  )
 }
 
-fn bool_row(key: String, label: String, checked: Bool) -> PropItem {
-  PropItem(key, label, "bool", "", checked, 0, [], hint_of(key))
+fn bool_row(key: String, checked: Bool) -> PropItem {
+  shell.PropItem(
+    key,
+    shell.row_label(key),
+    shell.row_kind_key(key),
+    "",
+    checked,
+    0,
+    [],
+    hint_of(key),
+  )
 }
 
-fn choice_row(
-  key: String,
-  label: String,
-  options: List(String),
-  index: Int,
-) -> PropItem {
-  PropItem(key, label, "choice", "", False, index, options, hint_of(key))
+fn choice_row(key: String, options: List(String), index: Int) -> PropItem {
+  shell.PropItem(
+    key,
+    shell.row_label(key),
+    shell.row_kind_key(key),
+    "",
+    False,
+    index,
+    options,
+    hint_of(key),
+  )
 }
 
-fn open_row(key: String, label: String, value: String) -> PropItem {
-  PropItem(key, label, "picture", value, False, 0, [], hint_of(key))
+fn open_row(key: String, value: String) -> PropItem {
+  shell.PropItem(
+    key,
+    shell.row_label(key),
+    shell.row_kind_key(key),
+    value,
+    False,
+    0,
+    [],
+    hint_of(key),
+  )
 }
 
-fn color_row(key: String, label: String, value: String) -> PropItem {
-  PropItem(key, label, "color", value, False, 0, [], hint_of(key))
+fn color_row(key: String, value: String) -> PropItem {
+  let name = case value {
+    "" -> "Default"
+    hex -> hex
+  }
+  shell.PropItem(
+    key,
+    shell.row_label(key),
+    shell.row_kind_key(key),
+    "",
+    False,
+    index_of(shell.color_options, name),
+    shell.color_options,
+    hint_of(key),
+  )
 }
 
 // Terse per-property hints shown as tooltips in the inspector.
@@ -600,7 +598,7 @@ fn hint_of(key: String) -> String {
     "title" -> "Window title"
     "width" -> "Window width, px"
     "height" -> "Window height, px"
-    "placeholder-text" -> "Text when empty"
+    "placeholder" -> "Text when empty"
     "read-only" -> "Blocks editing"
     "checked" -> "Selected state"
     "minimum" -> "Slider low end"
@@ -629,7 +627,7 @@ pub fn props_wire(items: List(PropItem)) -> List(bridge.WireValue) {
 // The completion popup rows (Campy model items merged with LSP results).
 pub fn completions(model: State) -> List(CompletionItem) {
   list.map(model.completions, fn(item) {
-    CompletionItem(item.label, item.detail, item.insert)
+    shell.CompletionItem(item.label, item.detail, item.insert)
   })
 }
 
@@ -640,7 +638,7 @@ pub fn console_lines(model: State) -> List(String) {
 pub fn diagnostics(model: State) -> List(DiagItem) {
   list.map(model.diagnostics, fn(diagnostic) {
     let #(line, severity, message) = diagnostic
-    DiagItem(line, severity, message)
+    shell.DiagItem(line, severity, message)
   })
 }
 
@@ -664,17 +662,34 @@ pub fn diagnostics_wire(items: List(DiagItem)) -> List(bridge.WireValue) {
   })
 }
 
+fn code_source(model: State) -> String {
+  case active_module(model) {
+    Some(module) -> module_text(module)
+    None -> ""
+  }
+}
+
+// An `External` module's text lives on disk; the IDE loop reads it (Z2.3's
+// seam). Pure `ide_ui` can only see embedded sources.
+fn module_text(module: project.Module) -> String {
+  case module.source_origin {
+    project.Embedded(text) -> text
+    project.External(_) -> ""
+  }
+}
+
 fn code(model: State) -> List(LineItem) {
   case active_module(model) {
     None -> []
     Some(module) ->
-      module.source
+      module_text(module)
       |> string.split("\n")
       |> list.map(fn(line) {
-        LineItem(
+        shell.LineItem(
           list.map(syntax.tokenize(line), fn(token) {
             case token {
-              syntax.Token(kind, text) -> TokenItem(text, token_kind(kind))
+              syntax.Token(kind, text) ->
+                shell.TokenItem(text, token_kind(kind))
             }
           }),
         )
@@ -695,68 +710,8 @@ fn token_kind(kind: syntax.Kind) -> String {
   }
 }
 
-fn theme_colors(scheme: Scheme) -> List(Update) {
-  let colors = case scheme {
-    Light -> [
-      #("theme-bg", "#f5f5f5"),
-      #("theme-fg", "#202020"),
-      #("theme-border", "#c8c8c8"),
-      #("theme-accent", "#0067c0"),
-      #("theme-tint", "#dce9f7"),
-      #("theme-surface", "#ffffff"),
-      #("theme-canvas", "#e6e6e6"),
-      #("theme-grid", "#c6c6c6"),
-      #("code-bg", "#ffffff"),
-      #("code-comment", "#6a737d"),
-      #("code-keyword", "#a626a4"),
-      #("code-string", "#50a14f"),
-      #("code-number", "#986801"),
-      #("code-type", "#c18401"),
-      #("code-punct", "#0184bc"),
-      #("code-name", "#202020"),
-    ]
-    Solarized -> [
-      #("theme-bg", "#002b36"),
-      #("theme-fg", "#93a1a1"),
-      #("theme-border", "#073642"),
-      #("theme-accent", "#268bd2"),
-      #("theme-tint", "#073642"),
-      #("theme-surface", "#073642"),
-      #("theme-canvas", "#001f27"),
-      #("theme-grid", "#0a3a46"),
-      #("code-bg", "#002b36"),
-      #("code-comment", "#586e75"),
-      #("code-keyword", "#859900"),
-      #("code-string", "#2aa198"),
-      #("code-number", "#d33682"),
-      #("code-type", "#b58900"),
-      #("code-punct", "#6c71c4"),
-      #("code-name", "#93a1a1"),
-    ]
-    Dark -> [
-      #("theme-bg", "#1e1e1e"),
-      #("theme-fg", "#e6e6e6"),
-      #("theme-border", "#3a3a3a"),
-      #("theme-accent", "#0078d4"),
-      #("theme-tint", "#1f3a5f"),
-      #("theme-surface", "#20242c"),
-      #("theme-canvas", "#14161a"),
-      #("theme-grid", "#2f3540"),
-      #("code-bg", "#282c34"),
-      #("code-comment", "#7f848e"),
-      #("code-keyword", "#c678dd"),
-      #("code-string", "#98c379"),
-      #("code-number", "#d19a66"),
-      #("code-type", "#e5c07b"),
-      #("code-punct", "#56b6c2"),
-      #("code-name", "#abb2bf"),
-    ]
-  }
-  list.map(colors, fn(entry) { ColorUpdate(entry.0, entry.1) })
-}
-
 // ---------------------------------------------------------------------------
-// Wire format
+// Wire format (legacy model encoders kept for the smoke/probe helpers)
 // ---------------------------------------------------------------------------
 
 pub fn projects_wire(items: List(ProjectItem)) -> List(bridge.WireValue) {
@@ -766,7 +721,7 @@ pub fn projects_wire(items: List(ProjectItem)) -> List(bridge.WireValue) {
       #("title", bridge.WireText(item.title)),
       #("active", bridge.WireBool(item.active)),
       #("icon", bridge.WireImage(item.icon)),
-      #("has-icon", bridge.WireBool(item.has_icon)),
+      #("has-icon", bridge.WireBool(item.icon != "")),
     ])
   })
 }
@@ -831,85 +786,395 @@ pub fn code_wire(items: List(LineItem)) -> List(bridge.WireValue) {
   })
 }
 
+pub fn browser_wire(items: List(BrowserItem)) -> List(bridge.WireValue) {
+  list.map(items, fn(item) {
+    bridge.WireStruct([
+      #("name", bridge.WireText(item.name)),
+      #("is-dir", bridge.WireBool(item.is_dir)),
+    ])
+  })
+}
+
+pub fn console_wire(items: List(String)) -> List(bridge.WireValue) {
+  list.map(items, bridge.WireText)
+}
+
 // ---------------------------------------------------------------------------
-// Scalar diffing
+// Document and ops
 // ---------------------------------------------------------------------------
 
-pub fn diff(previous: List(Update), next: List(Update)) -> List(Update) {
-  list.filter(next, fn(update) {
-    case
-      list.find(previous, fn(old) { update_name(old) == update_name(update) })
-    {
-      Ok(old) -> update_value(old) != update_value(update)
-      Error(_) -> True
+/// The startup/F6 command list: one `LoadUi` of the whole shell.
+pub fn load_commands(generation: Int, model: State) -> List(bridge.Command) {
+  let view = snapshot(model)
+  [
+    bridge.LoadUi(
+      generation,
+      shell.window_title(view.title),
+      shell.window_width,
+      shell.window_height,
+      view.theme,
+      shell.desc(view),
+    ),
+  ]
+}
+
+/// Translate view-level ops into generation-tagged bridge commands.
+pub fn commands(generation: Int, ops: List(UiOp)) -> List(bridge.Command) {
+  list.map(ops, fn(op) {
+    case op {
+      SetText(control, value) -> bridge.SetText(generation, control, value)
+      SetBool(control, key, value) ->
+        bridge.SetBool(generation, control, key, value)
+      SetInt(control, key, value) ->
+        bridge.SetInt(generation, control, key, value)
+      SetModel(control, items) -> bridge.SetModel(generation, control, items)
+      SetGeometry(control, x, y, w, h) ->
+        bridge.SetGeometry(generation, control, x, y, w, h)
+      SetCode(control, source) -> bridge.SetCode(generation, control, source)
+      AppendConsole(control, bytes) ->
+        bridge.AppendConsole(generation, control, bytes)
+      SetMarks(control, layer, items) ->
+        bridge.SetMarks(generation, control, layer, items)
+      Reload(view) ->
+        bridge.LoadUi(
+          generation,
+          shell.window_title(view.title),
+          shell.window_width,
+          shell.window_height,
+          view.theme,
+          shell.desc(view),
+        )
     }
   })
 }
 
-pub fn update_name(update: Update) -> String {
-  case update {
-    TextUpdate(name, _) -> name
-    BoolUpdate(name, _) -> name
-    IntUpdate(name, _) -> name
-    ScalarIntUpdate(name, _) -> name
-    ColorUpdate(name, _) -> name
+/// The granular ops that move the loaded window from `previous` to `next`.
+pub fn ops(previous: Snapshot, next: Snapshot) -> List(UiOp) {
+  case window_changed(previous, next) {
+    True -> [Reload(next)]
+    False ->
+      case diff_controls(shell.desc(previous), shell.desc(next)) {
+        Error(_) -> [Reload(next)]
+        Ok(changes) ->
+          list.append(
+            list.map(changes, change_op),
+            list.append(
+              code_ops(previous, next),
+              list.append(
+                console_ops(previous, next),
+                marks_ops(previous, next),
+              ),
+            ),
+          )
+      }
   }
 }
 
-fn update_value(update: Update) -> String {
-  case update {
-    TextUpdate(_, value) -> "t" <> value
-    BoolUpdate(_, value) -> "b" <> bool(value)
-    IntUpdate(_, value) -> "i" <> int.to_string(value)
-    ScalarIntUpdate(_, value) -> "i" <> int.to_string(value)
-    ColorUpdate(_, value) -> "c" <> value
+// The window itself (title, theme) is LoadUi-level: no granular op carries it.
+fn window_changed(previous: Snapshot, next: Snapshot) -> Bool {
+  previous.title != next.title || previous.theme != next.theme
+}
+
+// --- description tree diff -------------------------------------------------
+
+type Change {
+  TextChange(control: Int, value: String)
+  BoolChange(control: Int, key: String, value: Bool)
+  IntChange(control: Int, key: String, value: Int)
+  GeoChange(control: Int, x: Int, y: Int, w: Int, h: Int)
+  ModelChange(control: Int, items: List(bridge.WireValue))
+}
+
+fn change_op(change: Change) -> UiOp {
+  case change {
+    TextChange(control, value) -> SetText(control, value)
+    BoolChange(control, key, value) -> SetBool(control, key, value)
+    IntChange(control, key, value) -> SetInt(control, key, value)
+    GeoChange(control, x, y, w, h) -> SetGeometry(control, x, y, w, h)
+    ModelChange(control, items) -> SetModel(control, items)
+  }
+}
+
+fn diff_controls(
+  previous: List(bridge.ControlDesc),
+  next: List(bridge.ControlDesc),
+) -> Result(List(Change), Nil) {
+  case list.length(previous) == list.length(next) {
+    False -> Error(Nil)
+    True -> diff_pairs(previous, next)
+  }
+}
+
+fn diff_pairs(
+  previous: List(bridge.ControlDesc),
+  next: List(bridge.ControlDesc),
+) -> Result(List(Change), Nil) {
+  case previous, next {
+    [], [] -> Ok([])
+    [old, ..old_rest], [new, ..new_rest] ->
+      case diff_control(old, new) {
+        Error(error) -> Error(error)
+        Ok(changes) ->
+          case diff_pairs(old_rest, new_rest) {
+            Error(error) -> Error(error)
+            Ok(rest) -> Ok(list.append(changes, rest))
+          }
+      }
+    _, _ -> Error(Nil)
+  }
+}
+
+fn diff_control(
+  previous: bridge.ControlDesc,
+  next: bridge.ControlDesc,
+) -> Result(List(Change), Nil) {
+  case previous.id == next.id && previous.kind == next.kind {
+    False -> Error(Nil)
+    True ->
+      case own_changes(previous, next) {
+        Error(error) -> Error(error)
+        Ok(changes) ->
+          case diff_controls(previous.children, next.children) {
+            Error(error) -> Error(error)
+            Ok(child_changes) -> Ok(list.append(changes, child_changes))
+          }
+      }
+  }
+}
+
+fn own_changes(
+  previous: bridge.ControlDesc,
+  next: bridge.ControlDesc,
+) -> Result(List(Change), Nil) {
+  let id = next.id
+  let text_changes = case text_drives_itself(next.kind) {
+    True -> []
+    False ->
+      case previous.text == next.text {
+        True -> []
+        False -> [TextChange(id, next.text)]
+      }
+  }
+  let enabled_changes = case previous.enabled == next.enabled {
+    True -> []
+    False -> [BoolChange(id, "enabled", next.enabled)]
+  }
+  let geometry = case
+    #(previous.x, previous.y, previous.w, previous.h)
+    == #(next.x, next.y, next.w, next.h)
+  {
+    True -> []
+    False -> [GeoChange(id, next.x, next.y, next.w, next.h)]
+  }
+  // Visibility goes last, so a row that appears is already positioned.
+  let visibility = case previous.visible == next.visible {
+    True -> []
+    False -> [BoolChange(id, "visible", next.visible)]
+  }
+  case diff_props(id, previous.props, next.props) {
+    Error(error) -> Error(error)
+    Ok(prop_changes) ->
+      Ok(list.append(
+        text_changes,
+        list.append(
+          enabled_changes,
+          list.append(geometry, list.append(prop_changes, visibility)),
+        ),
+      ))
+  }
+}
+
+// Editor/memo/console content is driven by SetCode/AppendConsole, never by
+// SetText (the renderer's text signal does not feed an editor buffer).
+fn text_drives_itself(kind: String) -> Bool {
+  case kind {
+    "code_editor" | "memo" | "console" -> True
+    _ -> False
+  }
+}
+
+fn diff_props(
+  id: Int,
+  previous: List(#(String, bridge.WireValue)),
+  next: List(#(String, bridge.WireValue)),
+) -> Result(List(Change), Nil) {
+  case list.length(previous) == list.length(next) {
+    False -> Error(Nil)
+    True -> diff_prop_entries(id, previous, next, [])
+  }
+}
+
+fn diff_prop_entries(
+  id: Int,
+  previous: List(#(String, bridge.WireValue)),
+  next: List(#(String, bridge.WireValue)),
+  acc: List(Change),
+) -> Result(List(Change), Nil) {
+  case next {
+    [] -> Ok(list.reverse(acc))
+    [entry, ..rest] -> {
+      let #(key, value) = entry
+      case find_prop(previous, key) {
+        None -> Error(Nil)
+        Some(old) ->
+          case old == value {
+            True -> diff_prop_entries(id, previous, rest, acc)
+            False ->
+              case prop_change(id, key, value) {
+                Ok(change) ->
+                  diff_prop_entries(id, previous, rest, [change, ..acc])
+                Error(_) -> Error(Nil)
+              }
+          }
+      }
+    }
+  }
+}
+
+fn find_prop(
+  props: List(#(String, bridge.WireValue)),
+  key: String,
+) -> Option(bridge.WireValue) {
+  case props {
+    [] -> None
+    [#(name, value), ..rest] ->
+      case name == key {
+        True -> Some(value)
+        False -> find_prop(rest, key)
+      }
+  }
+}
+
+// Props a granular op can move. Anything else changing (placeholder, layout,
+// minimum, …) is structural: the shell only varies these values at runtime.
+fn prop_change(
+  id: Int,
+  key: String,
+  value: bridge.WireValue,
+) -> Result(Change, Nil) {
+  case key, value {
+    "model", bridge.WireList(items) -> Ok(ModelChange(id, items))
+    "checked", bridge.WireBool(checked) -> Ok(BoolChange(id, key, checked))
+    "value", bridge.WireInt(number) -> Ok(IntChange(id, key, number))
+    "current-index", bridge.WireInt(number) -> Ok(IntChange(id, key, number))
+    _, _ -> Error(Nil)
+  }
+}
+
+// --- content ops ------------------------------------------------------------
+
+fn code_ops(previous: Snapshot, next: Snapshot) -> List(UiOp) {
+  case previous.code_source == next.code_source {
+    True -> []
+    False -> [
+      SetCode(shell.section_id("code-view"), next.code_source),
+      SetCode(shell.section_id("raw-view"), next.code_source),
+    ]
+  }
+}
+
+fn console_ops(previous: Snapshot, next: Snapshot) -> List(UiOp) {
+  let id = shell.section_id("console")
+  case next.console_lines {
+    [] ->
+      case previous.console_lines {
+        [] -> []
+        _ -> [AppendConsole(id, clear_console())]
+      }
+    lines ->
+      case is_prefix(previous.console_lines, lines) {
+        True -> {
+          let fresh = list.drop(lines, list.length(previous.console_lines))
+          case fresh {
+            [] -> []
+            _ -> [AppendConsole(id, string.join(fresh, "\n") <> "\n")]
+          }
+        }
+        False -> [
+          AppendConsole(id, clear_console() <> string.join(lines, "\n") <> "\n"),
+        ]
+      }
+  }
+}
+
+fn clear_console() -> String {
+  "\u{1b}[2J\u{1b}[H"
+}
+
+fn is_prefix(prefix: List(String), list_: List(String)) -> Bool {
+  case prefix, list_ {
+    [], _ -> True
+    [_, ..], [] -> False
+    [head, ..tail], [other, ..rest] ->
+      case head == other {
+        True -> is_prefix(tail, rest)
+        False -> False
+      }
+  }
+}
+
+fn marks_ops(previous: Snapshot, next: Snapshot) -> List(UiOp) {
+  case
+    previous.diagnostics == next.diagnostics
+    && previous.code_source == next.code_source
+  {
+    True -> []
+    False -> [
+      SetMarks(
+        shell.section_id("code-view"),
+        "diagnostics",
+        diagnostic_spans(next.code_source, next.diagnostics),
+      ),
+    ]
+  }
+}
+
+fn diagnostic_spans(
+  source: String,
+  diagnostics: List(DiagItem),
+) -> List(#(Int, Int, String)) {
+  let lines = string.split(source, "\n")
+  diagnostics
+  |> list.filter_map(fn(diagnostic: DiagItem) {
+    case line_span(lines, diagnostic.line) {
+      Some(#(start, length)) -> {
+        let class = case diagnostic.severity {
+          1 -> "error"
+          _ -> "warning"
+        }
+        Ok(#(start, start + length, class))
+      }
+      None -> Error(Nil)
+    }
+  })
+}
+
+// Char offset/length of one source line.
+fn line_span(lines: List(String), line: Int) -> Option(#(Int, Int)) {
+  line_span_loop(lines, line, 0)
+}
+
+fn line_span_loop(
+  lines: List(String),
+  target: Int,
+  offset: Int,
+) -> Option(#(Int, Int)) {
+  case lines {
+    [] -> None
+    [text, ..rest] ->
+      case target <= 0 {
+        True -> Some(#(offset, string.length(text)))
+        False -> {
+          let next_offset = offset + string.length(text) + 1
+          line_span_loop(rest, target - 1, next_offset)
+        }
+      }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Static shell
+// State accessors
 // ---------------------------------------------------------------------------
-
-pub fn to_slint(model: State) -> Result(String, String) {
-  Ok(shell.source(
-    "Campy IDE — " <> model.project.title,
-    declarations(scalars(model)),
-  ))
-}
-
-fn declarations(values: List(Update)) -> String {
-  values |> list.map(declaration) |> string.concat
-}
-
-fn declaration(update: Update) -> String {
-  case update {
-    TextUpdate(name, value) ->
-      "  in-out property <string> " <> name <> ": " <> quote(value) <> ";\n"
-    BoolUpdate(name, value) ->
-      "  in-out property <bool> " <> name <> ": " <> bool(value) <> ";\n"
-    IntUpdate(name, value) ->
-      "  in-out property <length> "
-      <> name
-      <> ": "
-      <> int.to_string(value)
-      <> "px;\n"
-    ScalarIntUpdate(name, value) ->
-      "  in-out property <int> "
-      <> name
-      <> ": "
-      <> int.to_string(value)
-      <> ";\n"
-    ColorUpdate(name, value) ->
-      "  in-out property <color> " <> name <> ": " <> value <> ";\n"
-  }
-}
-
-fn pending_kind_key(model: State) -> String {
-  case model.pending_kind {
-    Some(kind) -> campy_form.kind_key(kind)
-    None -> ""
-  }
-}
 
 fn is_running(model: State) -> Bool {
   case model.preview {
@@ -925,35 +1190,10 @@ fn is_code_view(model: State) -> Bool {
   }
 }
 
-fn is_slint_tab(model: State) -> Bool {
-  model.slint_tab
-}
-
-fn layout_is(form: Option(Form), layout: campy_form.Layout) -> Bool {
-  case form {
-    Some(value) -> value.layout == layout
-    None -> False
-  }
-}
-
-fn form_width(form: Option(Form)) -> Int {
-  case form {
-    Some(value) -> value.width
-    None -> 0
-  }
-}
-
-fn form_height(form: Option(Form)) -> Int {
-  case form {
-    Some(value) -> value.height
-    None -> 0
-  }
-}
-
 fn code_handler_label(model: State) -> String {
   case model.active_handler {
     Some(handler) -> handler
-    None -> active_name(model)
+    None -> state.active_name(model)
   }
 }
 
@@ -971,42 +1211,14 @@ fn browser_name(model: State) -> String {
   }
 }
 
-// Scroll position that lands the jump target a few lines from the top.
-fn code_scroll_y(model: State) -> Int {
-  case model.code_jump {
-    Some(line) -> int.max(0, { line - 3 } * { model.font_size + 6 })
-    None -> 0
-  }
-}
-
-fn code_jump_line(model: State) -> Int {
-  case model.code_jump {
-    Some(line) -> line
-    None -> 0
-  }
-}
-
 fn browser_items(model: State) -> List(BrowserItem) {
   case model.browser {
     Some(browser) ->
       list.map(browser.entries, fn(entry) {
-        BrowserItem(entry.name, entry.is_dir)
+        shell.BrowserItem(entry.name, entry.is_dir)
       })
     None -> []
   }
-}
-
-pub fn browser_wire(items: List(BrowserItem)) -> List(bridge.WireValue) {
-  list.map(items, fn(item) {
-    bridge.WireStruct([
-      #("name", bridge.WireText(item.name)),
-      #("is-dir", bridge.WireBool(item.is_dir)),
-    ])
-  })
-}
-
-pub fn console_wire(items: List(String)) -> List(bridge.WireValue) {
-  list.map(items, bridge.WireText)
 }
 
 fn popup_open(popup: Popup) -> Bool {
@@ -1086,32 +1298,10 @@ fn is_dark_scheme(scheme: Scheme) -> Bool {
   }
 }
 
-fn window_x(model: State) -> Int {
-  state.window_position(model).0
-}
-
-fn window_y(model: State) -> Int {
-  state.window_position(model).1
-}
-
-fn form_border_size(model: State) -> Int {
-  case active_form(model) {
-    Some(form) -> campy_form.border_of(form, "")
-    None -> 0
-  }
-}
-
 fn scheme_index(scheme: Scheme) -> Int {
   case scheme {
     Dark -> 0
     Light -> 1
     Solarized -> 2
-  }
-}
-
-fn bool(value: Bool) -> String {
-  case value {
-    True -> "true"
-    False -> "false"
   }
 }
