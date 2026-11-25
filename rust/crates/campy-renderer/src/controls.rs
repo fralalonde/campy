@@ -89,9 +89,16 @@ pub struct Host {
     /// user: its close hook must not close the session the replacement took
     /// over (the control is shared).
     pub window_swapped: Cell<bool>,
-    /// How many text-editing controls hold the focus. Editing keys (Ctrl+C/X/V,
-    /// Delete) belong to the field while it does, not to the designer.
-    pub text_focused: Cell<u32>,
+    /// Whether a one-line property field holds the focus. It owns the keys that
+    /// move its caret and nothing else: Ctrl+Z, Ctrl+C and Ctrl+V keep working
+    /// on the document, which is what a designer presses them for.
+    pub field_focused: Cell<bool>,
+    /// Whether the code editor or the terminal holds the focus. Those are real
+    /// text editors with their own undo and clipboard, so they own the whole
+    /// editing set. Booleans rather than counters: focus arriving in a field's
+    /// inner elements fires more than one `in`, and a counter that drifts never
+    /// comes back to zero — which silences every shortcut for the session.
+    pub editor_focused: Cell<bool>,
     /// Whether this host's view has finished its first build. A document that
     /// arrives before that is loaded into the window being built (its dynamic
     /// child reads it); one that arrives after needs a swap, which is the
@@ -143,7 +150,8 @@ impl Host {
             popup_debugged: Cell::new(false),
             last_size: Cell::new((0, 0)),
             window_swapped: Cell::new(false),
-            text_focused: Cell::new(0),
+            field_focused: Cell::new(false),
+            editor_focused: Cell::new(false),
             view_built: Cell::new(false),
             document_ready: Cell::new(false),
             work_effect: RefCell::new(None),
@@ -342,6 +350,10 @@ fn px(value: f64) -> String {
 /// Builds the whole window document: the themed root plus one wrapper per
 /// top-level control.
 pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
+    // A build replaces every wrapper, so whatever held the focus went with the
+    // old one.
+    host.field_focused.set(false);
+    host.editor_focused.set(false);
     if std::env::var_os("CAMPY_UI_TRACE").is_some() {
         eprintln!(
             "campy build_document theme={} roots={}",
@@ -400,10 +412,19 @@ pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
         .on(events::KEY_DOWN, move |cx| {
             let event: &KeyEvent = cx;
             if let Some(combo) = key_combo(&event.key_without_modifiers, cx.modifiers) {
-                // While a field is being typed into, the keys that edit it stay
-                // with it. Everything else (function keys, Escape, the combos
-                // the field does not use) still reaches the shell.
-                if key_host.text_focused.get() > 0 && editing_combo(&combo) {
+                // A focused property field owns the keys that move its caret and
+                // select its text; a focused editor owns the editing set too.
+                // Everything else — including undo and the clipboard from a
+                // property field — reaches the shell, because that is the
+                // document the user is pressing Ctrl+Z about.
+                let own = if key_host.field_focused.get() {
+                    caret_combo(&combo)
+                } else if key_host.editor_focused.get() {
+                    editing_combo(&combo)
+                } else {
+                    false
+                };
+                if own {
                     return;
                 }
                 if pointer_log() {
@@ -679,22 +700,30 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
 
     // A control that takes typing says so, so the window's key handler leaves
     // its editing keys alone.
-    if matches!(
-        desc.kind.as_str(),
-        "edit" | "memo" | "code_editor" | "console"
-    ) {
-        let focus_host = host.clone();
-        let blur_host = host.clone();
-        wrapper = wrapper
-            .on(events::FOCUS_IN, move |_| {
-                focus_host
-                    .text_focused
-                    .set(focus_host.text_focused.get() + 1)
-            })
-            .on(events::FOCUS_OUT, move |_| {
-                let held = blur_host.text_focused.get();
-                blur_host.text_focused.set(held.saturating_sub(1));
-            });
+    match desc.kind.as_str() {
+        "edit" => {
+            let focus_host = host.clone();
+            let blur_host = host.clone();
+            wrapper = wrapper
+                .on(events::FOCUS_IN, move |_| {
+                    focus_host.field_focused.set(true)
+                })
+                .on(events::FOCUS_OUT, move |_| {
+                    blur_host.field_focused.set(false)
+                });
+        }
+        "memo" | "code_editor" | "console" => {
+            let focus_host = host.clone();
+            let blur_host = host.clone();
+            wrapper = wrapper
+                .on(events::FOCUS_IN, move |_| {
+                    focus_host.editor_focused.set(true)
+                })
+                .on(events::FOCUS_OUT, move |_| {
+                    blur_host.editor_focused.set(false)
+                });
+        }
+        _ => {}
     }
 
     match desc.kind.as_str() {
@@ -808,7 +837,17 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
     }
 }
 
-/// The combos a focused text field owns: they move text, not components.
+/// The combos a one-line property field owns: they move the caret or select
+/// its text. Undo and the clipboard are not among them.
+fn caret_combo(combo: &str) -> bool {
+    matches!(
+        combo,
+        "delete" | "backspace" | "left" | "right" | "up" | "down" | "home" | "end" | "ctrl+a"
+    )
+}
+
+/// The combos a focused editor or terminal owns: the whole editing set, since
+/// it has an undo stack and a clipboard of its own.
 fn editing_combo(combo: &str) -> bool {
     matches!(
         combo,

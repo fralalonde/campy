@@ -134,6 +134,9 @@ pub type State {
     undo: List(History),
     redo: List(History),
     merge_undo: Bool,
+    /// Which property field is mid-typing (`<control>:<field>`), so a run of
+    /// keystrokes in one field is one undo step. Cleared by any other change.
+    edit_run: Option(String),
     clipboard: Option(Clipboard),
     font: String,
     font_size: Int,
@@ -240,6 +243,7 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     undo: [],
     redo: [],
     merge_undo: False,
+    edit_run: None,
     clipboard: None,
     font: "monospace",
     font_size: 13,
@@ -335,6 +339,7 @@ fn commit(state: State, next: State) -> State {
             undo: [before, ..state.undo],
             redo: [],
             merge_undo: False,
+            edit_run: None,
           )
       }
   }
@@ -358,6 +363,7 @@ pub fn undo(state: State) -> State {
         undo: rest,
         redo: [history(state), ..state.redo],
         merge_undo: False,
+        edit_run: None,
         status: "Undo",
       )
     }
@@ -374,6 +380,7 @@ pub fn redo(state: State) -> State {
         undo: [history(state), ..state.undo],
         redo: rest,
         merge_undo: False,
+        edit_run: None,
         status: "Redo",
       )
     }
@@ -830,7 +837,23 @@ pub fn commit_field(state: State, field: String, value: String) -> State {
     None, Some(form) -> commit_form_field(state, form, field, value)
     _, _ -> status(state, "Open a module first")
   }
-  commit(state, next)
+  // A field reports every keystroke. The first one opens an undo step; the rest
+  // of the run joins it, so Ctrl+Z puts the whole typed value back rather than
+  // walking it backwards a letter at a time. A rejected value (an invalid or
+  // duplicate name) changes nothing and leaves the run as it was.
+  case history(state) == history(next) {
+    True -> next
+    False -> {
+      let key = case state.selected {
+        Some(id) -> id <> ":" <> field
+        None -> "window:" <> field
+      }
+      case state.edit_run == Some(key) {
+        True -> State(..next, edit_run: Some(key), redo: [], merge_undo: False)
+        False -> State(..commit(state, next), edit_run: Some(key))
+      }
+    }
+  }
 }
 
 fn commit_control_field(
@@ -1062,7 +1085,7 @@ pub fn toggle_field(state: State, field: String, value: Bool) -> State {
 // Cursor gestures commit once on release; the UI tracks the drag locally and
 // sends X then Y (or W then H), which share one undo entry.
 pub fn begin_gesture(state: State) -> State {
-  State(..state, merge_undo: False)
+  State(..state, merge_undo: False, edit_run: None)
 }
 
 pub fn end_gesture(state: State) -> State {

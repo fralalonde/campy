@@ -1934,3 +1934,62 @@ pub fn grips_are_hit_tested_where_they_are_drawn_test() {
   // What is drawn is what is grabbable: one constant, two users.
   shell.grip_size |> should.equal(state.resize_grip)
 }
+
+// ---------------------------------------------------------------------------
+// Undo: a run of keystrokes in one property field is one step
+// ---------------------------------------------------------------------------
+
+pub fn typing_in_a_property_field_is_one_undo_step_test() {
+  let typed =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.commit_field("text", "P")
+    |> state.commit_field("text", "Pu")
+    |> state.commit_field("text", "Purr")
+  let assert Some(control) = state.selected_control(typed)
+  control.text |> should.equal("Purr")
+  state.can_undo(typed) |> should.be_true
+
+  // One undo, not three: the run closed when the value settled.
+  let back = state.undo(typed)
+  let assert Some(old) = state.selected_control(back)
+  old.text |> should.equal("Pet the cat")
+  state.can_undo(back) |> should.be_false
+
+  let again = state.redo(back)
+  let assert Some(redone) = state.selected_control(again)
+  redone.text |> should.equal("Purr")
+}
+
+pub fn editing_another_field_starts_a_new_step_test() {
+  let model =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.commit_field("text", "Purr")
+    // A different field of the same control is a different run.
+    |> state.commit_field("name", "purr_button")
+  let assert Some(control) = state.selected_control(model)
+  control.name |> should.equal("purr_button")
+
+  let one = state.undo(model)
+  let assert Some(mid) = state.selected_control(one)
+  mid.name |> should.equal("pet_button")
+  mid.text |> should.equal("Purr")
+}
+
+pub fn a_rejected_field_value_does_not_open_a_step_test() {
+  // A duplicate name is refused; it must not leave a half-open run behind that
+  // swallows the next real edit's undo step.
+  let model =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.commit_field("name", "feed_button")
+  let assert Some(control) = state.selected_control(model)
+  control.name |> should.equal("pet_button")
+  state.can_undo(model) |> should.be_false
+
+  let typed = state.commit_field(model, "name", "purr_button")
+  let back = state.undo(typed)
+  let assert Some(old) = state.selected_control(back)
+  old.name |> should.equal("pet_button")
+}

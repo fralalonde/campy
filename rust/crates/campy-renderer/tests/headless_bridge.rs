@@ -248,6 +248,23 @@ fn loads_updates_clicks_reads_and_rejects() {
         "the modified shortcut reached the loop"
     );
 
+    // A property field that holds the focus must not swallow undo: a designer
+    // pressing Ctrl+Z means the document, and a field that captured it left
+    // every shortcut dead (the counter behind the old filter never came back
+    // to zero).
+    testing::test_pointer("click", 390.0, 116.0).expect("the edit field takes the focus");
+    testing::test_pump(32).expect("a pump is enqueued");
+    std::thread::sleep(Duration::from_millis(60));
+    let before = events_of(&sink, "key").len();
+    testing::test_key("z", true, false).expect("the key is enqueued");
+    testing::test_pump(32).expect("a pump is enqueued");
+    wait_for(&sink, before + 1, "key");
+    assert_eq!(
+        events_of(&sink, "key").last().map(String::as_str),
+        Some("key ctrl+z"),
+        "undo reached the loop with a property field focused"
+    );
+
     // Stale generations are rejected; the UI keeps running.
     session
         .submit(Command {
