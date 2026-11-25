@@ -7,7 +7,7 @@
 //! turns descriptions into views.
 
 /// A wire-friendly property value (mirrors Gleam `WireValue`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PropValue {
     Text(String),
     Bool(bool),

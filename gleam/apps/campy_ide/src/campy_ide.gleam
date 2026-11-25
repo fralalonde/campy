@@ -26,6 +26,9 @@ fn headless_enabled() -> Bool
 @external(erlang, "campy_host_ffi", "debug_view")
 fn debug_view_env() -> String
 
+@external(erlang, "campy_host_ffi", "debug_after")
+fn debug_after_env() -> String
+
 @external(erlang, "campy_host_ffi", "now_ms")
 fn now_ms() -> Int
 
@@ -123,6 +126,12 @@ fn debug_view(model: State) -> State {
 
     "code" -> state.set_view(model, state.CodeView)
     "light" -> state.set_scheme(model, state.Light)
+    // A structural change on purpose: one control added to the form.
+    "add" ->
+      state.arm_component(model, "button")
+      |> state.pointer_down(300, 300)
+      |> state.pointer_move(300, 300)
+      |> state.pointer_up(300, 300, False)
     "select" -> state.select(model, "pet-button")
     "multi" ->
       state.select(model, "pet-button")
@@ -608,6 +617,16 @@ fn loop_ide_event(
       advance(native, next, accepted, accepted, last)
     }
     "ui-loaded" -> {
+      // A validation hook: one structural change *after* the window is on
+      // screen, so the reconciler can be measured where it matters.
+      let model = case generation, debug_after_env() {
+        1, "add" ->
+          state.arm_component(model, "button")
+          |> state.pointer_down(300, 300)
+          |> state.pointer_move(300, 300)
+          |> state.pointer_up(300, 300, False)
+        _, _ -> model
+      }
       let next_accepted = case generation > accepted {
         True -> generation
         False -> accepted

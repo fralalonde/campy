@@ -393,24 +393,40 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
         // signal in the builder would be a read nothing subscribes to (and
         // zgui says so). A child closure is invoked in a tracking scope, so
         // the subtree rebuilds exactly when `LoadUi` moves the document.
+        // The tree is built once and never replaced: a document write goes
+        // through the reconciler below, which rebuilds only the controls whose
+        // shape changed. That is the difference between "the form reloaded" and
+        // "the one component you edited reloaded".
+        let tree = controls::build_document(&host);
         let rebuild_host = host.clone();
         let repaint = host.validation_tick.clone();
         let built_host = host.clone();
         let view = AnyView::new(
             r#box()
                 .class("campy-host")
+                .child(tree)
                 .child(move || {
-                    let view = match rebuild_host.document.get() {
-                        None => AnyView::new(r#box().class("campy-root")),
-                        Some(doc) => controls::build_document(&doc, &rebuild_host),
-                    };
+                    // A document write reconciles the tree that is already on
+                    // screen: the controls whose shape changed are rebuilt, the
+                    // rest keep their nodes and only take new values.
+                    let current = rebuild_host.document.try_get();
+                    if std::env::var_os("CAMPY_UI_TRACE").is_some() {
+                        eprintln!(
+                            "campy reconciler ran session={} doc={}",
+                            rebuild_host.session,
+                            current.is_some()
+                        );
+                    }
+                    if let Some(doc) = current.flatten() {
+                        controls::reconcile(&doc, &rebuild_host);
+                    }
                     // The registry is now populated, so commands addressed to
                     // the document can apply: say so, and wake the queue that
                     // may have parked one waiting for this.
                     rebuild_host.view_built.set(true);
                     rebuild_host.document_ready.set(true);
                     rebuild_host.shared.nudge();
-                    view
+                    AnyView::new(r#box())
                 })
                 .child(move || {
                     let _ = repaint.get();

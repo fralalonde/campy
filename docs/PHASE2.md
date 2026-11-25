@@ -671,6 +671,33 @@ the column, so every entry started where the previous one ended.
 `CAMPY_UI_DEBUG_VIEW` values for a validation run: `settings`, `code`,
 `select`, `multi`, `light`, `run`, `run-update`.
 
+**Partial updates.** A document write used to rebuild the whole tree, so
+editing one control (or switching module, which changes the canvas subtree)
+rebuilt the shell around it. The tree is now built once per window and a
+document goes through a reconciler:
+
+- the document is flattened by id, and every container's children are a
+  keyed list (`For`) keyed by `(id, shape generation)`;
+- a control whose *kind* and *static props* are unchanged keeps its nodes —
+  the reload writes the new text, geometry, model, checked/enabled/visible
+  into the signals those nodes already watch;
+- a control whose shape changed is re-keyed, which rebuilds that row alone;
+- the editors and the terminal are rebuilt on every reload: their content
+  lives in their own buffer, fed afterwards by `SetCode`/`AppendConsole`,
+  so a carried row would show the previous module's source.
+
+Measured with `CAMPY_UI_TRACE=1`: adding one control to a form of 245 is
+`reconcile controls=246 rebuilt=1 carried=245`; the same reload with the
+editor, raw view and console in the document is `rebuilt=4 carried=242`.
+`CAMPY_UI_DEBUG_AFTER=add` makes that structural change after the first
+load, so the number can be read against a window already on screen.
+
+What is still sent whole is the document itself: the BEAM answers a
+structural change with `LoadUi` (the ops are textual/geometry-level), so
+the NIF still carries the full tree. Emitting `InsertControl`/
+`RemoveControl`/`MoveControl` instead — and applying them to the flat map —
+is the next step; the renderer side no longer needs a new tree for it.
+
 **G1 manual-pass checklist** (run `just run` on a live desktop; every
 line must pass or become a filed punch item):
 

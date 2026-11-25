@@ -24,6 +24,18 @@ use zgui_ui::prelude::*;
 
 use crate::wire::{ControlDesc, PropValue, UiDocument};
 
+/// The parent every keyed list hangs off; the document's own roots are its
+/// children. `u64::MAX` because the shell's window root is control 0.
+const DOCUMENT_ROOT: u64 = u64::MAX;
+
+/// One control as the tree needs it: itself, and who its children are.
+pub struct FlatControl {
+    /// The control, with `children` emptied.
+    pub desc: ControlDesc,
+    /// Its children's ids, in order.
+    pub children: Vec<u64>,
+}
+
 /// A popup's row height, padding and width, in CSS pixels.
 const MENU_ROW: f64 = 26.0;
 const MENU_SEPARATOR: f64 = 9.0;
@@ -46,8 +58,24 @@ pub struct Host {
     /// command drain, outside any window's scope, and a `new_local` signal
     /// made there is disposed before the window it belongs to is built.
     pub document: zgui::reactive::ArcRwSignal<Option<UiDocument>>,
-    /// Live per-control signals, refilled on every document build.
+    /// Live per-control signals, one entry per control on screen. A reload
+    /// writes into these instead of recreating them, which is what makes an
+    /// update land on the controls that changed and nowhere else.
     pub controls: RefCell<HashMap<u64, ControlSignals>>,
+    /// The document flattened by id: the control itself (its `children`
+    /// emptied) and the ids of its children.
+    pub docs: RefCell<HashMap<u64, FlatControl>>,
+    /// One shape generation per control. A row is keyed by `(id, generation)`,
+    /// so a change to something a row is *built* from re-keys that row alone.
+    pub shapes: RefCell<HashMap<u64, zgui::reactive::ArcRwSignal<u64>>>,
+    /// The document's top-level ids, in order.
+    pub roots: RefCell<Vec<u64>>,
+    /// Bumped on every document write; every keyed list reads it and reconciles
+    /// its keys, which reuses the rows that did not change.
+    pub structure: zgui::reactive::ArcRwSignal<u64>,
+    /// Whether the document is dark, so the root can follow a theme change
+    /// without being rebuilt.
+    pub dark: zgui::reactive::ArcRwSignal<bool>,
     /// Live editor handles (`memo` / `code_editor` kinds).
     pub editors: RefCell<HashMap<u64, EditorHandle>>,
     /// Live console feeds (`console` kind): AppendConsole bytes go here.
@@ -136,6 +164,11 @@ impl Host {
             sink: RefCell::new(sink),
             document: zgui::reactive::ArcRwSignal::new(None),
             controls: RefCell::new(HashMap::new()),
+            docs: RefCell::new(HashMap::new()),
+            shapes: RefCell::new(HashMap::new()),
+            roots: RefCell::new(Vec::new()),
+            structure: zgui::reactive::ArcRwSignal::new(0),
+            dark: zgui::reactive::ArcRwSignal::new(true),
             editors: RefCell::new(HashMap::new()),
             consoles: RefCell::new(HashMap::new()),
             deferred_window: Cell::new(false),
@@ -349,50 +382,21 @@ fn px(value: f64) -> String {
 
 /// Builds the whole window document: the themed root plus one wrapper per
 /// top-level control.
-pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
+/// The window's tree, built once. Every document write after this goes through
+/// [`reconcile`], which updates the controls that changed and leaves the rest of
+/// the nodes alone: a form edit must not rebuild the shell around it.
+pub fn build_document(host: &Rc<Host>) -> AnyView {
     // A build replaces every wrapper, so whatever held the focus went with the
     // old one.
     host.field_focused.set(false);
     host.editor_focused.set(false);
-    if std::env::var_os("CAMPY_UI_TRACE").is_some() {
-        eprintln!(
-            "campy build_document theme={} roots={}",
-            doc.theme,
-            doc.controls.len()
-        );
-    }
-    // The popup's signal belongs to this build (and so to the window), which is
-    // what keeps it alive across a window swap: the host itself may not be.
+    // The popup's signal belongs to this build (and so to the window).
     *host.popup_tick.borrow_mut() = Some(RwSignal::new_local(0_u64));
     host.controls.borrow_mut().clear();
-    host.rects.borrow_mut().clear();
-    for desc in &doc.controls {
-        collect_rects(desc, 0.0, 0.0, &mut host.rects.borrow_mut());
-        collect_kinds(desc, &mut host.kinds.borrow_mut());
-    }
-    if !host.popup_debugged.get() {
-        host.popup_debugged.set(true);
-        // A validation run cannot click yet on every desktop; this opens the
-        // first menu so its popup can be screenshotted at startup.
-        if std::env::var_os("CAMPY_UI_OPEN_MENU").is_some()
-            && let Some(menu) = first_of_kind(&doc.controls, &["menu"])
-        {
-            host.popup.set(Some(menu));
-        }
-        if std::env::var_os("CAMPY_UI_OPEN_CHOICE").is_some()
-            && let Some(choice) = first_of_kind(&doc.controls, &["combo", "menu-list"])
-        {
-            host.popup.set(Some(choice));
-        }
-    }
-    let children: Vec<AnyView> = doc
-        .controls
-        .iter()
-        .map(|desc| AnyView::new(build_control(desc, host)))
-        .collect();
     let popup_host = host.clone();
     let key_host = host.clone();
     let close_host = host.clone();
+    let theme_host = host.clone();
     // Keys belong to the window, not to whatever happens to have focus: without
     // this registration the shell has no keyboard at all until a field is
     // clicked, which is why every shortcut was dead.
@@ -405,10 +409,16 @@ pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
             shortcut_anchor.window_shortcut()
         });
     zgui::reactive::on_cleanup_local(move || drop(registration));
+    let dark = host.dark.clone();
     let root = r#box()
         .node_ref(anchor)
         .class("campy-root")
         .class("campy-free")
+        .class_toggle(ClassName::new("campy-dark"), {
+            let dark = dark.clone();
+            move || dark.get()
+        })
+        .class_toggle(ClassName::new("campy-light"), move || !dark.get())
         .on(events::KEY_DOWN, move |cx| {
             let event: &KeyEvent = cx;
             if let Some(combo) = key_combo(&event.key_without_modifiers, cx.modifiers) {
@@ -433,11 +443,6 @@ pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
                 key_host.emit_raw("key", combo);
             }
         })
-        .class(if doc.theme == "dark" {
-            "campy-dark"
-        } else {
-            "campy-light"
-        })
         .on(events::POINTER_DOWN, move |cx| {
             // A press outside the open popup closes it, the way a menu bar
             // behaves everywhere. Inside, it is the row's own click.
@@ -450,9 +455,200 @@ pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
                 close_host.close_popup();
             }
         })
-        .children(children)
+        .child(keyed_children(host, DOCUMENT_ROOT))
         .child(move || popup_card(&popup_host));
+    let _ = theme_host;
     AnyView::new(root)
+}
+
+/// Takes a document into the live tree: every control keeps its nodes unless
+/// something a node is *built* from changed.
+pub fn reconcile(doc: &UiDocument, host: &Rc<Host>) {
+    let mut flat: HashMap<u64, FlatControl> = HashMap::new();
+    let mut order = Vec::with_capacity(doc.controls.len());
+    for desc in &doc.controls {
+        flatten(desc, &mut flat);
+        order.push(desc.id);
+    }
+
+    // Walk first, then write: the borrows have to be short.
+    let mut rekey = Vec::new();
+    let mut update = Vec::new();
+    {
+        let docs = host.docs.borrow();
+        for (id, entry) in &flat {
+            match docs.get(id) {
+                Some(old) if same_shape(&old.desc, &entry.desc) => update.push(*id),
+                _ => rekey.push(*id),
+            }
+        }
+    }
+    if std::env::var_os("CAMPY_UI_TRACE").is_some() {
+        eprintln!(
+            "campy reconcile theme={} controls={} rebuilt={} carried={}",
+            doc.theme,
+            flat.len(),
+            rekey.len(),
+            update.len()
+        );
+    }
+    for id in &update {
+        if let Some(entry) = flat.get(id) {
+            carry_values(host, id, &entry.desc);
+        }
+    }
+    for id in &rekey {
+        let shape = host.shapes.borrow().get(id).cloned();
+        match shape {
+            Some(shape) => shape.update(|count| *count = count.wrapping_add(1)),
+            None => {
+                host.shapes
+                    .borrow_mut()
+                    .insert(*id, zgui::reactive::ArcRwSignal::new(0));
+            }
+        }
+    }
+    host.docs.borrow_mut().retain(|id, _| flat.contains_key(id));
+    host.shapes
+        .borrow_mut()
+        .retain(|id, _| flat.contains_key(id));
+    host.docs.borrow_mut().extend(flat);
+    *host.roots.borrow_mut() = order;
+    host.dark.set(doc.theme == "dark");
+    // The popup is drawn at the root, so it reads absolute rectangles from here.
+    host.rects.borrow_mut().clear();
+    host.kinds.borrow_mut().clear();
+    for desc in &doc.controls {
+        collect_rects(desc, 0.0, 0.0, &mut host.rects.borrow_mut());
+        collect_kinds(desc, &mut host.kinds.borrow_mut());
+    }
+    if !host.popup_debugged.get() {
+        host.popup_debugged.set(true);
+        // A validation run cannot click every desktop; this opens the first menu
+        // (or choice) so its popup can be screenshotted at startup.
+        if std::env::var_os("CAMPY_UI_OPEN_MENU").is_some()
+            && let Some(menu) = first_of_kind(&doc.controls, &["menu"])
+        {
+            host.popup.set(Some(menu));
+        }
+        if std::env::var_os("CAMPY_UI_OPEN_CHOICE").is_some()
+            && let Some(choice) = first_of_kind(&doc.controls, &["combo", "menu-list"])
+        {
+            host.popup.set(Some(choice));
+        }
+    }
+    host.structure
+        .update(|count| *count = count.wrapping_add(1));
+}
+
+/// One control's children as keyed rows: the list reconciles by
+/// `(id, shape generation)`, so inserting a control mounts one row and leaves
+/// the others on screen exactly as they were.
+fn keyed_children(host: &Rc<Host>, parent: u64) -> AnyView {
+    let list_host = host.clone();
+    let row_host = host.clone();
+    let rows = ForProps::builder()
+        .each(move || child_rows(&list_host, parent))
+        .key(|row: &(u64, u64)| *row)
+        .children(move |(id, _)| row_view(&row_host, id))
+        .build()
+        .render();
+    AnyView::new(rows)
+}
+
+fn child_rows(host: &Rc<Host>, parent: u64) -> Vec<(u64, u64)> {
+    // The document changed (or a row's shape did): read both so the list
+    // re-runs on either.
+    let _ = host.structure.get();
+    let ids = if parent == DOCUMENT_ROOT {
+        host.roots.borrow().clone()
+    } else {
+        host.docs
+            .borrow()
+            .get(&parent)
+            .map(|entry| entry.children.clone())
+            .unwrap_or_default()
+    };
+    let shapes = host.shapes.borrow();
+    ids.into_iter()
+        .map(|id| {
+            let generation = shapes.get(&id).map(|shape| shape.get()).unwrap_or(0);
+            (id, generation)
+        })
+        .collect()
+}
+
+fn row_view(host: &Rc<Host>, id: u64) -> AnyView {
+    let desc = host.docs.borrow().get(&id).map(|entry| entry.desc.clone());
+    match desc {
+        Some(desc) => AnyView::new(build_control(&desc, host)),
+        None => AnyView::new(r#box()),
+    }
+}
+
+/// The document as a flat map: each control once, with its children as ids.
+fn flatten(desc: &ControlDesc, into: &mut HashMap<u64, FlatControl>) {
+    into.insert(
+        desc.id,
+        FlatControl {
+            desc: ControlDesc {
+                children: Vec::new(),
+                ..desc.clone()
+            },
+            children: desc.children.iter().map(|child| child.id).collect(),
+        },
+    );
+    for child in &desc.children {
+        flatten(child, into);
+    }
+}
+
+/// Whether a row built from `old` can stay on screen for `new`: the same kind,
+/// and the same props except the ones a granular op moves.
+///
+/// The editors and the terminal are always rebuilt: their content is not the
+/// text signal but their own buffer, fed afterwards by `SetCode` and
+/// `AppendConsole`, so a carried row would keep the previous module's source.
+fn same_shape(old: &ControlDesc, new: &ControlDesc) -> bool {
+    if matches!(old.kind.as_str(), "memo" | "code_editor" | "console") {
+        return false;
+    }
+    old.kind == new.kind && static_props(old) == static_props(new)
+}
+
+fn static_props(desc: &ControlDesc) -> Vec<(String, PropValue)> {
+    desc.props
+        .iter()
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_str(),
+                "checked" | "model" | "value" | "current-index" | "enabled" | "visible"
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+/// Carries a reloaded control's live values into the signals its nodes already
+/// watch, which is what a reload of an unchanged control costs.
+fn carry_values(host: &Rc<Host>, id: &u64, desc: &ControlDesc) {
+    let signals = host.controls.borrow().get(id).cloned();
+    let Some(signals) = signals else {
+        return;
+    };
+    signals.text.set(desc.text.clone());
+    signals.rect.set((desc.x, desc.y, desc.w, desc.h));
+    signals.enabled.set(desc.enabled);
+    signals.visible.set(desc.visible);
+    signals.model.set(prop_model(desc));
+    signals
+        .checked
+        .set(checked_of(prop_bool(desc, "checked").unwrap_or(false)));
+    signals.value.set(
+        desc.prop("value")
+            .and_then(PropValue::number)
+            .unwrap_or(0.0),
+    );
 }
 
 /// Records each control's absolute rectangle: the popup is drawn at the root,
@@ -728,11 +924,6 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
 
     match desc.kind.as_str() {
         "panel" | "group" | "surface" => {
-            let children: Vec<AnyView> = desc
-                .children
-                .iter()
-                .map(|child| AnyView::new(build_control(child, host)))
-                .collect();
             if desc.kind == "surface" {
                 // The designer surface: engine-computed grid + raw pointer
                 // phases forwarded to the BEAM (which hit-tests from the
@@ -831,7 +1022,7 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
                 "row" => wrapper.class("campy-row"),
                 _ => wrapper.class("campy-free"),
             };
-            AnyView::new(wrapper.children(children))
+            AnyView::new(wrapper.child(keyed_children(host, desc.id)))
         }
         _ => AnyView::new(wrapper.child(widget(desc, host, &signals))),
     }
