@@ -105,7 +105,7 @@ pub type History {
     active: String,
     opened: List(String),
     view: ModuleView,
-    slint_tab: Bool,
+    raw_tab: Bool,
     selected: Option(String),
     selection: List(String),
     tab: Tab,
@@ -121,7 +121,7 @@ pub type State {
     active: String,
     opened: List(String),
     view: ModuleView,
-    slint_tab: Bool,
+    raw_tab: Bool,
     selected: Option(String),
     selection: List(String),
     tab: Tab,
@@ -227,7 +227,7 @@ pub fn initial_workspace(workspace: Workspace) -> State {
       id -> [id]
     },
     view: FormView,
-    slint_tab: False,
+    raw_tab: False,
     selected: None,
     selection: [],
     tab: Properties,
@@ -292,7 +292,7 @@ fn history(state: State) -> History {
     state.active,
     state.opened,
     state.view,
-    state.slint_tab,
+    state.raw_tab,
     state.selected,
     state.selection,
     state.tab,
@@ -308,7 +308,7 @@ fn restore(state: State, past: History) -> State {
     active: past.active,
     opened: past.opened,
     view: past.view,
-    slint_tab: past.slint_tab,
+    raw_tab: past.raw_tab,
     selected: past.selected,
     selection: past.selection,
     tab: past.tab,
@@ -652,8 +652,8 @@ pub fn toggle_view(state: State) -> State {
   }
 }
 
-pub fn set_slint_tab(state: State, slint_tab: Bool) -> State {
-  State(..state, slint_tab: slint_tab)
+pub fn set_raw_tab(state: State, raw_tab: Bool) -> State {
+  State(..state, raw_tab: raw_tab)
 }
 
 pub fn add(state: State, kind: Kind) -> State {

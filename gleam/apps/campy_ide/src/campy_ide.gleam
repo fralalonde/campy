@@ -1138,8 +1138,8 @@ fn button_action(name: String) -> ControlEffect {
     "module-add" -> "file-new-module"
     "tab-close" -> "nav-close-tab"
     "view-toggle" -> "toggle-view"
-    "form-tab" -> "show-ui"
-    "raw-tab" -> "show-slint"
+    "form-tab" -> "show-form"
+    "raw-tab" -> "show-raw"
     "console-clear" -> "clear-console"
     "insp-tab-properties" -> "tab-properties"
     "insp-tab-events" -> "tab-events"
@@ -1441,8 +1441,8 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "cut-component" -> state.cut_selected(model)
     "paste-component" -> state.paste(model)
     "toggle-view" -> state.toggle_view(model)
-    "show-ui" -> state.set_slint_tab(model, False)
-    "show-slint" -> state.set_slint_tab(model, True)
+    "show-form" -> state.set_raw_tab(model, False)
+    "show-raw" -> state.set_raw_tab(model, True)
     "console-input" -> state.console_input(model, payload)
     "clear-console" -> state.clear_console(model)
     "browse-picture" -> pick_picture(model)

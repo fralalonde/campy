@@ -94,7 +94,7 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-root { width: 100%; height: 100%; background: var(--campy-bg);
                    color: var(--campy-text); font-size: 13px;
                    font-family: 'Cantarell', 'Noto Sans', sans-serif; }",
-    ".campy-control { min-width: 0; min-height: 0; }",
+    ".campy-control { min-width: 0; min-height: 0; box-sizing: border-box; }",
     ".campy-free { position: relative; }",
     ".campy-free > .campy-control { position: absolute; }",
     ".campy-col { display: flex; flex-direction: column; gap: 8px; }",
@@ -123,7 +123,8 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-status-path { color: var(--campy-muted); font-size: 12px; }",
     // --- buttons ------------------------------------------------------------
     ".campy-control > .campy-widget-button { width: 100%; height: 100%; }",
-    ".campy-widget-button { display: flex; align-items: center; justify-content: center;
+    ".campy-widget-button { box-sizing: border-box;
+                            display: flex; align-items: center; justify-content: center;
                             padding: 0 10px; border-radius: 6px;
                             background: var(--campy-raised); color: var(--campy-text);
                             border: 1px solid var(--campy-border); font-size: 13px; }",
@@ -171,7 +172,7 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-tab-on .campy-widget-button { color: var(--campy-text);
                                            background: var(--campy-hover);
                                            border-color: var(--campy-border); }",
-    ".campy-choice { padding: 0 8px; }",
+    ".campy-choice { padding: 0 12px; }",
     ".campy-choice-line { display: flex; align-items: center;
                           justify-content: space-between; width: 100%; }",
     ".campy-choice-mark { color: var(--campy-muted); font-size: 11px; margin-left: 6px; }",
@@ -248,8 +249,7 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-insp-label { color: var(--campy-muted); font-size: 12px; }",
     ".campy-insp-selection { font-weight: 600; }",
     ".campy-insp-text { background: var(--campy-raised);
-                        border: 1px solid var(--campy-border); border-radius: 5px;
-                        padding: 0 8px; }",
+                        border: 1px solid var(--campy-border); border-radius: 5px; }",
     ".campy-insp-text:hover { border-color: var(--campy-muted); }",
     ".campy-control > .campy-check-row { width: 100%; height: 100%; }
      .campy-insp-bool .campy-check-row { justify-content: flex-start; padding: 0 8px;
@@ -267,8 +267,7 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-field-label { color: var(--campy-muted); font-size: 12px; }",
     ".campy-field-text { color: var(--campy-muted); }",
     ".campy-field-edit { background: var(--campy-raised);
-                         border: 1px solid var(--campy-border); border-radius: 5px;
-                         padding: 0 8px; }",
+                         border: 1px solid var(--campy-border); border-radius: 5px; }",
     // --- console and editor -------------------------------------------------
     ".campy-console { padding: 4px 10px; font-family: 'Adwaita Mono',
                       'Iosevka Nerd Font', monospace; font-size: 12px;

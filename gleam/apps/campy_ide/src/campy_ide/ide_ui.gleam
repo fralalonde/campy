@@ -106,7 +106,7 @@ pub fn snapshot(model: State) -> Snapshot {
     path: model.project.path,
     running: is_running(model),
     code_view: is_code_view(model),
-    raw_tab: model.slint_tab,
+    raw_tab: model.raw_tab,
     events_tab: is_events_tab(model),
     hints: model.hints,
     has_selection: !list.is_empty(model.selection),
