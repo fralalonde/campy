@@ -112,12 +112,25 @@ pub struct Shared {
     /// session, a close). The window subscribes to it, so the loop is woken by
     /// the work rather than polling a timer — a timer that fires 125 times a
     /// second makes the caret blink at 125 Hz and burns a core doing nothing.
-    pub(crate) work: zgui::reactive::ArcRwSignal<u64>,
+    /// Created by the UI thread once its reactive runtime is installed, and
+    /// held here for the BEAM thread to bump. It cannot be created in `start`:
+    /// that runs on the caller's thread with no runtime, so the signal lands in
+    /// a temporary arena and is disposed under the effect that watches it.
+    pub(crate) work: Mutex<Option<zgui::reactive::ArcRwSignal<u64>>>,
     /// The event loop's own channel, for what the reactive wake cannot do: a
     /// write from another thread marks work ready but asks nothing of a loop
     /// blocked on the compositor, so the drain would wait for a frame that
     /// never comes.
     proxy: Mutex<Option<winit::event_loop::EventLoopProxy<zgui_platform_winit::UserEvent>>>,
+}
+
+impl Shared {
+    /// Bumps the wake counter, if the UI thread has made one yet.
+    pub(crate) fn nudge(&self) {
+        if let Some(work) = self.work.lock().ok().and_then(|work| work.clone()) {
+            let _ = work.try_update(|count| *count = count.wrapping_add(1));
+        }
+    }
 }
 
 struct Runtime {
@@ -174,9 +187,7 @@ impl Session {
     /// loop blocked on the compositor, and the effect then waits for a frame
     /// that never comes.
     fn wake(&self) {
-        self.shared
-            .work
-            .update(|count| *count = count.wrapping_add(1));
+        self.shared.nudge();
         wake_loop(&self.shared);
         if std::env::var_os("CAMPY_UI_TRACE").is_some() {
             eprintln!("campy wake from session {}", self.id());
@@ -227,10 +238,7 @@ pub fn open(sink: EventSink) -> Result<Session, String> {
             sink,
         },
     );
-    runtime
-        .shared
-        .work
-        .update(|count| *count = count.wrapping_add(1));
+    runtime.shared.nudge();
     Ok(Session {
         control,
         sender: runtime.sender.clone(),
@@ -261,7 +269,7 @@ fn start() -> Result<Runtime, String> {
     let shared = Arc::new(Shared {
         status: AtomicU8::new(0),
         registrations: Mutex::new(HashMap::new()),
-        work: zgui::reactive::ArcRwSignal::new(0),
+        work: Mutex::new(None),
         proxy: Mutex::new(None),
     });
     let thread_shared = shared.clone();
@@ -340,10 +348,7 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
                 // replacement, and marking it closed would reap that instead.
                 if !close_host.window_swapped.get() {
                     close_host.request_close();
-                    close_host
-                        .shared
-                        .work
-                        .update(|count| *count = count.wrapping_add(1));
+                    close_host.shared.nudge();
                 }
                 zgui::prelude::CloseResponse::Close
             });
@@ -356,17 +361,23 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
         // parked until there is somewhere to draw it.
         {
             let drain_host = host.clone();
-            let work = host.shared.work.clone();
-            host.work_effect.borrow_mut().get_or_insert_with(|| {
-                zgui::reactive::RenderEffect::new(move |_| {
-                    let value = work.get();
-                    if std::env::var_os("CAMPY_UI_TRACE").is_some() {
-                        eprintln!("campy drain effect: work={value}");
-                    }
-                    apply_fullscreen(&drain_host);
-                    drain_session(&drain_host);
-                })
-            });
+            let work = host.shared.work.lock().ok().and_then(|work| work.clone());
+            if let Some(work) = work {
+                // Re-created each build, like the timer it replaces: the scope
+                // a run's effect lives in is cleaned when that run ends, and an
+                // effect outliving its scope panics on the next read.
+                *host.work_effect.borrow_mut() =
+                    Some(zgui::reactive::RenderEffect::new(move |_| {
+                        let Some(value) = work.try_get() else {
+                            return;
+                        };
+                        if std::env::var_os("CAMPY_UI_TRACE").is_some() {
+                            eprintln!("campy drain effect: work={value}");
+                        }
+                        apply_fullscreen(&drain_host);
+                        drain_session(&drain_host);
+                    }));
+            }
         }
         // A screenshot run needs frames to have something to copy; nothing
         // else does, so the repaint tick exists only when one was asked for.
@@ -398,10 +409,7 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
                     // may have parked one waiting for this.
                     rebuild_host.view_built.set(true);
                     rebuild_host.document_ready.set(true);
-                    rebuild_host
-                        .shared
-                        .work
-                        .update(|count| *count = count.wrapping_add(1));
+                    rebuild_host.shared.nudge();
                     view
                 })
                 .child(move || {
@@ -417,6 +425,13 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
 }
 
 fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), String> {
+    // The reactive runtime belongs to this thread. The wake signal is made here,
+    // outside any owner, so it lives as long as the process rather than being
+    // cleaned up with the first window's scope.
+    let _ = zgui::reactive::install();
+    if let Ok(mut work) = shared.work.lock() {
+        *work = Some(zgui::reactive::ArcRwSignal::new(0));
+    }
     let factory_shared = Arc::clone(&shared);
     let ui = Rc::new(ThreadState {
         shared,
@@ -802,9 +817,7 @@ fn apply_commands(ui: &Rc<ThreadState>) {
     if taken == DRAIN_COMMANDS_PER_TICK {
         // A full batch means more may be waiting; ask for another turn rather
         // than stalling until something else happens to wake the loop.
-        ui.shared
-            .work
-            .update(|count| *count = count.wrapping_add(1));
+        ui.shared.nudge();
         wake_loop(&ui.shared);
     }
 }

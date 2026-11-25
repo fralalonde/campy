@@ -92,6 +92,19 @@ fn form() -> UiDocument {
                 children: vec![],
             },
             ControlDesc {
+                id: 5,
+                kind: "surface".into(),
+                text: "".into(),
+                x: 100.0,
+                y: 300.0,
+                w: 300.0,
+                h: 200.0,
+                enabled: true,
+                visible: true,
+                props: vec![("layout".into(), PropValue::Text("free".into()))],
+                children: vec![],
+            },
+            ControlDesc {
                 id: 3,
                 kind: "edit".into(),
                 text: "seed".into(),
@@ -246,6 +259,20 @@ fn loads_updates_clicks_reads_and_rejects() {
         events_of(&sink, "key").last().map(String::as_str),
         Some("key ctrl+s"),
         "the modified shortcut reached the loop"
+    );
+
+    // The designer canvas draws its graph paper as a child that covers it. A
+    // click on empty canvas must still reach the surface's own pointer handler,
+    // or nothing on the canvas can be selected or dragged.
+    testing::test_pump(32).expect("a pump is enqueued");
+    std::thread::sleep(Duration::from_millis(60));
+    testing::test_pointer("click", 150.0, 400.0).expect("the canvas is clicked");
+    testing::test_pump(32).expect("a pump is enqueued");
+    wait_for(&sink, 1, "pointer:5:down");
+    assert!(
+        events_of(&sink, "pointer:5:down").len() == 1,
+        "a click on the canvas reached its surface: {:?}",
+        events_of(&sink, "pointer:5:")
     );
 
     // A property field that holds the focus must not swallow undo: a designer
