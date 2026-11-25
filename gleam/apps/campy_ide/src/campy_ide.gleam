@@ -120,6 +120,7 @@ fn debug_view(model: State) -> State {
 
     "code" -> state.set_view(model, state.CodeView)
     "select" -> state.select(model, "pet-button")
+    "run" -> run_form(model)
     "events" -> state.set_tab(state.select(model, "pet-button"), state.Events)
     _ -> model
   }
@@ -211,7 +212,10 @@ pub fn loop(
       let heartbeat = case now - heartbeat >= 1000 {
         True -> {
           io.println(
-            "BEAM heartbeat; ui generation=" <> int.to_string(accepted),
+            "BEAM heartbeat; ui generation="
+            <> int.to_string(accepted)
+            <> " sessions="
+            <> int.to_string(bridge.active_sessions()),
           )
           now
         }
@@ -1374,12 +1378,17 @@ fn preview_event(
             state.set_status(model, "App running")
             |> state.log_console("App ready"),
           )
-        "closed" ->
+        "closed" -> {
+          // Release the session's registration: the window is gone, and a
+          // registration that outlives its window is what made one close look
+          // like a session that never opened.
+          let _ = bridge.close_session(preview.session)
           Some(
             state.set_preview(model, None)
             |> state.set_status("App stopped")
             |> state.log_console("■ App stopped"),
           )
+        }
         "command-failed" ->
           Some(
             state.set_status(model, "App error: " <> payload)

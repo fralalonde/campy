@@ -302,9 +302,63 @@ fn loads_updates_clicks_reads_and_rejects() {
         "the swapped window rendered the new control"
     );
 
+    // The swap closed the *old* window itself. That must not read as the
+    // session closing: it still owns the new window, and treating it as closed
+    // made the UI thread re-open a window for the still-registered session on
+    // every drain tick — a Cat Café window per 8ms until the desktop died.
+    let closed_by_swap = events_of(&preview_sink, "closed");
+    assert!(
+        closed_by_swap.is_empty(),
+        "a window swap reported the session as closed: {closed_by_swap:?}"
+    );
+
     // Both sessions stay healthy; closing the preview reaps only it.
     assert_eq!(sessions::active_sessions(), 2);
     preview.close(1);
     wait_for(&preview_sink, 1, "closed");
     let _ = first_sink;
+
+    // A window the user closes is a *reaped* session, not a forgotten one. The
+    // NIF still holds its registration until the BEAM closes it, so a UI thread
+    // that adopts it again opens a window that is immediately closed again —
+    // one Cat Café window per drain tick, each one taking focus. Adoption must
+    // happen once per registration, not once per tick.
+    let reaped_sink = Sink::default();
+    let events = reaped_sink.0.clone();
+    let handle = Arc::new(
+        move |session: u64, generation: u64, kind: String, payload: String| {
+            events
+                .lock()
+                .unwrap()
+                .push((session, generation, kind, payload));
+        },
+    );
+    let user_closed = sessions::open(handle).expect("a third session opens");
+    user_closed
+        .submit(Command {
+            generation: 1,
+            op: Op::LoadUi(form()),
+        })
+        .expect("the third session loads");
+    wait_for(&reaped_sink, 1, "ui-loaded");
+    // Reason 4 is the window's own close button.
+    user_closed.close(4);
+    wait_for(&reaped_sink, 1, "closed");
+    // Give the drain many ticks to re-adopt it if it were going to.
+    for _ in 0..12 {
+        let _ = testing::test_pump(32);
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    let adopted = events_of(&reaped_sink, "session-opened");
+    assert_eq!(
+        adopted.len(),
+        1,
+        "a reaped session was adopted again: {adopted:?}"
+    );
+    let closed_once = events_of(&reaped_sink, "closed");
+    assert_eq!(
+        closed_once.len(),
+        1,
+        "a reaped session closed more than once: {closed_once:?}"
+    );
 }

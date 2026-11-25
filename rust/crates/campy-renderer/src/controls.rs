@@ -82,6 +82,10 @@ pub struct Host {
     pub popup_debugged: Cell<bool>,
     /// The window size last reported to the BEAM, in CSS pixels.
     pub last_size: Cell<(u32, u32)>,
+    /// Set on a host whose window was closed by `swap_load` rather than by the
+    /// user: its close hook must not close the session the replacement took
+    /// over (the control is shared).
+    pub window_swapped: Cell<bool>,
     /// The command-drain interval for this session's window. Re-created
     /// on every document rebuild: the reactive hole cleans the scope a
     /// run's timer lives in, so each run arms its own (the chain is
@@ -114,6 +118,7 @@ impl Host {
             popup_rect: Cell::new(None),
             popup_debugged: Cell::new(false),
             last_size: Cell::new((0, 0)),
+            window_swapped: Cell::new(false),
             drain_timer: RefCell::new(None),
             control: RefCell::new(None),
         })

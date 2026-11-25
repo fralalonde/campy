@@ -249,6 +249,11 @@ struct SessionWindow {
 /// Everything the drain timer sees (UI thread only).
 pub(crate) struct ThreadState {
     shared: Arc<Shared>,
+    /// Sessions whose window has been closed and reported. The NIF keeps the
+    /// registration until the BEAM closes the session, so without this a
+    /// reaped session looks like one that never opened a window — and adopting
+    /// it again opens a window that closes on the next tick, forever.
+    reaped: RefCell<std::collections::HashSet<u64>>,
     receiver: RefCell<Option<Receiver<(u64, Command)>>>,
     windows: RefCell<Option<zgui::runtime::windows::Windows>>,
     sessions: RefCell<HashMap<u64, SessionWindow>>,
@@ -274,7 +279,12 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
             *host.window.borrow_mut() = Some(use_window());
             let close_host = host.clone();
             let _guard = on_close_request(move || {
-                close_host.request_close();
+                // A window this thread closed to swap in a replacement is not
+                // the user closing the session: the control is shared with the
+                // replacement, and marking it closed would reap that instead.
+                if !close_host.window_swapped.get() {
+                    close_host.request_close();
+                }
                 zgui::prelude::CloseResponse::Close
             });
         }
@@ -298,6 +308,7 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
 fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), String> {
     let ui = Rc::new(ThreadState {
         shared,
+        reaped: RefCell::default(),
         receiver: RefCell::new(Some(receiver)),
         windows: RefCell::new(None),
         sessions: RefCell::new(HashMap::new()),
@@ -433,6 +444,10 @@ fn swap_load(
             .with_size(size.width.0, size.height.0),
         session_view(replacement.clone()),
     );
+    // The replacement keeps the session's id and control; the old window is
+    // closed by us, so its close hook must not mark that shared control closed
+    // (which would reap the session the replacement just took over).
+    host.window_swapped.set(true);
     handle.close();
     host.window.borrow_mut().take();
     Some(replacement)
@@ -526,6 +541,12 @@ fn adopt_registrations(ui: &Rc<ThreadState>) {
     };
     let windows = ui.windows.borrow().clone();
     for (id, registration) in registrations.iter() {
+        if ui.reaped.borrow().contains(id) {
+            // Already reported closed: the BEAM decides whether the session
+            // comes back. Re-opening here is what turned one close into a
+            // window per drain tick (each one taking focus).
+            continue;
+        }
         let mut sessions = ui.sessions.borrow_mut();
         if let Some(window) = sessions.get_mut(id) {
             if window.host.adopted() {
@@ -881,6 +902,7 @@ fn reap_closed(ui: &Rc<ThreadState>) {
     }
     let mut sessions = ui.sessions.borrow_mut();
     for (id, reason) in closed {
+        ui.reaped.borrow_mut().insert(id);
         if let Some(window) = sessions.remove(&id) {
             let _ = window.host.emit_raw("closed", format!("reason={reason}"));
             if let Some(handle) = window.host.window.borrow().as_ref() {
