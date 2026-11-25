@@ -172,6 +172,12 @@ pub const CAMPY_SHEET: &str = css!(
                           border-radius: 0 6px 6px 6px; }",
     ".campy-surface { position: relative; overflow: hidden; }",
     ".campy-selected { outline: 2px solid var(--campy-accent); outline-offset: 1px; }",
+    ".campy-member { outline: 1px solid var(--campy-accent); outline-offset: 0px;
+                     background: transparent; }",
+    ".campy-grip { background: var(--campy-panel);
+                  border: 1px solid var(--campy-accent); border-radius: 2px; }",
+    ".campy-grip-window { background: var(--campy-raised);
+                          border-color: var(--campy-border); }",
     ".campy-marquee { border: 1px solid var(--campy-accent);
                       background: var(--campy-accent-soft); pointer-events: none; }",
     // --- inspector ----------------------------------------------------------

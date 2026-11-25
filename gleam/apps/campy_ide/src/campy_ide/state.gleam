@@ -2702,7 +2702,7 @@ pub fn set_rect_h(state: State, value: Int) -> State {
   State(..state, rect: #(x, y, w, value))
 }
 
-pub fn select_frame(state: State) -> State {
+pub fn select_frame(state: State, additive: Bool) -> State {
   case active_form(state) {
     None -> state
     Some(form) -> {
@@ -2733,19 +2733,24 @@ pub fn select_frame(state: State) -> State {
           })
         })
         |> list.map(fn(control) { control.id })
-      let primary = case picked {
+      // Shift/Ctrl extends the frame selection instead of replacing it.
+      let selection = case additive {
+        True -> list.unique(list.append(state.selection, picked))
+        False -> picked
+      }
+      let primary = case selection {
         [first, ..] -> Some(first)
         [] -> None
       }
       State(
         ..state,
         selected: primary,
-        selection: picked,
+        selection: selection,
         selected_project: False,
         active_handler: None,
         highlight: None,
         editing: None,
-        status: case list.length(picked) {
+        status: case list.length(selection) {
           0 -> "No components in frame"
           1 -> "1 component selected"
           count -> int.to_string(count) <> " components selected"
@@ -2861,7 +2866,9 @@ fn dragging_control(state: State) -> Option(Control) {
 
 pub const drag_threshold = 2
 
-pub const resize_grip = 6
+/// The hit radius of a selection grip, and the size of the square drawn for
+/// it (see `shell.grip_size`, which the shell draws from).
+pub const resize_grip = shell.grip_size
 
 pub const window_grip = 14
 
@@ -3103,12 +3110,17 @@ fn resize_control(state: State, mode: String, dx: Int, dy: Int) -> State {
   }
 }
 
-pub fn pointer_up(state: State, x: Int, y: Int) -> State {
+pub fn pointer_up(state: State, x: Int, y: Int, additive: Bool) -> State {
   case state.gesture {
     Idle -> State(..state, last_pointer: #(x, y))
     Pressing(_, target) -> {
       let released = State(..state, gesture: Idle, last_pointer: #(x, y))
-      select(released, target)
+      case additive, target {
+        // A modified press on nothing leaves the selection alone.
+        True, "" -> released
+        True, id -> toggle_in_selection(released, id)
+        False, _ -> select(released, target)
+      }
     }
     Moving(_) -> State(..end_gesture(state), gesture: Idle)
     Marqueing(_) | Placing(_) -> {
@@ -3124,8 +3136,12 @@ pub fn pointer_up(state: State, x: Int, y: Int) -> State {
         Placing(_) -> place_component(released)
         _ ->
           case width > 2 || height > 2 {
-            True -> select_frame(released)
-            False -> select(released, "")
+            True -> select_frame(released, additive)
+            False ->
+              case additive {
+                True -> released
+                False -> select(released, "")
+              }
           }
       }
     }
@@ -3169,6 +3185,40 @@ pub fn marquee_rect(state: State) -> #(Bool, Int, Int, Int, Int) {
       #(True, x, y, w, h)
     }
     _ -> #(False, 0, 0, 0, 0)
+  }
+}
+
+/// Adds `id` to the selection, or takes it out when it is already in it: a
+/// Ctrl/Shift press on a component. The most recently added one becomes the
+/// primary (the inspector's subject).
+fn toggle_in_selection(state: State, id: String) -> State {
+  case list.contains(state.selection, id) {
+    True -> {
+      let rest = list.filter(state.selection, fn(other) { other != id })
+      let primary = case rest {
+        [first, ..] -> Some(first)
+        [] -> None
+      }
+      State(
+        ..state,
+        selected: primary,
+        selection: rest,
+        status: case list.length(rest) {
+          0 -> "Nothing selected"
+          1 -> "1 component selected"
+          count -> int.to_string(count) <> " components selected"
+        },
+      )
+    }
+    False ->
+      State(
+        ..state,
+        selected: Some(id),
+        selection: list.append(state.selection, [id]),
+        selected_project: False,
+        status: int.to_string(list.length(state.selection) + 1)
+          <> " components selected",
+      )
   }
 }
 

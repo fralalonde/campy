@@ -620,6 +620,24 @@ desktop has two outputs and an absolute device follows the output the
 pointer is on, so automated clicks are not reliable across them. The
 scripted `ui-testing` driver remains the way to test clicks and keys.
 
+**Designer (G1 item 4).** The gesture model was already there (click
+select, drag move with live preview committed on release, eight-grip
+resize, marquee, drop-into-container reparenting, undo per gesture).
+What was missing was the visible half and the additive selection:
+
+- the eight grips are drawn at the exact points `state` hit-tests
+  (one `grip_size` constant, two users), and the module window draws its
+  own corner grip while nothing is selected;
+- Ctrl or Shift on a press adds the component to the selection or takes
+  it out, on empty canvas it leaves the selection alone, and a modified
+  marquee *extends* the selection instead of replacing it;
+- a multi-selection draws one outline per member (a fixed pool of 24,
+  shown or hidden) plus the union box with grips.
+
+Grips, member outlines and the window grip are fixed pools toggled with
+`visible`: a selection must not change the document's *shape*, or every
+click would need a fresh `LoadUi` instead of a few geometry ops.
+
 **G1 manual-pass checklist** (run `just run` on a live desktop; every
 line must pass or become a filed punch item):
 

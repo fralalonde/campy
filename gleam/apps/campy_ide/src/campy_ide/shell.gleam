@@ -196,6 +196,14 @@ pub const window_height = 860
 /// The module window's title-bar height inside the canvas.
 pub const form_title_height = 28
 
+/// One selection grip: the square drawn at a corner or edge midpoint of the
+/// selection, and the size the BEAM hit-tests (`state.resize_grip`).
+pub const grip_size = 6
+
+/// How many selected controls draw their own outline (the marquee can pick
+/// more than this; the union box still covers them).
+pub const member_pool = 24
+
 /// Every pane rectangle for one window size, in window CSS pixels.
 ///
 /// The shell is one hand-placed frame: the navigator and the inspector keep
@@ -401,6 +409,9 @@ pub type ShellView {
     events_tab: Bool,
     hints: Bool,
     has_selection: Bool,
+    /// Whether the primary selection's parent lays its children out itself
+    /// (`free`): only then do the eight resize grips apply.
+    selection_free: Bool,
     selection_label: String,
     can_delete_project: Bool,
     has_project_icon: Bool,
@@ -438,6 +449,9 @@ pub type ShellView {
     controls: List(ControlItem),
     canvas: List(ControlDesc),
     canvas_selection: #(Int, Int, Int, Int),
+    /// Each selected control's box in canvas coordinates: a multi-selection
+    /// draws one outline per member, so what is in it is visible.
+    selection_boxes: List(#(Int, Int, Int, Int)),
     /// Active marquee/placement rectangle, normalized, canvas-local.
     canvas_marquee: #(Bool, Int, Int, Int, Int),
     props: List(PropItem),
@@ -466,6 +480,7 @@ pub fn empty_view() -> ShellView {
     events_tab: False,
     hints: False,
     has_selection: False,
+    selection_free: False,
     selection_label: "",
     can_delete_project: False,
     has_project_icon: False,
@@ -503,6 +518,7 @@ pub fn empty_view() -> ShellView {
     controls: [],
     canvas: [],
     canvas_selection: #(0, 0, 0, 0),
+    selection_boxes: [],
     canvas_marquee: #(False, 0, 0, 0, 0),
     props: [],
     events: [],
@@ -1010,36 +1026,105 @@ fn canvas(view: ShellView) -> ControlDesc {
   |> with_class("campy-canvas")
   |> with_props([layout_prop("free")])
   |> shown(!view.code_view && !view.raw_tab)
-  |> with_children([
-    node(
-      "canvas-title",
-      "label",
-      view.form_title,
-      view.window_x,
-      view.window_y,
-      form_w,
-      form_title_height,
+  |> with_children(list.append(
+    [
+      node(
+        "canvas-title",
+        "label",
+        view.form_title,
+        view.window_x,
+        view.window_y,
+        form_w,
+        form_title_height,
+      )
+        |> with_class("campy-canvas-title"),
+      node(
+        "canvas-form",
+        "panel",
+        view.form_title,
+        view.window_x,
+        view.window_y + form_title_height,
+        form_w,
+        form_h,
+      )
+        |> with_class("campy-canvas-form")
+        |> with_props(form_props(view.canvas))
+        |> with_children(form_children),
+      node("selection-rect", "panel", "", sx, sy, sw, sh)
+        |> with_class("campy-selected")
+        |> shown(view.has_selection),
+    ],
+    list.append(
+      selection_members(view),
+      list.append(grips(view), [
+        node("marquee-rect", "panel", "", mx, my, mw, mh)
+        |> with_class("campy-marquee")
+        |> shown(marquee),
+      ]),
+    ),
+  ))
+}
+
+/// One outline per selected control, from a fixed pool: a selection must not
+/// change the document's shape. Only a multi-selection needs them — a single
+/// one is the union box itself.
+fn selection_members(view: ShellView) -> List(ControlDesc) {
+  let members = view.selection_boxes
+  let count = list.length(members)
+  list.map(indices(member_pool), fn(index: Int) {
+    let #(x, y, w, h) = option.unwrap(at(members, index), #(0, 0, 0, 0))
+    node("member-" <> int.to_string(index), "panel", "", x, y, w, h)
+    |> with_class("campy-member")
+    |> shown(count > 1 && index < count)
+  })
+}
+
+/// The eight grips around the primary selection, and the module window's own
+/// corner grip. Both sets are always described and only shown or hidden: a
+/// selection must not change the document's *shape*, or every click would need
+/// a fresh `LoadUi` instead of a handful of geometry ops.
+fn grips(view: ShellView) -> List(ControlDesc) {
+  let #(sx, sy, sw, sh) = view.canvas_selection
+  let mx = sx + sw / 2
+  let my = sy + sh / 2
+  let selected = view.has_selection && view.selection_free
+  let #(form_w, form_h) = canvas_size(view.canvas)
+  [
+    grip("nw", sx, sy) |> shown(selected),
+    grip("n", mx, sy) |> shown(selected),
+    grip("ne", sx + sw, sy) |> shown(selected),
+    grip("w", sx, my) |> shown(selected),
+    grip("e", sx + sw, my) |> shown(selected),
+    grip("sw", sx, sy + sh) |> shown(selected),
+    grip("s", mx, sy + sh) |> shown(selected),
+    grip("se", sx + sw, sy + sh) |> shown(selected),
+    grip(
+      "window",
+      view.window_x + form_w,
+      view.window_y + form_title_height + form_h,
     )
-      |> with_class("campy-canvas-title"),
-    node(
-      "canvas-form",
-      "panel",
-      view.form_title,
-      view.window_x,
-      view.window_y + form_title_height,
-      form_w,
-      form_h,
-    )
-      |> with_class("campy-canvas-form")
-      |> with_props(form_props(view.canvas))
-      |> with_children(form_children),
-    node("selection-rect", "panel", "", sx, sy, sw, sh)
-      |> with_class("campy-selected")
-      |> shown(view.has_selection),
-    node("marquee-rect", "panel", "", mx, my, mw, mh)
-      |> with_class("campy-marquee")
-      |> shown(marquee),
-  ])
+      |> shown(!view.has_selection),
+  ]
+}
+
+fn indices(count: Int) -> List(Int) {
+  indices_from(0, count, [])
+}
+
+fn indices_from(index: Int, count: Int, acc: List(Int)) -> List(Int) {
+  case index >= count {
+    True -> list.reverse(acc)
+    False -> indices_from(index + 1, count, [index, ..acc])
+  }
+}
+
+fn grip(name: String, cx: Int, cy: Int) -> ControlDesc {
+  let half = grip_size / 2
+  node("grip-" <> name, "panel", "", cx - half, cy - half, grip_size, grip_size)
+  |> with_class(case name {
+    "window" -> "campy-grip campy-grip-window"
+    _ -> "campy-grip"
+  })
 }
 
 // The form root's layout props, so the renderer enters the form's own

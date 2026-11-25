@@ -493,7 +493,7 @@ pub fn control_hit_testing_prefers_the_topmost_test() {
 pub fn click_selects_on_release_test() {
   let down = state.pointer_down(demo_state(), 60, 240)
   down.gesture |> should.equal(state.Pressing(#(60, 240), "pet-button"))
-  let up = state.pointer_up(down, 60, 240)
+  let up = state.pointer_up(down, 60, 240, False)
   up.selected |> should.equal(Some("pet-button"))
   up.gesture |> should.equal(state.Idle)
 }
@@ -508,7 +508,7 @@ pub fn drag_from_selected_control_moves_it_test() {
   let assert Some(control) = state.selected_control(moved)
   control.x |> should.equal(84)
   control.y |> should.equal(276)
-  let released = state.pointer_up(moved, 100, 280)
+  let released = state.pointer_up(moved, 100, 280, False)
   released.gesture |> should.equal(state.Idle)
   let assert Some(after) = state.selected_control(released)
   after.x |> should.equal(84)
@@ -524,7 +524,7 @@ pub fn drag_from_unselected_control_marquees_test() {
   #(x, y, w, h) |> should.equal(#(60, 240, 30, 30))
   // Release selects the frame: both buttons sit inside (60,240)-(300,300).
   let released =
-    state.pointer_up(state.pointer_move(dragging, 300, 300), 300, 300)
+    state.pointer_up(state.pointer_move(dragging, 300, 300), 300, 300, False)
   list.length(released.selection) |> should.equal(2)
   list.contains(released.selection, "pet-button") |> should.be_true
   list.contains(released.selection, "feed-button") |> should.be_true
@@ -536,7 +536,7 @@ pub fn empty_canvas_click_clears_the_selection_test() {
   let released =
     model
     |> state.pointer_down(630, 410)
-    |> state.pointer_up(630, 410)
+    |> state.pointer_up(630, 410, False)
   released.selection |> should.equal([])
 }
 
@@ -546,7 +546,7 @@ pub fn palette_placement_follows_the_pointer_test() {
     armed
     |> state.pointer_down(300, 300)
     |> state.pointer_move(420, 340)
-    |> state.pointer_up(420, 340)
+    |> state.pointer_up(420, 340, False)
   let assert Some(control) = state.selected_control(placed)
   control.x |> should.equal(300)
   control.y |> should.equal(300)
@@ -562,7 +562,7 @@ pub fn window_title_drag_moves_the_module_window_test() {
     demo_state()
     |> state.pointer_down(100, -14)
     |> state.pointer_move(120, 6)
-    |> state.pointer_up(120, 6)
+    |> state.pointer_up(120, 6, False)
   state.window_position(moved) |> should.equal(#(52, 60))
 }
 
@@ -573,7 +573,7 @@ pub fn selection_edge_grip_resizes_the_control_test() {
     model
     |> state.pointer_down(184, 250)
     |> state.pointer_move(204, 250)
-    |> state.pointer_up(204, 250)
+    |> state.pointer_up(204, 250, False)
   let assert Some(control) = state.selected_control(resized)
   control.width |> should.equal(160)
 }
@@ -895,7 +895,7 @@ pub fn frame_selects_components_by_resize_handles_test() {
     |> state.set_rect_y(230)
     |> state.set_rect_w(300)
     |> state.set_rect_h(40)
-    |> state.select_frame
+    |> state.select_frame(False)
   list.length(framed.selection) |> should.equal(2)
   list.contains(framed.selection, "pet-button") |> should.be_true
   list.contains(framed.selection, "feed-button") |> should.be_true
@@ -908,7 +908,7 @@ pub fn frame_selects_components_by_resize_handles_test() {
     |> state.set_rect_y(248)
     |> state.set_rect_w(8)
     |> state.set_rect_h(8)
-    |> state.select_frame
+    |> state.select_frame(False)
   center_only.selection |> should.equal([])
 }
 
@@ -1860,4 +1860,72 @@ pub fn hover_hint_takes_and_restores_the_status_test() {
   // The settings dialog's "Show UI hints" gates it.
   let quiet = state.hover(state.set_hints(model, False), "ignored")
   quiet.status |> should.equal(model.status)
+}
+
+// ---------------------------------------------------------------------------
+// Designer selection: additive press, marquee extension, grips
+// ---------------------------------------------------------------------------
+
+pub fn a_modified_press_adds_and_removes_from_the_selection_test() {
+  let model = demo_state() |> state.select("pet-button")
+  // Ctrl-click on the other button adds it; the newest press is the primary.
+  let wider =
+    model
+    |> state.pointer_down(600, 500)
+    |> state.pointer_up(600, 500, True)
+  // (600,500) is empty canvas, so a modified press on nothing keeps the
+  // selection rather than clearing it.
+  list.length(wider.selection) |> should.equal(1)
+
+  let added =
+    model
+    |> state.pointer_down(266, 252)
+    |> state.pointer_up(266, 252, True)
+  added.selected |> should.equal(Some("feed-button"))
+  list.length(added.selection) |> should.equal(2)
+
+  // A second modified press takes it out again.
+  let removed =
+    added
+    |> state.pointer_down(266, 252)
+    |> state.pointer_up(266, 252, True)
+  list.length(removed.selection) |> should.equal(1)
+  removed.selected |> should.equal(Some("pet-button"))
+
+  // Without the modifier a press replaces the selection.
+  let replaced =
+    added
+    |> state.pointer_down(266, 252)
+    |> state.pointer_up(266, 252, False)
+  list.length(replaced.selection) |> should.equal(1)
+}
+
+pub fn a_modified_marquee_extends_the_selection_test() {
+  let model = demo_state() |> state.select("label-1")
+  let extended =
+    model
+    |> state.pointer_down(40, 230)
+    |> state.pointer_move(300, 300)
+    |> state.pointer_up(300, 300, True)
+  list.contains(extended.selection, "label-1") |> should.be_true
+  list.contains(extended.selection, "pet-button") |> should.be_true
+  list.length(extended.selection) |> should.equal(3)
+}
+
+pub fn grips_are_hit_tested_where_they_are_drawn_test() {
+  let model = demo_state() |> state.select("pet-button")
+  let assert Some(form) = state.active_form(model)
+  let assert Some(control) = state.selected_control(model)
+  // pet-button is (44,236,140,32); its east grip sits on the right edge's
+  // middle, which is where the shell draws a square of `grip_size`.
+  let #(x, y, w, h) = campy_form.bounds(form, control)
+  let resized =
+    model
+    |> state.pointer_down(x + w, y + h / 2)
+    |> state.pointer_move(x + w + 20, y + h / 2)
+    |> state.pointer_up(x + w + 20, y + h / 2, False)
+  let assert Some(after) = state.selected_control(resized)
+  after.width |> should.equal(w + 20)
+  // What is drawn is what is grabbable: one constant, two users.
+  shell.grip_size |> should.equal(state.resize_grip)
 }

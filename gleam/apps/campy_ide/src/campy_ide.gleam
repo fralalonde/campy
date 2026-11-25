@@ -120,6 +120,10 @@ fn debug_view(model: State) -> State {
 
     "code" -> state.set_view(model, state.CodeView)
     "select" -> state.select(model, "pet-button")
+    "multi" ->
+      state.select(model, "pet-button")
+      |> state.pointer_down(266, 252)
+      |> state.pointer_up(266, 252, True)
     "run" -> run_form(model)
     "events" -> state.set_tab(state.select(model, "pet-button"), state.Events)
     _ -> model
@@ -866,10 +870,21 @@ fn on_pointer(
           case form_point(model, payload) {
             None -> keep(model, submitted, accepted, last)
             Some(#(x, y)) -> {
+              // The payload is `x;y;button;mods`; Ctrl or Shift means "add to
+              // the selection" (components and marquee alike).
+              let additive = {
+                let mods = string.split(payload, ";") |> list.last
+                case mods {
+                  Ok(mods) ->
+                    string.contains(mods, "ctrl")
+                    || string.contains(mods, "shift")
+                  Error(_) -> False
+                }
+              }
               let next = case phase {
                 "down" -> state.pointer_down(model, x, y)
                 "move" -> state.pointer_move(model, x, y)
-                "up" -> state.pointer_up(model, x, y)
+                "up" -> state.pointer_up(model, x, y, additive)
                 _ -> model
               }
               advance(native, next, submitted, accepted, last)
@@ -1472,7 +1487,7 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "rect-y" -> state.set_rect_y(model, delta(payload))
     "rect-w" -> state.set_rect_w(model, delta(payload))
     "rect-h" -> state.set_rect_h(model, delta(payload))
-    "frame-apply" -> state.select_frame(model)
+    "frame-apply" -> state.select_frame(model, False)
     "place-apply" -> state.place_component(model)
     "cancel-place" -> state.cancel_pending(model)
     "toggle-hints" -> state.set_hints(model, payload == "true")

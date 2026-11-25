@@ -110,6 +110,7 @@ pub fn snapshot(model: State) -> Snapshot {
     events_tab: is_events_tab(model),
     hints: model.hints,
     has_selection: !list.is_empty(model.selection),
+    selection_free: selection_free(model),
     selection_label: selection_label(model),
     can_delete_project: list.length(model.workspace.projects) > 1,
     has_project_icon: model.project.icon != "",
@@ -147,6 +148,7 @@ pub fn snapshot(model: State) -> Snapshot {
     controls: controls(model),
     canvas: canvas(model),
     canvas_selection: canvas_selection(model),
+    selection_boxes: selection_boxes(model),
     canvas_marquee: canvas_marquee(model),
     props: prop_items(model),
     events: event_items(model),
@@ -258,6 +260,17 @@ fn item_list(control: campy_form.Control) -> List(String) {
   |> list.filter(fn(item) { item != "" })
 }
 
+/// Whether the primary selection can be resized by its grips: its parent has
+/// to lay its children out itself, the same test `state.grip_at` makes.
+fn selection_free(model: State) -> Bool {
+  case state.selected_control(model), active_form(model) {
+    Some(control), Some(form) ->
+      campy_form.layout_of(form, campy_form.parent_of(form, control.id))
+      == campy_form.Free
+    _, _ -> False
+  }
+}
+
 // The selection outline in canvas coordinates (form window offset + borders).
 fn canvas_selection(model: State) -> #(Int, Int, Int, Int) {
   case active_form(model) {
@@ -276,6 +289,26 @@ fn canvas_selection(model: State) -> #(Int, Int, Int, Int) {
           }
         })
       union_boxes(boxes)
+    }
+  }
+}
+
+/// The box of every selected control, in canvas coordinates.
+fn selection_boxes(model: State) -> List(#(Int, Int, Int, Int)) {
+  case active_form(model) {
+    None -> []
+    Some(form) -> {
+      let #(window_x, window_y) = state.window_position(model)
+      model.selection
+      |> list.filter_map(fn(id) {
+        case campy_form.find_control(form, id) {
+          Some(control) -> {
+            let #(x, y, w, h) = campy_form.bounds(form, control)
+            Ok(#(window_x + x, window_y + 28 + y, w, h))
+          }
+          None -> Error(Nil)
+        }
+      })
     }
   }
 }
