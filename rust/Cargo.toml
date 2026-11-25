@@ -21,3 +21,30 @@ zgui = { git = "https://github.com/zortax/zgui" }
 zgui-ui = { git = "https://github.com/zortax/zgui" }
 zgui-editor = { git = "https://github.com/zortax/zgui-editor" }
 zgui-terminal = { git = "https://github.com/zortax/zgui-terminal" }
+
+# Measured on the whole stack (zgui + wgpu + vello + stylo + parley). Every
+# dependency is in here, so the artifact is dominated by them; these are the
+# levers that only cost build time.
+#
+# dev: full DWARF for ~250 crates made a 780 MB .so, relinked on every Rust
+# change. Line tables keep the backtraces that matter (the file and line of a
+# panic) for 276 MB. `debug = false` would reach ~70 MB and lose them.
+[profile.dev]
+debug = "line-tables-only"
+
+# The bridge ships as one .so inside a Gleam package (`just package`).
+#
+#   55.9 MB  default release (16 MB of it .symtab/.strtab)
+#   39.7 MB  + strip = "symbols"
+#   34.8 MB  + lto = "thin", codegen-units = 1        (2m24 to build)
+#   31.0 MB  + lto = "fat"                           (4m23 to build)
+#
+# Only `just build-rust-release` / `just package` pay the build time; the dev
+# loop is untouched. `panic = "abort"` is deliberately absent: the UI thread
+# catches panics to report them instead of taking the VM down with it.
+# `opt-level = "s"` would go lower still and is not used: the frame loop is the
+# thing it would slow down.
+[profile.release]
+strip = "symbols"
+lto = "fat"
+codegen-units = 1

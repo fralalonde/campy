@@ -73,6 +73,19 @@ loaded BEAM code is not rolled back. Full transactional behavior is M3.
 
 - `campy_ui`: pure description/validation/generation; no NIF dependency.
 - `campy_search_box`: depends on `campy_ui`; portable component implementation.
+
+## The bridge artifact
+
+`campy_bridge` is the whole native stack — windowing, wgpu, the vector
+rasteriser, the style engine, the text stack, the editor and the terminal —
+built into one `.so` that the Gleam package loads as a NIF. A release build is
+31 MB (`strip = "symbols"`, `lto = "fat"`, `codegen-units = 1`); the same build
+without those is 56 MB, of which 16 MB is symbol tables. The size is
+dependency-bound: `cargo bloat --release -p campy-bridge --crates` puts the
+style engine at 4.4 MB, std at 2.3, naga at 1.5, the runtime at 1.4, zbus at
+1.2 and wgpu's core at 1.1, over ~250 crates. Unlike the artifact, a debug NIF
+carries line tables only (`debug = "line-tables-only"`, 276 MB rather than
+780 MB) so a Rust change does not relink a quarter of a gigabyte of DWARF.
 - `campy_runtime`: lifecycle, generation, and future state/effect coordination.
 - `campy_bridge`: sole owner of Gleam native externals.
 - `campy_ide`: composes packages and runs the application.
