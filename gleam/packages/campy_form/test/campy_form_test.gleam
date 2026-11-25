@@ -1,6 +1,4 @@
-import campy_bridge.{WireImage, WireInt, WireText}
 import campy_form
-import campy_form/live_preview
 import campy_form/project
 import campy_form/syntax
 import campy_form/workspace

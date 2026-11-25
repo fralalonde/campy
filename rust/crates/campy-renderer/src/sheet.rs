@@ -21,7 +21,71 @@ pub const CAMPY_SHEET: &str = css!(
               --campy-hover: #e9ebf0; --campy-text: #1b1d23; --campy-muted: #6b7280;
               --campy-border: #d8dbe2; --campy-accent: #356df3; --campy-accent-soft: #e3ebff;
               --campy-ok: #2f8a55; --campy-danger: #b4454f; }",
-    ".campy-dark { --campy-bg: #101114; --campy-panel: #17191e; --campy-raised: #1e2128;
+    // zgui-ui, the terminal and the editor each carry their own custom
+    // properties. Flipping only our own tokens leaves those controls in the
+    // theme they were written for (a dark console in a light window), so each
+    // theme sets theirs too — the app's theme is the one theme.
+    ".campy-dark {
+        --zui-color-background: #17191e; --zui-color-foreground: #e6e8ee;
+        --zui-color-card: #17191e; --zui-color-popover: #1e2128;
+        --zui-color-primary: #5b8cff; --zui-color-primary-foreground: #ffffff;
+        --zui-color-secondary: #262a33; --zui-color-secondary-foreground: #e6e8ee;
+        --zui-color-muted: #1e2128; --zui-color-muted-foreground: #8b93a3;
+        --zui-color-accent: #22304d; --zui-color-accent-foreground: #e6e8ee;
+        --zui-color-border: #282c35; --zui-color-input: #282c35;
+        --zui-color-ring: #5b8cff; --zui-color-destructive: #c05a64;
+        --terminal-background: #101114; --terminal-selection: #22304d;
+        --terminal-cursor: #5b8cff; --terminal-cursor-text: #101114;
+        --terminal-black: #101114; --terminal-bright-black: #8b93a3;
+        --terminal-white: #e6e8ee; --terminal-bright-white: #ffffff;
+        --terminal-red: #e06c75; --terminal-bright-red: #ef7c86;
+        --terminal-green: #98c379; --terminal-bright-green: #a9d18a;
+        --terminal-yellow: #e5c07b; --terminal-bright-yellow: #f0cf8e;
+        --terminal-blue: #61afef; --terminal-bright-blue: #7cc0ff;
+        --terminal-magenta: #c678dd; --terminal-bright-magenta: #d795e8;
+        --terminal-cyan: #56b6c2; --terminal-bright-cyan: #6fd0dc;
+        --editor-current-line: #1e2128; --editor-selection: #22304d;
+        --editor-cursor: #5b8cff; --editor-cursor-text: #101114;
+        --editor-gutter-fg: #6b7280; --editor-gutter-current-fg: #e6e8ee;
+        --editor-scrollbar-thumb: #3a3f4b;
+        --syntax-comment: #7f8b99; --syntax-keyword: #7aa2f7;
+        --syntax-string: #9ece6a; --syntax-number: #e5c07b;
+        --syntax-type: #2ac3de; --syntax-function: #7dcfff;
+        --syntax-variable: #e6e8ee; --syntax-constant: #ff9e64;
+        --syntax-operator: #89ddff; --syntax-punctuation: #8b93a3;
+        --syntax-property: #73daca; --syntax-attribute: #bb9af7;
+     }
+     .campy-light {
+        --zui-color-background: #ffffff; --zui-color-foreground: #1b1d23;
+        --zui-color-card: #ffffff; --zui-color-popover: #ffffff;
+        --zui-color-primary: #356df3; --zui-color-primary-foreground: #ffffff;
+        --zui-color-secondary: #eceef3; --zui-color-secondary-foreground: #1b1d23;
+        --zui-color-muted: #f6f7f9; --zui-color-muted-foreground: #6b7280;
+        --zui-color-accent: #e3ebff; --zui-color-accent-foreground: #1b1d23;
+        --zui-color-border: #d8dbe2; --zui-color-input: #d8dbe2;
+        --zui-color-ring: #356df3; --zui-color-destructive: #b4454f;
+        --terminal-background: #ffffff; --terminal-selection: #e3ebff;
+        --terminal-cursor: #356df3; --terminal-cursor-text: #ffffff;
+        --terminal-black: #1b1d23; --terminal-bright-black: #6b7280;
+        --terminal-white: #f6f7f9; --terminal-bright-white: #ffffff;
+        --terminal-red: #b4454f; --terminal-bright-red: #cf5a64;
+        --terminal-green: #2f8a55; --terminal-bright-green: #3da868;
+        --terminal-yellow: #a16207; --terminal-bright-yellow: #c07d10;
+        --terminal-blue: #356df3; --terminal-bright-blue: #4d80ff;
+        --terminal-magenta: #9d4edd; --terminal-bright-magenta: #b06ef0;
+        --terminal-cyan: #1f7f8c; --terminal-bright-cyan: #2a99a8;
+        --editor-current-line: #f2f4f8; --editor-selection: #e3ebff;
+        --editor-cursor: #356df3; --editor-cursor-text: #ffffff;
+        --editor-gutter-fg: #9aa1ad; --editor-gutter-current-fg: #1b1d23;
+        --editor-scrollbar-thumb: #c9cdd6;
+        --syntax-comment: #6b7280; --syntax-keyword: #7c3aed;
+        --syntax-string: #2f8a55; --syntax-number: #a16207;
+        --syntax-type: #0e7490; --syntax-function: #1d4ed8;
+        --syntax-variable: #1b1d23; --syntax-constant: #b45309;
+        --syntax-operator: #0e7490; --syntax-punctuation: #6b7280;
+        --syntax-property: #0f766e; --syntax-attribute: #9d4edd;
+     }
+     .campy-dark { --campy-bg: #101114; --campy-panel: #17191e; --campy-raised: #1e2128;
                    --campy-hover: #262a33; --campy-text: #e6e8ee; --campy-muted: #8b93a3;
                    --campy-border: #282c35; --campy-accent: #5b8cff;
                    --campy-accent-soft: #22304d; --campy-ok: #3f9d63;
@@ -208,8 +272,8 @@ pub const CAMPY_SHEET: &str = css!(
     // --- console and editor -------------------------------------------------
     ".campy-console { padding: 4px 10px; font-family: 'Adwaita Mono',
                       'Iosevka Nerd Font', monospace; font-size: 12px;
-                      background: var(--campy-bg); color: var(--campy-text);
-                      overflow: auto; }",
+                      background: var(--terminal-background);
+                      color: var(--campy-text); overflow: auto; }",
     ".campy-console-title { font-weight: 600; }",
     ".campy-console-state { color: var(--campy-muted); font-size: 12px; }",
     ".campy-editor { font-family: 'Adwaita Mono', 'Iosevka Nerd Font', monospace; }",

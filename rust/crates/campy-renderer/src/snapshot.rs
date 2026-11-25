@@ -245,7 +245,7 @@ fn write_png(path: &Path, pixels: &Pixels) -> Result<(), String> {
     // alpha is opaque, which is every pixel of a normal window).
     let mut rgba = Vec::with_capacity(bytes.len());
     let bgra = pixels.is_bgra();
-    for pixel in bytes.chunks_exact(4) {
+    for pixel in bytes.as_chunks::<4>().0 {
         let (r, b) = if bgra {
             (pixel[2], pixel[0])
         } else {

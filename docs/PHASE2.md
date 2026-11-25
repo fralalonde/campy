@@ -638,6 +638,39 @@ Grips, member outlines and the window grip are fixed pools toggled with
 `visible`: a selection must not change the document's *shape*, or every
 click would need a fresh `LoadUi` instead of a few geometry ops.
 
+**Idle cost, keyboard and theme (after the first live pass).** The drain
+ran on an 8 ms `set_interval`, which is a frame per tick: 125 fps on an
+idle IDE, a caret that blinked at 125 Hz, and a core burnt doing nothing.
+The queue now *wakes* the window instead — a counter written by the BEAM
+(and by a close) plus the event loop's own proxy — the window's size
+arrives on its own signal, and a full drain batch re-arms itself. An idle
+IDE draws no frames at all.
+
+Keys were dead unless a field had been clicked, because the shell's key
+handler sits on an element nothing focused. The root now registers as a
+window shortcut (it hears unfocused keys), and a focused text control
+marks itself so the keys that edit text (Ctrl+C/X/V, Delete, arrows)
+stay with it. That is what makes Ctrl+C/X/V (component clipboard), F5/F6/
+F7, Ctrl+S/O/N/Q, Ctrl+Z/Y and Escape work at all.
+
+"Update running app" (F6/F7) showed nothing because the host a swap
+installs is built in the command drain, outside any window scope: its
+`document` was a scope-owned `new_local` signal, disposed before the new
+window built its child. The document and the validation tick are now
+`ArcRwSignal`s, so a replacement window renders the document it was
+handed.
+
+The theme changed our own tokens only, which left the console, the
+editor and every zgui-ui control in the theme they were written for (a
+dark console in a light window). Both themes now also set
+`--zui-color-*`, `--terminal-*`, `--editor-*` and `--syntax-*`.
+
+Console lines now end with CRLF: a terminal moves down on LF and keeps
+the column, so every entry started where the previous one ended.
+
+`CAMPY_UI_DEBUG_VIEW` values for a validation run: `settings`, `code`,
+`select`, `multi`, `light`, `run`, `run-update`.
+
 **G1 manual-pass checklist** (run `just run` on a live desktop; every
 line must pass or become a filed punch item):
 

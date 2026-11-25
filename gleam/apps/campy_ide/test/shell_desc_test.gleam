@@ -349,7 +349,7 @@ pub fn console_delta_appends_only_new_lines_test() {
   let next =
     view_with(fn(view) { shell.ShellView(..view, console_lines: ["a", "b"]) })
   ide_ui.ops(previous, next)
-  |> should.equal([ide_ui.AppendConsole(campy_form.wire_id("console"), "b\n")])
+  |> should.equal([ide_ui.AppendConsole(campy_form.wire_id("console"), "b\r\n")])
   // A reset clears the terminal first (ANSI clear, then the full log).
   ide_ui.ops(
     view_with(fn(view) { shell.ShellView(..view, console_lines: ["a"]) }),
@@ -358,7 +358,7 @@ pub fn console_delta_appends_only_new_lines_test() {
   |> should.equal([
     ide_ui.AppendConsole(
       campy_form.wire_id("console"),
-      "\u{1b}[2J\u{1b}[H" <> "z\n",
+      "\u{1b}[2J\u{1b}[H" <> "z\r\n",
     ),
   ])
 }

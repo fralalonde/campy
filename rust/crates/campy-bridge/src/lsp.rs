@@ -37,12 +37,12 @@ fn stop(resource: &LspResource) {
 }
 
 fn send_frame(writer: &Arc<Mutex<Option<ChildStdin>>>, body: &str) {
-    if let Ok(mut guard) = writer.lock() {
-        if let Some(stdin) = guard.as_mut() {
-            let frame = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
-            let _ = stdin.write_all(frame.as_bytes());
-            let _ = stdin.flush();
-        }
+    if let Ok(mut guard) = writer.lock()
+        && let Some(stdin) = guard.as_mut()
+    {
+        let frame = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+        let _ = stdin.write_all(frame.as_bytes());
+        let _ = stdin.flush();
     }
 }
 
@@ -81,7 +81,7 @@ fn completion_kind(kind: Option<u64>) -> String {
 }
 
 fn clean(text: &str) -> String {
-    text.replace(FIELD, " ").replace(ROW, " ")
+    text.replace([FIELD, ROW], " ")
 }
 
 fn completion_payload(items: &[serde_json::Value]) -> String {
@@ -199,17 +199,14 @@ fn read_loop(
             continue;
         };
         if let Some(method) = message.get("method").and_then(|v| v.as_str()) {
-            match method {
-                "textDocument/publishDiagnostics" => {
-                    let diagnostics = message
-                        .get("params")
-                        .and_then(|params| params.get("diagnostics"))
-                        .and_then(|value| value.as_array())
-                        .cloned()
-                        .unwrap_or_default();
-                    forward(owner, "lsp:diagnostics", diagnostics_payload(&diagnostics));
-                }
-                _ => {}
+            if method == "textDocument/publishDiagnostics" {
+                let diagnostics = message
+                    .get("params")
+                    .and_then(|params| params.get("diagnostics"))
+                    .and_then(|value| value.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                forward(owner, "lsp:diagnostics", diagnostics_payload(&diagnostics));
             }
             continue;
         }

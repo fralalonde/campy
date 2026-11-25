@@ -66,13 +66,16 @@ pub fn main() {
 fn native_main() {
   let assert 2 = bridge.protocol_version()
   let #(workspace, note) = open_workspace()
-  let model = state.initial_workspace(workspace) |> debug_view()
+  let model = state.initial_workspace(workspace)
   let model = case note {
     "" -> model
     text -> state.log_console(model, text) |> state.set_status(text)
   }
   let assert Ok(native) = bridge.open_session()
   let assert Ok(session) = bridge.session_id(native)
+  // The debug view runs after the IDE has claimed its session: a knob that
+  // starts a preview must not take the initial session id for itself.
+  let model = debug_view(model)
   // The handler-code language server starts with the IDE; failures degrade
   // gracefully (Campy's own completion items still work).
   let _ = case bridge.lsp_start(".") {
@@ -119,12 +122,15 @@ fn debug_view(model: State) -> State {
     "settings" -> state.set_settings_open(model, True)
 
     "code" -> state.set_view(model, state.CodeView)
+    "light" -> state.set_scheme(model, state.Light)
     "select" -> state.select(model, "pet-button")
     "multi" ->
       state.select(model, "pet-button")
       |> state.pointer_down(266, 252)
       |> state.pointer_up(266, 252, True)
     "run" -> run_form(model)
+    // Run, then update the running app once: the F7 path end to end.
+    "run-update" -> update_app(run_form(model))
     "events" -> state.set_tab(state.select(model, "pet-button"), state.Events)
     _ -> model
   }

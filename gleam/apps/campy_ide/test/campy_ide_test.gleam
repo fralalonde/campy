@@ -1030,7 +1030,9 @@ pub fn console_logs_and_clears_test() {
   ops
   |> list.any(fn(op) {
     case op {
-      ide_ui.AppendConsole(id, "hello\nworld\n") ->
+      // Each line carries its carriage return: a terminal moves down on LF
+      // but keeps the column.
+      ide_ui.AppendConsole(id, "hello\r\nworld\r\n") ->
         id == shell.section_id("console")
       _ -> False
     }

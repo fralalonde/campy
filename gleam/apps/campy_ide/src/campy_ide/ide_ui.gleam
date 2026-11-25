@@ -1149,11 +1149,17 @@ fn console_ops(previous: Snapshot, next: Snapshot) -> List(UiOp) {
           let fresh = list.drop(lines, list.length(previous.console_lines))
           case fresh {
             [] -> []
-            _ -> [AppendConsole(id, string.join(fresh, "\n") <> "\n")]
+            // A terminal moves down on LF but keeps the column: each line
+            // needs its carriage return, or every entry starts where the
+            // previous one ended.
+            _ -> [AppendConsole(id, string.join(fresh, "\r\n") <> "\r\n")]
           }
         }
         False -> [
-          AppendConsole(id, clear_console() <> string.join(lines, "\n") <> "\n"),
+          AppendConsole(
+            id,
+            clear_console() <> string.join(lines, "\r\n") <> "\r\n",
+          ),
         ]
       }
   }

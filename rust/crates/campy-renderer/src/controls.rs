@@ -13,8 +13,8 @@ use std::sync::Arc;
 use zgui::elements::{r#box, text};
 use zgui::geom::{Css, CssPx, Point};
 use zgui::prelude::*;
-use zgui::view::{AnyView, AttrName, ClassName, events};
-use zgui::vocab::{Key, KeyEvent, Modifiers, NamedKey};
+use zgui::view::{AnyView, AttrName, ClassName, NodeRef, WindowShortcut, events};
+use zgui::vocab::{Key, KeyEvent, Modifiers};
 use zgui_editor::{
     Decoration, EditorEvent, EditorHandle, EditorProps, LanguageConfig, LanguageRegistry,
     UnderlineStyle,
@@ -41,8 +41,11 @@ pub struct Host {
     /// Set at registration; a placeholder until then (initial window).
     sink: RefCell<EventSink>,
     /// The current UI document; `LoadUi` writes it and the window's
-    /// reactive hole rebuilds incrementally.
-    pub document: RwSignal<Option<UiDocument>, LocalStorage>,
+    /// reactive hole rebuilds incrementally. Reference-counted rather than
+    /// scope-owned: a host swapped in by a deferred load is built in the
+    /// command drain, outside any window's scope, and a `new_local` signal
+    /// made there is disposed before the window it belongs to is built.
+    pub document: zgui::reactive::ArcRwSignal<Option<UiDocument>>,
     /// Live per-control signals, refilled on every document build.
     pub controls: RefCell<HashMap<u64, ControlSignals>>,
     /// Live editor handles (`memo` / `code_editor` kinds).
@@ -86,24 +89,45 @@ pub struct Host {
     /// user: its close hook must not close the session the replacement took
     /// over (the control is shared).
     pub window_swapped: Cell<bool>,
-    /// The command-drain interval for this session's window. Re-created
-    /// on every document rebuild: the reactive hole cleans the scope a
-    /// run's timer lives in, so each run arms its own (the chain is
-    /// self-sustaining: a rebuild only happens when a drain tick applied
-    /// a LoadUi).
-    pub drain_timer: RefCell<Option<zgui::view::time::IntervalHandle>>,
+    /// How many text-editing controls hold the focus. Editing keys (Ctrl+C/X/V,
+    /// Delete) belong to the field while it does, not to the designer.
+    pub text_focused: Cell<u32>,
+    /// Whether this host's view has finished its first build. A document that
+    /// arrives before that is loaded into the window being built (its dynamic
+    /// child reads it); one that arrives after needs a swap, which is the
+    /// deferred-window path ADR 0003 records.
+    pub view_built: Cell<bool>,
+    /// Whether the current document's controls have been built and registered.
+    /// Commands that address a control wait for this instead of failing with
+    /// "unknown control" against the window that is still mounting.
+    pub document_ready: Cell<bool>,
+    /// The effect that drains the queue when the BEAM hands the window work.
+    /// Kept so the reactive scope owns it for the window's lifetime.
+    pub work_effect: RefCell<Option<zgui::reactive::RenderEffect<()>>>,
+    /// The effect that reports the window's size as it changes.
+    pub size_effect: RefCell<Option<zgui::reactive::RenderEffect<()>>>,
+    /// Armed only in a screenshot run: an idle window draws no frames, and a
+    /// frame is what the snapshot is taken from.
+    pub validation_tick: zgui::reactive::ArcRwSignal<u64>,
+    pub validation_interval: RefCell<Option<zgui::view::time::IntervalHandle>>,
+    /// Whether the wake model is in use (see `sessions::report_size`).
+    pub shared: std::sync::Arc<crate::sessions::Shared>,
     /// The NIF-visible session flag (close reasons ride it, v1 rule:
     /// cleanup survives a full queue).
     pub(crate) control: RefCell<Option<std::sync::Arc<crate::sessions::Control>>>,
 }
 
 impl Host {
-    pub fn new(session: u64, sink: EventSink) -> Rc<Self> {
+    pub fn new(
+        session: u64,
+        sink: EventSink,
+        shared: std::sync::Arc<crate::sessions::Shared>,
+    ) -> Rc<Self> {
         Rc::new(Self {
             session,
             generation: Cell::new(0),
             sink: RefCell::new(sink),
-            document: RwSignal::new_local(None),
+            document: zgui::reactive::ArcRwSignal::new(None),
             controls: RefCell::new(HashMap::new()),
             editors: RefCell::new(HashMap::new()),
             consoles: RefCell::new(HashMap::new()),
@@ -119,7 +143,14 @@ impl Host {
             popup_debugged: Cell::new(false),
             last_size: Cell::new((0, 0)),
             window_swapped: Cell::new(false),
-            drain_timer: RefCell::new(None),
+            text_focused: Cell::new(0),
+            view_built: Cell::new(false),
+            document_ready: Cell::new(false),
+            work_effect: RefCell::new(None),
+            size_effect: RefCell::new(None),
+            validation_tick: zgui::reactive::ArcRwSignal::new(0),
+            validation_interval: RefCell::new(None),
+            shared,
             control: RefCell::new(None),
         })
     }
@@ -280,10 +311,7 @@ pub fn item_text(items: &[PropValue], index: usize) -> String {
                 .find(|(name, _)| name == "text")
                 .and_then(|(_, value)| value.text().map(str::to_owned))
                 .unwrap_or_default(),
-            other => {
-                let text = crate::wire::prop_value_text(other);
-                text
-            }
+            other => crate::wire::prop_value_text(other),
         })
         .unwrap_or_default()
 }
@@ -314,6 +342,13 @@ fn px(value: f64) -> String {
 /// Builds the whole window document: the themed root plus one wrapper per
 /// top-level control.
 pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
+    if std::env::var_os("CAMPY_UI_TRACE").is_some() {
+        eprintln!(
+            "campy build_document theme={} roots={}",
+            doc.theme,
+            doc.controls.len()
+        );
+    }
     // The popup's signal belongs to this build (and so to the window), which is
     // what keeps it alive across a window swap: the host itself may not be.
     *host.popup_tick.borrow_mut() = Some(RwSignal::new_local(0_u64));
@@ -346,12 +381,31 @@ pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
     let popup_host = host.clone();
     let key_host = host.clone();
     let close_host = host.clone();
+    // Keys belong to the window, not to whatever happens to have focus: without
+    // this registration the shell has no keyboard at all until a field is
+    // clicked, which is why every shortcut was dead.
+    let anchor = NodeRef::new();
+    let shortcut_anchor = anchor;
+    let registration =
+        zgui::reactive::RenderEffect::new(move |previous: Option<Option<WindowShortcut>>| {
+            drop(previous);
+            shortcut_anchor.get();
+            shortcut_anchor.window_shortcut()
+        });
+    zgui::reactive::on_cleanup_local(move || drop(registration));
     let root = r#box()
+        .node_ref(anchor)
         .class("campy-root")
         .class("campy-free")
         .on(events::KEY_DOWN, move |cx| {
             let event: &KeyEvent = cx;
             if let Some(combo) = key_combo(&event.key_without_modifiers, cx.modifiers) {
+                // While a field is being typed into, the keys that edit it stay
+                // with it. Everything else (function keys, Escape, the combos
+                // the field does not use) still reaches the shell.
+                if key_host.text_focused.get() > 0 && editing_combo(&combo) {
+                    return;
+                }
                 if pointer_log() {
                     eprintln!("key {combo}");
                 }
@@ -578,9 +632,9 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
     };
     host.controls.borrow_mut().insert(desc.id, signals.clone());
 
-    let rect = signals.rect.clone();
-    let enabled = signals.enabled.clone();
-    let visible = signals.visible.clone();
+    let rect = signals.rect;
+    let enabled = signals.enabled;
+    let visible = signals.visible;
     // The shell's own styling hooks: every `class` prop on the description
     // (one per `with_class` call, whitespace-separated within one) lands on
     // the wrapper, beside the `campy-<kind>` class the widget layer uses.
@@ -620,6 +674,26 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
             })
             .on(events::POINTER_LEAVE, move |_| {
                 leave_host.emit_raw("hover", "")
+            });
+    }
+
+    // A control that takes typing says so, so the window's key handler leaves
+    // its editing keys alone.
+    if matches!(
+        desc.kind.as_str(),
+        "edit" | "memo" | "code_editor" | "console"
+    ) {
+        let focus_host = host.clone();
+        let blur_host = host.clone();
+        wrapper = wrapper
+            .on(events::FOCUS_IN, move |_| {
+                focus_host
+                    .text_focused
+                    .set(focus_host.text_focused.get() + 1)
+            })
+            .on(events::FOCUS_OUT, move |_| {
+                let held = blur_host.text_focused.get();
+                blur_host.text_focused.set(held.saturating_sub(1));
             });
     }
 
@@ -699,6 +773,28 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
     }
 }
 
+/// The combos a focused text field owns: they move text, not components.
+fn editing_combo(combo: &str) -> bool {
+    matches!(
+        combo,
+        "ctrl+c"
+            | "ctrl+x"
+            | "ctrl+v"
+            | "ctrl+z"
+            | "ctrl+y"
+            | "ctrl+shift+z"
+            | "ctrl+a"
+            | "delete"
+            | "backspace"
+            | "left"
+            | "right"
+            | "up"
+            | "down"
+            | "home"
+            | "end"
+    )
+}
+
 /// Whether pointer phases are logged (`CAMPY_POINTER_LOG`), read once.
 fn pointer_log() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -718,7 +814,7 @@ fn wheel_delta(event: &zgui::vocab::WheelEvent) -> (f64, f64) {
 fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyView {
     let id = desc.id;
     let host = host.clone();
-    let text = signals.text.clone();
+    let text = signals.text;
     match desc.kind.as_str() {
         "label" => AnyView::new(text_element(move || text.get())),
 
@@ -769,7 +865,7 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         }
 
         "checkbox" | "radio" => {
-            let checked = signals.checked.clone();
+            let checked = signals.checked;
             AnyView::new(
                 zgui::elements::row()
                     .class("campy-check-row")
@@ -792,7 +888,7 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
             // a row emits `selected` with the option text and a press outside
             // closes it.
             let open = host.clone();
-            let value = text.clone();
+            let value = text;
             AnyView::new(
                 zgui::elements::control()
                     .class("campy-widget-button")
@@ -812,7 +908,7 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         }
 
         "list" => {
-            let model = signals.model.clone();
+            let model = signals.model;
             let list_host = host.clone();
             AnyView::new(view! {
                 VirtualList(
@@ -842,7 +938,7 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         }
 
         "slider" => {
-            let value = signals.value.clone();
+            let value = signals.value;
             let minimum = desc
                 .prop("minimum")
                 .and_then(PropValue::number)
@@ -863,7 +959,7 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         }
 
         "progress" => {
-            let progress = signals.progress.clone();
+            let progress = signals.progress;
             let maximum = desc
                 .prop("maximum")
                 .and_then(PropValue::number)
@@ -902,14 +998,13 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
                         ready_host.editors.borrow_mut().insert(id, handle);
                     }) as Box<dyn Fn(EditorHandle)>,
                     on_event = Box::new(move |event: EditorEvent| {
-                        if let EditorEvent::Edited { .. } = event {
-                            if let Some(handle) = handle_slot.borrow().as_ref() {
+                        if let EditorEvent::Edited { .. } = event
+                            && let Some(handle) = handle_slot.borrow().as_ref() {
                                 event_host.emit_raw(
                                     &format!("editor:{id}:changed"),
                                     handle.query(|snapshot| snapshot.rope().to_string()),
                                 );
                             }
-                        }
                     }) as Box<dyn Fn(EditorEvent)>,
                     class = "campy-editor",
                 ) {}
@@ -963,19 +1058,6 @@ fn text_element(
     value: impl Fn() -> String + 'static,
 ) -> zgui::elements::Element<zgui::elements::Text> {
     text().child(value)
-}
-
-fn view_row(label: String) -> zgui::elements::Element<zgui::elements::Box_> {
-    r#box().class("campy-list-row").child(label)
-}
-
-fn options(model: RwSignal<Vec<PropValue>, LocalStorage>, class: &str) -> AnyView {
-    let items = model.get();
-    let mut column = zgui::elements::column().class(class);
-    for (index, _item) in items.iter().enumerate() {
-        column = column.child(view_row(item_text(&items, index)));
-    }
-    AnyView::new(column)
 }
 
 /// The application's language registry: the bundled set plus the Gleam

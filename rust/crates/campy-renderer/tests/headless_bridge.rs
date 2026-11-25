@@ -227,6 +227,27 @@ fn loads_updates_clicks_reads_and_rejects() {
         "the menu emitted the item's label"
     );
 
+    // The window hears keys with nothing focused: a shortcut is an app key,
+    // not a key of whatever control happens to hold the caret. Without the
+    // window-shortcut registration, every shortcut (Ctrl+S, F6, Ctrl+C) was
+    // dead unless a field had been clicked first.
+    testing::test_key("f6", false, false).expect("the key is enqueued");
+    testing::test_pump(32).expect("a pump is enqueued");
+    wait_for(&sink, 1, "key");
+    assert_eq!(
+        events_of(&sink, "key"),
+        vec!["key f6".to_owned()],
+        "an unfocused shortcut reached the loop"
+    );
+    testing::test_key("s", true, false).expect("the key is enqueued");
+    testing::test_pump(32).expect("a pump is enqueued");
+    wait_for(&sink, 2, "key");
+    assert_eq!(
+        events_of(&sink, "key").last().map(String::as_str),
+        Some("key ctrl+s"),
+        "the modified shortcut reached the loop"
+    );
+
     // Stale generations are rejected; the UI keeps running.
     session
         .submit(Command {
