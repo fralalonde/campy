@@ -1993,3 +1993,18 @@ pub fn a_rejected_field_value_does_not_open_a_step_test() {
   let assert Some(old) = state.selected_control(back)
   old.name |> should.equal("pet_button")
 }
+
+pub fn wire_coordinates_parse_as_whole_pixels_test() {
+  // The renderer writes whole CSS pixels. Erlang's `float.parse` rejects `376`
+  // — a float needs its point — and a coordinate that failed to parse used to
+  // read as zero, which put every press in a real window at the form's
+  // top-left instead of under the pointer.
+  campy_ide.pixel("376") |> should.equal(376)
+  campy_ide.pixel("0") |> should.equal(0)
+  campy_ide.pixel(" 42 ") |> should.equal(42)
+  campy_ide.pixel("-7") |> should.equal(-7)
+  // A decimal payload is still understood.
+  campy_ide.pixel("376.4") |> should.equal(376)
+  campy_ide.pixel("376.6") |> should.equal(377)
+  campy_ide.pixel("") |> should.equal(0)
+}

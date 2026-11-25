@@ -950,7 +950,9 @@ fn on_pointer(
               }
               let next = case phase {
                 "down" -> state.pointer_down(model, x, y)
-                "move" -> state.pointer_move(model, x, y)
+                // The form editor also owns hovering: the components inside the
+                // canvas are passive, so their own enter/leave never fires.
+                "move" -> hover_under(model |> state.pointer_move(x, y), x, y)
                 "up" -> state.pointer_up(model, x, y, additive)
                 _ -> model
               }
@@ -959,6 +961,28 @@ fn on_pointer(
           }
       }
     _ -> keep(model, submitted, accepted, last)
+  }
+}
+
+/// The hint of the component under the pointer, for the status line. A drag in
+/// progress keeps its own status (the gesture explains itself); only a plain
+/// hover reports a component's hint.
+fn hover_under(model: State, x: Int, y: Int) -> State {
+  case model.gesture {
+    state.Idle ->
+      case state.active_module(model) {
+        Some(module) ->
+          state.hover(model, case state.control_at(module.form, x, y) {
+            Some(control) ->
+              case list.find(control.props, fn(prop) { prop.0 == "hint" }) {
+                Ok(#(_, hint)) -> hint
+                Error(_) -> ""
+              }
+            None -> ""
+          })
+        None -> model
+      }
+    _ -> model
   }
 }
 
@@ -990,10 +1014,18 @@ fn window_size(payload: String) -> #(Int, Int) {
   }
 }
 
-fn pixel(text: String) -> Int {
-  case float.parse(text) {
-    Ok(value) -> float.round(value)
-    Error(_) -> 0
+/// A coordinate from the wire. The renderer sends whole CSS pixels; a decimal
+/// form is accepted too, because `float.parse` rejects `376` (an Erlang float
+/// needs its point) and a coordinate that failed to parse read as zero — which
+/// put every press in a real window at the top-left of the form.
+pub fn pixel(text: String) -> Int {
+  case int.parse(string.trim(text)) {
+    Ok(value) -> value
+    Error(_) ->
+      case float.parse(string.trim(text)) {
+        Ok(value) -> float.round(value)
+        Error(_) -> 0
+      }
   }
 }
 

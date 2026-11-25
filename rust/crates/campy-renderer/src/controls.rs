@@ -34,6 +34,10 @@ pub struct FlatControl {
     pub desc: ControlDesc,
     /// Its children's ids, in order.
     pub children: Vec<u64>,
+    /// Whether this control sits inside a designer surface. A form rendered in
+    /// the form editor is *passive*: it shows its property values and nothing
+    /// else, because the editor is what handles every event.
+    pub passive: bool,
 }
 
 /// A popup's row height, padding and width, in CSS pixels.
@@ -482,7 +486,7 @@ pub fn reconcile(doc: &UiDocument, host: &Rc<Host>) {
     let mut flat: HashMap<u64, FlatControl> = HashMap::new();
     let mut order = Vec::with_capacity(doc.controls.len());
     for desc in &doc.controls {
-        flatten(desc, &mut flat);
+        flatten(desc, false, &mut flat);
         order.push(desc.id);
     }
 
@@ -597,24 +601,32 @@ fn child_rows(host: &Rc<Host>, parent: u64) -> Vec<(u64, u64)> {
             .unwrap_or_default()
     };
     let shapes = host.shapes.borrow();
-    ids.into_iter()
+    let rows: Vec<(u64, u64)> = ids
+        .into_iter()
         .map(|id| {
             let generation = shapes.get(&id).map(|shape| shape.get()).unwrap_or(0);
             (id, generation)
         })
-        .collect()
+        .collect();
+    rows
 }
 
 fn row_view(host: &Rc<Host>, id: u64) -> AnyView {
-    let desc = host.docs.borrow().get(&id).map(|entry| entry.desc.clone());
-    match desc {
-        Some(desc) => AnyView::new(build_control(&desc, host)),
+    let entry = host
+        .docs
+        .borrow()
+        .get(&id)
+        .map(|entry| (entry.desc.clone(), entry.passive));
+    match entry {
+        Some((desc, passive)) => AnyView::new(build_control(&desc, host, passive)),
         None => AnyView::new(r#box()),
     }
 }
 
 /// The document as a flat map: each control once, with its children as ids.
-fn flatten(desc: &ControlDesc, into: &mut HashMap<u64, FlatControl>) {
+/// `passive` is carried down from a designer surface and marks everything
+/// inside it.
+fn flatten(desc: &ControlDesc, passive: bool, into: &mut HashMap<u64, FlatControl>) {
     into.insert(
         desc.id,
         FlatControl {
@@ -623,10 +635,13 @@ fn flatten(desc: &ControlDesc, into: &mut HashMap<u64, FlatControl>) {
                 ..desc.clone()
             },
             children: desc.children.iter().map(|child| child.id).collect(),
+            passive,
         },
     );
+    // The children of a surface are what the form editor renders as a form.
+    let inside = passive || desc.kind == "surface";
     for child in &desc.children {
-        flatten(child, into);
+        flatten(child, inside, into);
     }
 }
 
@@ -855,7 +870,7 @@ fn popup_card(host: &Rc<Host>) -> AnyView {
 
 /// One control: a positioned wrapper carrying geometry/enabled/visible,
 /// with the kind's widget inside (or children, for containers).
-pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
+pub fn build_control(desc: &ControlDesc, host: &Rc<Host>, passive: bool) -> AnyView {
     let signals = ControlSignals {
         text: RwSignal::new_local(desc.text.clone()),
         checked: RwSignal::new_local(checked_of(prop_bool(desc, "checked").unwrap_or(false))),
@@ -916,7 +931,14 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
                 Some("none".to_owned())
             }
         })
-        .class_toggle(ClassName::new("campy-disabled"), move || !enabled.get());
+        .class_toggle(ClassName::new("campy-disabled"), move || !enabled.get())
+        // A designed control is a picture: the pointer passes through its
+        // whole subtree to the surface, whose capture listeners are the form
+        // editor. Nothing inside can focus itself or claim a press.
+        .class_toggle(ClassName::new("campy-passive"), {
+            let passive = passive;
+            move || passive
+        });
 
     // A control that carries a hint reports the pointer arriving and leaving, so
     // the loop can put the hint on the status line (the hover half of the old
@@ -976,48 +998,72 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
                 let wheel_host = host.clone();
                 let surface_id = desc.id;
                 wrapper = wrapper
-                    .on(events::POINTER_DOWN, move |cx| {
-                        let position: Point<CssPx, Css> = cx.position;
-                        let event: &zgui::vocab::PointerEvent = cx;
-                        let button = event.button;
-                        if pointer_log() {
-                            eprintln!(
-                                "pointer down at {:.0},{:.0} button {:?}",
-                                position.x.0, position.y.0, button
+                    // Capture: the form editor is what handles every event,
+                    // whatever control happens to be under the pointer. Without
+                    // it a press on a designed control stopped at that control
+                    // and the canvas never heard the gesture.
+                    .on_with(
+                        events::POINTER_DOWN,
+                        zgui::vocab::ListenerOptions::CAPTURE,
+                        move |cx| {
+                            let position: Point<CssPx, Css> = cx.position;
+                            let event: &zgui::vocab::PointerEvent = cx;
+                            let button = event.button;
+                            if pointer_log() {
+                                eprintln!(
+                                    "pointer down at {:.0},{:.0} button {:?}",
+                                    position.x.0, position.y.0, button
+                                );
+                            }
+                            down_host.emit_raw(
+                                &format!("pointer:{surface_id}:down"),
+                                pointer_payload(position, button, cx.modifiers),
                             );
-                        }
-                        down_host.emit_raw(
-                            &format!("pointer:{surface_id}:down"),
-                            pointer_payload(position, button, cx.modifiers),
-                        );
-                    })
-                    .on(events::POINTER_MOVE, move |cx| {
-                        let position: Point<CssPx, Css> = cx.position;
-                        if pointer_log() {
-                            eprintln!("pointer at {:.0},{:.0}", position.x.0, position.y.0);
-                        }
-                        move_host.emit_raw(
-                            &format!("pointer:{surface_id}:move"),
-                            pointer_payload(position, None, cx.modifiers),
-                        );
-                    })
-                    .on(events::POINTER_UP, move |cx| {
-                        let position: Point<CssPx, Css> = cx.position;
-                        let event: &zgui::vocab::PointerEvent = cx;
-                        let button = event.button;
-                        up_host.emit_raw(
-                            &format!("pointer:{surface_id}:up"),
-                            pointer_payload(position, button, cx.modifiers),
-                        );
-                    })
-                    .on(events::WHEEL, move |cx| {
-                        let position: Point<CssPx, Css> = cx.position;
-                        let (dx, dy) = wheel_delta(cx);
-                        wheel_host.emit_raw(
-                            &format!("pointer:{surface_id}:wheel"),
-                            format!("{dx:.1};{dy:.1};{};{}", position.x.0, position.y.0),
-                        );
-                    })
+                        },
+                    )
+                    .on_with(
+                        events::POINTER_MOVE,
+                        zgui::vocab::ListenerOptions::CAPTURE,
+                        move |cx| {
+                            let position: Point<CssPx, Css> = cx.position;
+                            if pointer_log() {
+                                eprintln!("pointer at {:.0},{:.0}", position.x.0, position.y.0);
+                            }
+                            move_host.emit_raw(
+                                &format!("pointer:{surface_id}:move"),
+                                pointer_payload(position, None, cx.modifiers),
+                            );
+                        },
+                    )
+                    .on_with(
+                        events::POINTER_UP,
+                        zgui::vocab::ListenerOptions::CAPTURE,
+                        move |cx| {
+                            let position: Point<CssPx, Css> = cx.position;
+                            let event: &zgui::vocab::PointerEvent = cx;
+                            let button = event.button;
+                            up_host.emit_raw(
+                                &format!("pointer:{surface_id}:up"),
+                                pointer_payload(position, button, cx.modifiers),
+                            );
+                        },
+                    )
+                    .on_with(
+                        events::WHEEL,
+                        zgui::vocab::ListenerOptions::CAPTURE,
+                        move |cx| {
+                            let position: Point<CssPx, Css> = cx.position;
+                            let (dx, dy) = wheel_delta(cx);
+                            wheel_host.emit_raw(
+                                &format!("pointer:{surface_id}:wheel"),
+                                format!(
+                                    "{dx:.1};{dy:.1};{};{}",
+                                    position.x.0.round() as i64,
+                                    position.y.0.round() as i64
+                                ),
+                            );
+                        },
+                    )
                     // The graph paper under the form: drawn rather than styled,
                     // because a background rule cannot repeat a gradient image.
                     // The brush is the element's own text colour at low alpha,
@@ -1063,7 +1109,7 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
             };
             AnyView::new(wrapper.child(keyed_children(host, desc.id)))
         }
-        _ => AnyView::new(wrapper.child(widget(desc, host, &signals))),
+        _ => AnyView::new(wrapper.child(widget(desc, host, &signals, passive))),
     }
 }
 
@@ -1115,7 +1161,7 @@ fn wheel_delta(event: &zgui::vocab::WheelEvent) -> (f64, f64) {
 }
 
 /// The kind's widget. Handlers only capture cheap clones.
-fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyView {
+fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals, passive: bool) -> AnyView {
     let id = desc.id;
     let host = host.clone();
     let text = signals.text;
@@ -1127,13 +1173,19 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         // surface input; zgui-ui components get their own live-window A/B
         // in Z2.2 (their own tests dispatch through the component testkit,
         // not the platform).
-        "button" => AnyView::new(
-            zgui::elements::control()
+        "button" => {
+            // A designed button in the form editor is a picture of a button:
+            // no handler, no tab stop, so every press belongs to the canvas.
+            let mut button = zgui::elements::control()
                 .class("campy-widget-button")
-                .tabindex(Focus::Sequential)
-                .on(events::CLICK, move |_| host.emit(id, "clicked", ""))
-                .child(move || text.get()),
-        ),
+                .child(move || text.get());
+            if !passive {
+                button = button
+                    .tabindex(Focus::Sequential)
+                    .on(events::CLICK, move |_| host.emit(id, "clicked", ""));
+            }
+            AnyView::new(button)
+        }
 
         // A menu shows its `model` as a popup rather than emitting `clicked`:
         // the loop routes `control:<id>:selected` with the item label, which is
@@ -1141,23 +1193,28 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         "menu" => {
             let open = host.clone();
             let is_open = host.clone();
-            AnyView::new(
-                zgui::elements::control()
-                    .class("campy-widget-button")
-                    .class("campy-menu-trigger")
-                    .class_toggle(ClassName::new("campy-menu-on"), move || {
-                        let _version = is_open.popup_version();
-                        is_open.popup.get() == Some(id)
-                    })
+            let mut trigger = zgui::elements::control()
+                .class("campy-widget-button")
+                .class("campy-menu-trigger")
+                .class_toggle(ClassName::new("campy-menu-on"), move || {
+                    let _version = is_open.popup_version();
+                    is_open.popup.get() == Some(id)
+                })
+                .child(move || text.get());
+            if !passive {
+                trigger = trigger
                     .tabindex(Focus::Sequential)
-                    .on(events::CLICK, move |_| open.toggle_popup(id))
-                    .child(move || text.get()),
-            )
+                    .on(events::CLICK, move |_| open.toggle_popup(id));
+            }
+            AnyView::new(trigger)
         }
 
         "edit" => {
+            // Read-only in the designer: the field shows its value, and the
+            // editor owns the caret. A read-only field never edits, so the
+            // change handler can stay attached either way.
             let placeholder = prop_string(desc, "placeholder").unwrap_or_default();
-            let read_only = prop_bool(desc, "read-only").unwrap_or(false);
+            let read_only = passive || prop_bool(desc, "read-only").unwrap_or(false);
             AnyView::new(view! {
                 Input(
                     value = text,
@@ -1170,8 +1227,19 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
 
         "checkbox" | "radio" => {
             let checked = signals.checked;
-            AnyView::new(
-                zgui::elements::row()
+            let checked_label = checked;
+            let mut row = zgui::elements::row()
+                .class("campy-check-row")
+                .child(
+                    text_element(move || match checked_label.get() {
+                        Checked::Yes => "☑".to_owned(),
+                        _ => "☐".to_owned(),
+                    })
+                    .class("campy-check-glyph"),
+                )
+                .child(text_element(move || text.get()));
+            if !passive {
+                row = zgui::elements::row()
                     .class("campy-check-row")
                     .child(view! {
                         Checkbox(
@@ -1181,8 +1249,9 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
                             }),
                         ) {}
                     })
-                    .child(text_element(move || text.get())),
-            )
+                    .child(text_element(move || text.get()));
+            }
+            AnyView::new(row)
         }
 
         "combo" | "menu-list" => {
@@ -1193,21 +1262,24 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
             // closes it.
             let open = host.clone();
             let value = text;
-            AnyView::new(
-                zgui::elements::control()
-                    .class("campy-widget-button")
-                    .class("campy-choice")
+            let mut choice = zgui::elements::control()
+                .class("campy-widget-button")
+                .class("campy-choice");
+            if !passive {
+                choice = choice
                     .tabindex(Focus::Sequential)
-                    .on(events::CLICK, move |_| open.toggle_popup(id))
-                    .child(
-                        r#box()
-                            .class("campy-choice-line")
-                            .child(crate::controls::text_element(move || value.get()))
-                            .child(
-                                crate::controls::text_element(|| "▾".to_owned())
-                                    .class("campy-choice-mark"),
-                            ),
-                    ),
+                    .on(events::CLICK, move |_| open.toggle_popup(id));
+            }
+            AnyView::new(
+                choice.child(
+                    r#box()
+                        .class("campy-choice-line")
+                        .child(crate::controls::text_element(move || value.get()))
+                        .child(
+                            crate::controls::text_element(|| "▾".to_owned())
+                                .class("campy-choice-mark"),
+                        ),
+                ),
             )
         }
 
@@ -1224,24 +1296,35 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
                         let active = item_active(&items, index);
                         let row_host = list_host.clone();
                         let click_label = label.clone();
-                        zgui::elements::control()
+                        let mut row = zgui::elements::control()
                             .class("campy-list-row")
-                            .class_toggle(ClassName::new("campy-list-active"), move || active)
-                            .tabindex(Focus::Sequential)
-                            .on(
+                            .class_toggle(ClassName::new("campy-list-active"), move || active);
+                        if !passive {
+                            row = row.tabindex(Focus::Sequential).on(
                                 events::CLICK,
                                 move |_| {
                                     let label = click_label.clone();
                                     row_host.emit(id, "selected", label)
                                 },
-                            )
-                            .child(label)
+                            );
+                        }
+                        row.child(label)
                     },
                 )
             })
         }
 
         "slider" => {
+            if passive {
+                // A designed slider is a bar at its value, not a draggable.
+                let value = signals.value;
+                let progress = Signal::derive_local(move || Some(value.get()));
+                let maximum = desc
+                    .prop("maximum")
+                    .and_then(PropValue::number)
+                    .unwrap_or(100.0);
+                return AnyView::new(view! { Progress(value = progress, max = maximum) {} });
+            }
             let value = signals.value;
             let minimum = desc
                 .prop("minimum")
@@ -1285,6 +1368,13 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         }
 
         "memo" | "code_editor" => {
+            if passive {
+                // A designed editor shows its source; the form editor owns the
+                // caret, the selection and every key.
+                return AnyView::new(
+                    text_element(move || text.get()).class("campy-editor campy-passive-text"),
+                );
+            }
             let language = prop_string(desc, "language");
             let handle_slot: Rc<RefCell<Option<EditorHandle>>> = Rc::new(RefCell::new(None));
             let ready_slot = handle_slot.clone();
@@ -1325,6 +1415,11 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         }
 
         "console" => {
+            if passive {
+                return AnyView::new(
+                    text_element(move || text.get()).class("campy-console campy-passive-text"),
+                );
+            }
             // A real terminal over channels: AppendConsole bytes arrive on
             // `output`; the terminal's keyboard flows back on `input`, and
             // a pump thread forwards it to the BEAM as console input. ANSI
@@ -1515,7 +1610,15 @@ fn pointer_payload(
         mods.push_str("alt+");
     }
     let mods = mods.trim_end_matches('+');
-    format!("{};{};{button};{mods}", position.x.0, position.y.0)
+    // Whole CSS pixels, not floats: `376.0` formats as `376` in Rust, and the
+    // BEAM's parser reads a payload as a number written in decimal — an
+    // integer without a point is not one, so the point arrived as zero and
+    // every press in a real window hit the top-left of the form.
+    format!(
+        "{};{};{button};{mods}",
+        position.x.0.round() as i64,
+        position.y.0.round() as i64
+    )
 }
 
 #[cfg(test)]

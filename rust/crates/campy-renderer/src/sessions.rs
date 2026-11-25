@@ -518,6 +518,10 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
         // Anything queued before the loop existed had no way to ask for a
         // frame; one wake now covers that window.
         wake_loop(&ui.shared);
+        // The self-click diagnostic (`CAMPY_UI_CLICK=x,y`) wraps the runtime,
+        // so a click a validation run asks for travels the platform's own
+        // path: surface event, hit test, capture listeners, bridge event.
+        let runtime = crate::snapshot::ClickProbe::new(runtime);
         let mut app = zgui_platform_winit::WinitApp::new(&event_loop, runtime);
         event_loop
             .run_app(&mut app)

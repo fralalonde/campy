@@ -47,6 +47,44 @@ Dispatch per §1.6 on `opencode-go/deepseek-v4.1-flash` subagents (one
 brief per session); the coordinator (GLM-5.3) owns the renderer between
 waves.
 
+### Form editor event model (as built, keep this true)
+
+While a form is rendered in the Form Editor, the components inside the
+`surface` are **passive**: each shows its property values (or values derived
+from related components) and nothing else. The Form Editor handles every
+event — clicks, drags, keystrokes.
+
+| kind | in the Form Editor | in a preview window |
+|---|---|---|
+| `button`, `menu`, `combo`, `list` rows | drawn; no handler, no tab stop | live |
+| `edit` | shown; read-only, cannot focus | editable |
+| `checkbox`, `radio` | `☑`/`☐` glyph drawn from `checked` | widget |
+| `memo`, `code_editor`, `console` | static text of the contents | live |
+| `slider` | inert `Progress` at `value` | draggable |
+
+- Passivity rides `FlatControl.passive`, carried down from any `surface`
+  ancestor, so a control nested in a panel inside the canvas is passive too.
+- Every passive wrapper carries `campy-passive` (`pointer-events: none`):
+  nothing inside it can focus itself or claim a press.
+- The canvas listens for `pointerdown/move/up/wheel` in the **capture** phase,
+  so it hears every press inside the form whatever is under the pointer.
+- The canvas owns hovering in the designer: `pointer:canvas:move` hit-tests the
+  form and puts the component's `hint` on the status line. Per-control
+  `pointer enter/leave` remains for the live shell.
+- Wire coordinates are **whole window CSS pixels**: `x;y;button;mods`. The
+  renderer rounds, because `float.parse` in the BEAM rejects `376` (an Erlang
+  float needs its point) and an unparseable coordinate reads as zero. The BEAM
+  maps to form-local with `shell.layout(w,h).canvas_x/y` and the module
+  window's position.
+- A preview window loads the same document **without a `surface`**, so nothing
+  in it is passive; passivity is a property of the designer, not of the form.
+
+Diagnostics (no desktop injection needed):
+`CAMPY_UI_CLICK=x,y`, `CAMPY_UI_DRAG=x1,y1,x2,y2` and `CAMPY_UI_MODS=ctrl`
+hand the real window one platform pointer gesture after its first frame — the
+same `SurfaceEvent`s the winit backend sends, through the window's own input
+path. `CAMPY_POINTER_LOG=1` prints what the canvas heard.
+
 ## 1. Shared context (paste this section into every dispatch prompt)
 
 ### 1.1 What Campy is (zgui-migration state)

@@ -16,12 +16,11 @@ use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use zgui::geom::{Css, CssPx, DevicePx, Point, Size};
-use zgui::platform::{SurfaceEvent, SurfaceId};
+use zgui::geom::{CssPx, DevicePx, Point, Size};
+use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
 use zgui::vocab::{
-    Key, KeyEvent, KeyState, Modifiers, PhysicalKey, PointerAction, PointerEvent, PointerId,
-    PointerKind, Timestamp,
+    Key, KeyEvent, KeyState, Modifiers, PhysicalKey, PointerAction, PointerEvent, Timestamp,
 };
 use zgui_platform_headless::Harness;
 

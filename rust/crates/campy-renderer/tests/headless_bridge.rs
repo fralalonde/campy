@@ -102,6 +102,63 @@ fn form() -> UiDocument {
                 enabled: true,
                 visible: true,
                 props: vec![("layout".into(), PropValue::Text("free".into()))],
+                // A designed control inside the form (twice: once direct, once
+                // inside a panel), the editor must hear a press that lands on
+                // either and neither may respond.
+                children: vec![
+                    ControlDesc {
+                        id: 6,
+                        kind: "button".into(),
+                        text: "Designed".into(),
+                        x: 50.0,
+                        y: 50.0,
+                        w: 120.0,
+                        h: 40.0,
+                        enabled: true,
+                        visible: true,
+                        props: vec![],
+                        children: vec![],
+                    },
+                    ControlDesc {
+                        id: 9,
+                        kind: "panel".into(),
+                        text: "".into(),
+                        x: 0.0,
+                        y: 120.0,
+                        w: 200.0,
+                        h: 60.0,
+                        enabled: true,
+                        visible: true,
+                        props: vec![("layout".into(), PropValue::Text("free".into()))],
+                        children: vec![ControlDesc {
+                            id: 10,
+                            kind: "button".into(),
+                            text: "Nested".into(),
+                            x: 10.0,
+                            y: 10.0,
+                            w: 120.0,
+                            h: 32.0,
+                            enabled: true,
+                            visible: true,
+                            props: vec![],
+                            children: vec![],
+                        }],
+                    },
+                ],
+            },
+            // ...and one outside it, which is how the same document looks in
+            // the preview window: there a control is live.
+            ControlDesc {
+                id: 8,
+                kind: "button".into(),
+                text: "Live".into(),
+                x: 500.0,
+                y: 400.0,
+                w: 120.0,
+                h: 40.0,
+                enabled: true,
+                visible: true,
+                props: vec![],
                 children: vec![],
             },
             ControlDesc {
@@ -269,10 +326,77 @@ fn loads_updates_clicks_reads_and_rejects() {
     testing::test_pointer("click", 150.0, 400.0).expect("the canvas is clicked");
     testing::test_pump(32).expect("a pump is enqueued");
     wait_for(&sink, 1, "pointer:5:down");
+    let pressed = events_of(&sink, "pointer:5:down");
     assert!(
-        events_of(&sink, "pointer:5:down").len() == 1,
-        "a click on the canvas reached its surface: {:?}",
+        pressed.len() == 1,
+        "a click on the canvas reached its surface: {pressed:?}"
+    );
+    // The payload's coordinates are whole CSS pixels. A float form the BEAM
+    // cannot parse is a payload that reads as the form's top-left corner.
+    let payload = pressed[0]
+        .split_once(' ')
+        .map(|(_, payload)| payload.to_owned())
+        .unwrap_or_default();
+    let coordinates = payload.split(';').take(2).collect::<Vec<_>>();
+    assert!(
+        coordinates
+            .iter()
+            .all(|part| part.chars().all(|c| c.is_ascii_digit() || c == '-')),
+        "the press carries integer coordinates: {payload:?}"
+    );
+    assert_eq!(coordinates, ["150", "400"], "the pressed point, in CSS px");
+
+    // A press on a *designed control* must reach the canvas too: the form is
+    // passive, the editor handles every event. The canvas listens in the
+    // capture phase, so the control under the pointer does not take it first.
+    testing::test_pump(32).expect("a pump is enqueued");
+    std::thread::sleep(Duration::from_millis(60));
+    testing::test_pointer("click", 210.0, 370.0).expect("the designed control is clicked");
+    testing::test_pump(32).expect("a pump is enqueued");
+    wait_for(&sink, 2, "pointer:5:down");
+    assert_eq!(
+        events_of(&sink, "pointer:5:down").len(),
+        2,
+        "a press on a designed control reached the canvas: {:?}",
         events_of(&sink, "pointer:5:")
+    );
+    // And the designed button itself did not fire: the form is passive.
+    assert!(
+        events_of(&sink, "control:6:").is_empty(),
+        "a designed control fired in the editor: {:?}",
+        events_of(&sink, "control:6:")
+    );
+
+    // The same holds one level down: a control inside a panel inside the
+    // surface is passive too, and its press still belongs to the canvas.
+    testing::test_pump(32).expect("a pump is enqueued");
+    std::thread::sleep(Duration::from_millis(60));
+    testing::test_pointer("click", 170.0, 436.0).expect("the nested control is clicked");
+    testing::test_pump(32).expect("a pump is enqueued");
+    wait_for(&sink, 3, "pointer:5:down");
+    assert_eq!(
+        events_of(&sink, "pointer:5:down").len(),
+        3,
+        "a press on a nested designed control reached the canvas: {:?}",
+        events_of(&sink, "pointer:5:")
+    );
+    assert!(
+        events_of(&sink, "control:10:").is_empty(),
+        "a nested designed control fired in the editor: {:?}",
+        events_of(&sink, "control:10:")
+    );
+
+    // The passivity is scoped to the designer surface: the same document
+    // outside one — a preview window — keeps its controls live.
+    testing::test_pump(32).expect("a pump is enqueued");
+    std::thread::sleep(Duration::from_millis(60));
+    testing::test_pointer("click", 560.0, 420.0).expect("the live control is clicked");
+    testing::test_pump(32).expect("a pump is enqueued");
+    wait_for(&sink, 1, "control:8:clicked");
+    assert_eq!(
+        events_of(&sink, "control:8:clicked"),
+        vec!["control:8:clicked ".to_owned()],
+        "a control outside the designer surface still fires"
     );
 
     // A property field that holds the focus must not swallow undo: a designer

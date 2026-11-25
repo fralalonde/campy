@@ -123,6 +123,10 @@ pub const CAMPY_SHEET: &str = css!(
         --syntax-operator: #859900; --syntax-punctuation: #839496;
         --syntax-property: #268bd2; --syntax-attribute: #6c71c4;
      }
+     /* The form editor's designed controls are passive: the pointer goes
+        through them to the canvas, which handles every event. */
+     .campy-passive { pointer-events: none; }
+     .campy-check-glyph { min-width: 16px; color: var(--campy-muted); }
      .campy-dark { --campy-grid: #23262e;
                    --campy-bg: #101114; --campy-panel: #17191e; --campy-raised: #1e2128;
                    --campy-hover: #262a33; --campy-text: #e6e8ee; --campy-muted: #8b93a3;
