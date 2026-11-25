@@ -1,5 +1,15 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# Recipes run from whatever shell the developer has. A rustup-managed `cargo`
+# on PATH does not imply the Gleam/Erlang shims are there: asdf keeps those in
+# `~/.asdf/shims`, which a login shell or an editor's task runner may lack. The
+# scripts also resolve tools themselves, so this is the shortest path for the
+# recipes that exec a binary directly (`scripts/cargo.sh`).
+export PATH := home_directory() / ".asdf" / "shims" \
+  + ":" + home_directory() / ".cargo/bin" \
+  + ":" + home_directory() / ".local/bin" \
+  + ":" + env_var_or_default("PATH", "")
+
 root := justfile_directory()
 
 default:

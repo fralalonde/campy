@@ -28,9 +28,42 @@ PROJECT = ROOT / "campy.campy"
 BROKER = ROOT / "gleam/packages/campy_broker"
 
 
+def toolchain_dirs() -> list[str]:
+    """The directories the toolchain may live in, most specific first.
+
+    A recipe is run from whatever shell the developer has. A rustup-managed
+    `cargo` on PATH does not imply the Gleam/Erlang shims are: asdf keeps those
+    in `~/.asdf/shims`, which a plain login shell or an editor's task runner
+    often lacks. Adding them here is what makes `just run` work from both.
+    """
+    home = Path.home()
+    asdf = Path(os.environ.get("ASDF_DATA_DIR", home / ".asdf")) / "shims"
+    candidates = [asdf, home / ".local/bin", home / ".cargo/bin", home / "bin"]
+    return [str(path) for path in candidates if path.is_dir()]
+
+
+def path_with_toolchain() -> str:
+    """`PATH` with the toolchain directories in front of the inherited one."""
+    inherited = os.environ.get("PATH", "")
+    dirs = toolchain_dirs()
+    return os.pathsep.join([*dirs, inherited]) if dirs else inherited
+
+
+def require_tool(name: str) -> str:
+    """The path of `name`, resolved against the toolchain PATH."""
+    found = shutil.which(name, path=path_with_toolchain())
+    if found is None:
+        raise SystemExit(
+            f"{name} is not on PATH. Install it, or run this from a shell that has "
+            f"it (asdf shims live in ~/.asdf/shims; `just doctor` checks the set)."
+        )
+    return found
+
+
 def environment() -> dict[str, str]:
     env = {
         **os.environ,
+        "PATH": path_with_toolchain(),
         "CAMPY_ROOT": str(ROOT),
         "CAMPY_NIF_DIR": str(NATIVE),
         "CAMPY_RELOAD_SIGNAL": str(RELOAD),
@@ -59,6 +92,9 @@ def stop_process(child: subprocess.Popen) -> None:
 
 
 def command(args: list[str], cwd: Path = ROOT, expected: str | None = None) -> None:
+    # `gleam`, `cargo`, `erl` … may only be reachable through the toolchain
+    # directories, so each is resolved rather than left to the child's PATH.
+    args = [require_tool(args[0]) if not os.path.isabs(args[0]) else args[0], *args[1:]]
     if expected is None:
         subprocess.run(args, cwd=cwd, env=environment(), check=True)
         return
