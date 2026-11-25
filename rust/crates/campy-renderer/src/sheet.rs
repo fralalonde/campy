@@ -17,7 +17,8 @@ use zgui::prelude::*;
 /// for every class the shell emits.
 pub const CAMPY_SHEET: &str = css!(
     // --- theme tokens -------------------------------------------------------
-    ":root { --campy-bg: #f1f2f5; --campy-panel: #ffffff; --campy-raised: #f6f7f9;
+    ":root { --campy-grid: #e4e6ec;
+              --campy-bg: #f1f2f5; --campy-panel: #ffffff; --campy-raised: #f6f7f9;
               --campy-hover: #e9ebf0; --campy-text: #1b1d23; --campy-muted: #6b7280;
               --campy-border: #d8dbe2; --campy-accent: #356df3; --campy-accent-soft: #e3ebff;
               --campy-ok: #2f8a55; --campy-danger: #b4454f; }",
@@ -85,7 +86,8 @@ pub const CAMPY_SHEET: &str = css!(
         --syntax-operator: #0e7490; --syntax-punctuation: #6b7280;
         --syntax-property: #0f766e; --syntax-attribute: #9d4edd;
      }
-     .campy-dark { --campy-bg: #101114; --campy-panel: #17191e; --campy-raised: #1e2128;
+     .campy-dark { --campy-grid: #23262e;
+                   --campy-bg: #101114; --campy-panel: #17191e; --campy-raised: #1e2128;
                    --campy-hover: #262a33; --campy-text: #e6e8ee; --campy-muted: #8b93a3;
                    --campy-border: #282c35; --campy-accent: #5b8cff;
                    --campy-accent-soft: #22304d; --campy-ok: #3f9d63;
@@ -236,6 +238,12 @@ pub const CAMPY_SHEET: &str = css!(
                           border: 1px solid var(--campy-border);
                           border-radius: 0 6px 6px 6px; }",
     ".campy-surface { position: relative; overflow: hidden; }",
+    ".campy-surface-grid { position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+                           background-image:
+                             linear-gradient(to right, var(--campy-grid) 1px, transparent 1px),
+                             linear-gradient(to bottom, var(--campy-grid) 1px, transparent 1px);
+                           background-size: 8px 8px; background-repeat: repeat;
+                           pointer-events: none; }",
     ".campy-selected { outline: 2px solid var(--campy-accent); outline-offset: 1px; }",
     ".campy-member { outline: 1px solid var(--campy-accent); outline-offset: 0px;
                      background: transparent; }",

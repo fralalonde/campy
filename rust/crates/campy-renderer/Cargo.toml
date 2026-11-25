@@ -29,6 +29,9 @@ zgui-render-wgpu = { git = "https://github.com/zortax/zgui" }
 zgui-render-vector-vello = { git = "https://github.com/zortax/zgui" }
 # Encoding that one frame; already in the graph through zgui-image.
 png = "0.18"
+# The designer's grid is drawn, not painted by a background rule (zgui's CSS
+# layer has no gradient images). Same version zgui's own canvas uses.
+kurbo = "0.13"
 
 [features]
 # Headless driver for the smoke suite: scripted surface events, virtual

@@ -759,7 +759,42 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
                             format!("{dx:.1};{dy:.1};{};{}", position.x.0, position.y.0),
                         );
                     })
-                    .child(r#box().class("campy-surface-grid"));
+                    // The graph paper under the form: drawn rather than styled,
+                    // because a background rule cannot repeat a gradient image.
+                    // The brush is the element's own text colour at low alpha,
+                    // so it follows the theme without a second token.
+                    .child(
+                        zgui::elements::canvas()
+                            .class("campy-surface-grid")
+                            .draw(|cx| {
+                                use zgui::canvas::{Brush, ShapeBuilder};
+                                let width = cx.size.width.0 as f64;
+                                let height = cx.size.height.0 as f64;
+                                if width <= 0.0 || height <= 0.0 {
+                                    return;
+                                }
+                                let step = 8.0;
+                                let mut path = kurbo::BezPath::new();
+                                let mut x = 0.0;
+                                while x <= width {
+                                    path.move_to((x, 0.0));
+                                    path.line_to((x, height));
+                                    x += step;
+                                }
+                                let mut y = 0.0;
+                                while y <= height {
+                                    path.move_to((0.0, y));
+                                    path.line_to((width, y));
+                                    y += step;
+                                }
+                                let hairline = f64::from(cx.scale).max(1.0);
+                                cx.scene.push(
+                                    ShapeBuilder::new(path)
+                                        .stroke(Brush::Inherited { alpha: 0.09 }, hairline)
+                                        .build(),
+                                );
+                            }),
+                    );
             }
             let layout = prop_string(desc, "layout").unwrap_or_else(|| "free".into());
             wrapper = match layout.as_str() {

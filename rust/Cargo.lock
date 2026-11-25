@@ -653,6 +653,7 @@ name = "campy-renderer"
 version = "0.1.0"
 dependencies = [
  "flume",
+ "kurbo",
  "png",
  "tree-sitter",
  "tree-sitter-gleam",
