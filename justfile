@@ -15,6 +15,10 @@ root := justfile_directory()
 default:
     @just --list
 
+# The live session test, which opens real windows: opt in explicitly.
+test-live:
+    CAMPY_LIVE_TESTS=1 python scripts/workspace.py gleam test
+
 # Check the locally installed toolchain.
 doctor:
     python scripts/workspace.py doctor

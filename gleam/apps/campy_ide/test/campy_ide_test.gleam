@@ -27,6 +27,9 @@ import gleeunit/should
 @external(erlang, "campy_host_ffi", "has_display")
 fn has_display() -> Bool
 
+@external(erlang, "campy_host_ffi", "live_tests")
+fn live_tests() -> Bool
+
 pub fn main() {
   gleeunit.main()
 }
@@ -1660,7 +1663,7 @@ pub fn welcome_module_previews_with_its_menu_test() {
 // for good (Z0.2 constraint), so both session scenarios share one test and two
 // concurrent sessions, closed together at the end.
 pub fn live_shell_and_preview_sessions_test() {
-  case has_display() {
+  case has_display() && live_tests() {
     False -> Nil
     True -> {
       // --- the IDE shell document -----------------------------------------

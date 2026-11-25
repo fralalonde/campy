@@ -2,9 +2,13 @@
 -export([watch_enabled/0, signal/0, wait/0, reload_search_box/0,
          describe_search_box/0, write_generated/1, generated_path/1,
          headless_enabled/0, now_ms/0, has_display/0, temp_path/1,
-         debug_view/0]).
+         debug_view/0, live_tests/0]).
 
 headless_enabled() -> os:getenv("CAMPY_HEADLESS") =:= "1".
+
+%% The live session test opens real windows on the desktop, which a plain
+%% `just check` should not do: opt in with CAMPY_LIVE_TESTS=1 (`just test-live`).
+live_tests() -> os:getenv("CAMPY_LIVE_TESTS") =:= "1".
 
 %% CAMPY_UI_DEBUG_VIEW opens one shell state at startup for screenshotting.
 debug_view() ->
