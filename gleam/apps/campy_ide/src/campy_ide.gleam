@@ -126,6 +126,7 @@ fn debug_view(model: State) -> State {
 
     "code" -> state.set_view(model, state.CodeView)
     "light" -> state.set_scheme(model, state.Light)
+    "solarized" -> state.set_scheme(model, state.Solarized)
     // A structural change on purpose: one control added to the form.
     "add" ->
       state.arm_component(model, "button")
@@ -620,6 +621,41 @@ fn loop_ide_event(
       // A validation hook: one structural change *after* the window is on
       // screen, so the reconciler can be measured where it matters.
       let model = case generation, debug_after_env() {
+        // A pointer gesture as the canvas would send it, after the window is
+        // on screen: the same code path a real click takes.
+        1, "click" ->
+          case state.active_module(model) {
+            Some(module) ->
+              case campy_form.find_control(module.form, "pet-button") {
+                Some(control) -> {
+                  let #(x, y, w, h) = campy_form.bounds(module.form, control)
+                  model
+                  |> state.pointer_down(x + w / 2, y + h / 2)
+                  |> state.pointer_up(x + w / 2, y + h / 2, False)
+                }
+                None -> model
+              }
+            None -> model
+          }
+        1, "marquee" ->
+          case state.active_module(model) {
+            Some(module) -> {
+              let #(x, y, w, h) =
+                campy_form.bounds(module.form, {
+                  let assert Some(root) =
+                    campy_form.find_control(module.form, "panel-1")
+                  root
+                })
+              model
+              |> state.pointer_down(x - 10, y - 10)
+              |> state.pointer_move(x + w + 10, y + h + 10)
+              |> state.pointer_up(x + w + 10, y + h + 10, True)
+            }
+            None -> model
+          }
+        1, "solarized" -> state.set_scheme(model, state.Solarized)
+        1, "dark" -> state.set_scheme(model, state.Dark)
+        1, "light" -> state.set_scheme(model, state.Light)
         1, "add" ->
           state.arm_component(model, "button")
           |> state.pointer_down(300, 300)
@@ -1898,9 +1934,12 @@ fn update_app(model: State) -> State {
     Ok(model) ->
       case model.preview {
         None -> run_form(model)
+        // The running app keeps the module it was launched with: switching the
+        // editor to another module and pressing F7 updates *that* app, it does
+        // not swap the window to whatever is on screen now.
         Some(preview) ->
-          case state.active_module(model) {
-            None -> state.set_status(model, "Open a module first")
+          case project.find_module(model.project, preview.module) {
+            None -> state.set_status(model, "The running module is gone")
             Some(module) ->
               case campy_form.validate(module.form) {
                 Error(error) ->

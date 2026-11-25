@@ -86,6 +86,43 @@ pub const CAMPY_SHEET: &str = css!(
         --syntax-operator: #0e7490; --syntax-punctuation: #6b7280;
         --syntax-property: #0f766e; --syntax-attribute: #9d4edd;
      }
+     /* Solarized, from the palette's own bases: base03 for the page, base02
+        for panels, base0 for text, and its published accents. */
+     .campy-solarized {
+        --campy-grid: #0b3f4c;
+        --campy-bg: #002b36; --campy-panel: #073642; --campy-raised: #0b3f4c;
+        --campy-hover: #12495a; --campy-text: #93a1a1; --campy-muted: #657b83;
+        --campy-border: #0f4a5a; --campy-accent: #268bd2;
+        --campy-accent-soft: #0b3d52; --campy-ok: #859900; --campy-danger: #dc322f;
+        --zui-color-background: #073642; --zui-color-foreground: #93a1a1;
+        --zui-color-card: #073642; --zui-color-popover: #0b3f4c;
+        --zui-color-primary: #268bd2; --zui-color-primary-foreground: #fdf6e3;
+        --zui-color-secondary: #0b3f4c; --zui-color-secondary-foreground: #93a1a1;
+        --zui-color-muted: #002b36; --zui-color-muted-foreground: #657b83;
+        --zui-color-accent: #0b3d52; --zui-color-accent-foreground: #93a1a1;
+        --zui-color-border: #0f4a5a; --zui-color-input: #0f4a5a;
+        --zui-color-ring: #268bd2; --zui-color-destructive: #dc322f;
+        --terminal-background: #002b36; --terminal-selection: #0b3d52;
+        --terminal-cursor: #268bd2; --terminal-cursor-text: #002b36;
+        --terminal-black: #073642; --terminal-bright-black: #586e75;
+        --terminal-white: #eee8d5; --terminal-bright-white: #fdf6e3;
+        --terminal-red: #dc322f; --terminal-bright-red: #cb4b16;
+        --terminal-green: #859900; --terminal-bright-green: #93a1a1;
+        --terminal-yellow: #b58900; --terminal-bright-yellow: #657b83;
+        --terminal-blue: #268bd2; --terminal-bright-blue: #839496;
+        --terminal-magenta: #d33682; --terminal-bright-magenta: #6c71c4;
+        --terminal-cyan: #2aa198; --terminal-bright-cyan: #93a1a1;
+        --editor-current-line: #0b3f4c; --editor-selection: #0b3d52;
+        --editor-cursor: #268bd2; --editor-cursor-text: #002b36;
+        --editor-gutter-fg: #586e75; --editor-gutter-current-fg: #93a1a1;
+        --editor-scrollbar-thumb: #12495a;
+        --syntax-comment: #586e75; --syntax-keyword: #859900;
+        --syntax-string: #2aa198; --syntax-number: #d33682;
+        --syntax-type: #b58900; --syntax-function: #268bd2;
+        --syntax-variable: #93a1a1; --syntax-constant: #cb4b16;
+        --syntax-operator: #859900; --syntax-punctuation: #839496;
+        --syntax-property: #268bd2; --syntax-attribute: #6c71c4;
+     }
      .campy-dark { --campy-grid: #23262e;
                    --campy-bg: #101114; --campy-panel: #17191e; --campy-raised: #1e2128;
                    --campy-hover: #262a33; --campy-text: #e6e8ee; --campy-muted: #8b93a3;

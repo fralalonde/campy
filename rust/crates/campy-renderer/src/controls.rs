@@ -73,11 +73,16 @@ pub struct Host {
     /// Bumped on every document write; every keyed list reads it and reconciles
     /// its keys, which reuses the rows that did not change.
     pub structure: zgui::reactive::ArcRwSignal<u64>,
-    /// Whether the document is dark, so the root can follow a theme change
-    /// without being rebuilt.
-    pub dark: zgui::reactive::ArcRwSignal<bool>,
+    /// The document's theme name (`dark`, `light`, `solarized`), so the root
+    /// can follow a theme change without being rebuilt.
+    pub theme: zgui::reactive::ArcRwSignal<String>,
     /// Live editor handles (`memo` / `code_editor` kinds).
     pub editors: RefCell<HashMap<u64, EditorHandle>>,
+    /// Source and marks that arrived before their editor mounted. A reload
+    /// re-creates the editors, so a command can be addressed to one that does
+    /// not exist yet; it is kept here and applied on mount rather than rejected.
+    pub pending_code: RefCell<HashMap<u64, String>>,
+    pub pending_marks: RefCell<HashMap<u64, (String, Vec<(u64, u64, String)>)>>,
     /// Live console feeds (`console` kind): AppendConsole bytes go here.
     pub consoles: RefCell<HashMap<u64, flume::Sender<Vec<u8>>>>,
     /// Whether this session's window came through the runtime's
@@ -168,8 +173,10 @@ impl Host {
             shapes: RefCell::new(HashMap::new()),
             roots: RefCell::new(Vec::new()),
             structure: zgui::reactive::ArcRwSignal::new(0),
-            dark: zgui::reactive::ArcRwSignal::new(true),
+            theme: zgui::reactive::ArcRwSignal::new("dark".to_owned()),
             editors: RefCell::new(HashMap::new()),
+            pending_code: RefCell::new(HashMap::new()),
+            pending_marks: RefCell::new(HashMap::new()),
             consoles: RefCell::new(HashMap::new()),
             deferred_window: Cell::new(false),
             live_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -409,16 +416,23 @@ pub fn build_document(host: &Rc<Host>) -> AnyView {
             shortcut_anchor.window_shortcut()
         });
     zgui::reactive::on_cleanup_local(move || drop(registration));
-    let dark = host.dark.clone();
+    let theme = host.theme.clone();
     let root = r#box()
         .node_ref(anchor)
         .class("campy-root")
         .class("campy-free")
         .class_toggle(ClassName::new("campy-dark"), {
-            let dark = dark.clone();
-            move || dark.get()
+            let theme = theme.clone();
+            move || theme.get() == "dark"
         })
-        .class_toggle(ClassName::new("campy-light"), move || !dark.get())
+        .class_toggle(ClassName::new("campy-solarized"), {
+            let theme = theme.clone();
+            move || theme.get() == "solarized"
+        })
+        .class_toggle(ClassName::new("campy-light"), {
+            let theme = theme.clone();
+            move || theme.get() == "light"
+        })
         .on(events::KEY_DOWN, move |cx| {
             let event: &KeyEvent = cx;
             if let Some(combo) = key_combo(&event.key_without_modifiers, cx.modifiers) {
@@ -464,6 +478,7 @@ pub fn build_document(host: &Rc<Host>) -> AnyView {
 /// Takes a document into the live tree: every control keeps its nodes unless
 /// something a node is *built* from changed.
 pub fn reconcile(doc: &UiDocument, host: &Rc<Host>) {
+    host.document_ready.set(false);
     let mut flat: HashMap<u64, FlatControl> = HashMap::new();
     let mut order = Vec::with_capacity(doc.controls.len());
     for desc in &doc.controls {
@@ -509,12 +524,24 @@ pub fn reconcile(doc: &UiDocument, host: &Rc<Host>) {
         }
     }
     host.docs.borrow_mut().retain(|id, _| flat.contains_key(id));
+    host.controls
+        .borrow_mut()
+        .retain(|id, _| flat.contains_key(id));
+    host.editors
+        .borrow_mut()
+        .retain(|id, _| flat.contains_key(id));
+    host.pending_code
+        .borrow_mut()
+        .retain(|id, _| flat.contains_key(id));
+    host.pending_marks
+        .borrow_mut()
+        .retain(|id, _| flat.contains_key(id));
     host.shapes
         .borrow_mut()
         .retain(|id, _| flat.contains_key(id));
     host.docs.borrow_mut().extend(flat);
     *host.roots.borrow_mut() = order;
-    host.dark.set(doc.theme == "dark");
+    host.theme.set(doc.theme.clone());
     // The popup is drawn at the root, so it reads absolute rectangles from here.
     host.rects.borrow_mut().clear();
     host.kinds.borrow_mut().clear();
@@ -847,7 +874,19 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
         enabled: RwSignal::new_local(desc.enabled),
         visible: RwSignal::new_local(desc.visible),
     };
-    host.controls.borrow_mut().insert(desc.id, signals.clone());
+    {
+        let mut controls = host.controls.borrow_mut();
+        controls.insert(desc.id, signals.clone());
+        // The document can take commands addressed to it once every control in
+        // it has a node. The last row to build flips this, and the queue that
+        // parked waiting for it is woken.
+        let expected = host.docs.borrow().len();
+        if controls.len() >= expected && !host.document_ready.get() {
+            drop(controls);
+            host.document_ready.set(true);
+            host.shared.nudge();
+        }
+    }
 
     let rect = signals.rect;
     let enabled = signals.enabled;
@@ -1260,6 +1299,14 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
                     registry = registry,
                     on_ready = Box::new(move |handle: EditorHandle| {
                         *ready_slot.borrow_mut() = Some(handle.clone());
+                        if let Some(text) = ready_host.pending_code.borrow_mut().remove(&id) {
+                            handle.set_text(&text);
+                        }
+                        if let Some((layer, items)) =
+                            ready_host.pending_marks.borrow_mut().remove(&id)
+                        {
+                            set_editor_marks(&handle, &layer, &items);
+                        }
                         ready_host.editors.borrow_mut().insert(id, handle);
                     }) as Box<dyn Fn(EditorHandle)>,
                     on_event = Box::new(move |event: EditorEvent| {

@@ -424,7 +424,6 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
                     // the document can apply: say so, and wake the queue that
                     // may have parked one waiting for this.
                     rebuild_host.view_built.set(true);
-                    rebuild_host.document_ready.set(true);
                     rebuild_host.shared.nudge();
                     AnyView::new(r#box())
                 })
@@ -1003,13 +1002,17 @@ fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
             control_of(control)?.rect.set((*x, *y, *w, *h));
         }
         Op::SetCode { control, source } => {
-            let handle = host
-                .editors
-                .borrow()
-                .get(control)
-                .cloned()
-                .ok_or_else(|| format!("Control {control} is not an editor"))?;
-            handle.set_text(source);
+            let handle = host.editors.borrow().get(control).cloned();
+            match handle {
+                // The editor re-creates itself on a reload; content that arrives
+                // before it mounts is kept for it rather than dropped.
+                Some(handle) => handle.set_text(source),
+                None => {
+                    host.pending_code
+                        .borrow_mut()
+                        .insert(*control, source.clone());
+                }
+            }
         }
         Op::AppendConsole { control, bytes } => {
             let feed = host
@@ -1026,13 +1029,15 @@ fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
             layer,
             items,
         } => {
-            let handle = host
-                .editors
-                .borrow()
-                .get(control)
-                .cloned()
-                .ok_or_else(|| format!("Control {control} is not an editor"))?;
-            controls::set_editor_marks(&handle, layer, items);
+            let handle = host.editors.borrow().get(control).cloned();
+            match handle {
+                Some(handle) => controls::set_editor_marks(&handle, layer, items),
+                None => {
+                    host.pending_marks
+                        .borrow_mut()
+                        .insert(*control, (layer.clone(), items.clone()));
+                }
+            }
         }
         Op::ReadText { control, key } => {
             let signals = control_of(control)?;

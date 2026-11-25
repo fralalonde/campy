@@ -98,10 +98,7 @@ pub fn snapshot(model: State) -> Snapshot {
   shell.ShellView(
     layout: shell.layout(window_w, window_h),
     title: model.project.title,
-    theme: case is_dark_scheme(model.scheme) {
-      True -> "dark"
-      False -> "light"
-    },
+    theme: theme_name(model.scheme),
     status: model.status,
     path: model.project.path,
     running: is_running(model),
@@ -1358,11 +1355,13 @@ fn index_of_loop(items: List(String), value: String, index: Int) -> Int {
   }
 }
 
-fn is_dark_scheme(scheme: Scheme) -> Bool {
+/// The theme a scheme names. Solarized is its own palette rather than a dark
+/// variant: it has a fixed set of eight base colours of its own.
+fn theme_name(scheme: Scheme) -> String {
   case scheme {
-    Light -> False
-    Dark -> True
-    Solarized -> True
+    Light -> "light"
+    Dark -> "dark"
+    Solarized -> "solarized"
   }
 }
 
