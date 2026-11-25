@@ -51,6 +51,20 @@ pub struct Command {
 impl Command {
     pub fn validate(&self) -> Result<(), String> {
         match &self.op {
+            // A batch is one moment's changes: nothing in it may be a load,
+            // which is a generation of its own, and every part is checked.
+            Op::Batch { ops } => {
+                for op in ops {
+                    if matches!(op, Op::LoadUi(_)) {
+                        return Err("LoadUi cannot be batched".into());
+                    }
+                    Command {
+                        generation: self.generation,
+                        op: op.clone(),
+                    }
+                    .validate()?;
+                }
+            }
             Op::LoadUi(doc) => {
                 if doc.title.len() > 256 || doc.theme.len() > 16 {
                     return Err("Title or theme exceeds its limit".into());
@@ -444,6 +458,10 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
     // outside any owner, so it lives as long as the process rather than being
     // cleaned up with the first window's scope.
     let _ = zgui::reactive::install();
+    // `ZGUI_LATENCY=/path.jsonl` asks the framework for its per-stage frame
+    // trace. An embedder that drives `WinitApp` itself starts it here; the
+    // one-shot `zgui::app::run` path does it for applications that use it.
+    zgui_profile::latency::start_epoch();
     if let Ok(mut work) = shared.work.lock() {
         *work = Some(zgui::reactive::ArcRwSignal::new(0));
     }
@@ -472,9 +490,11 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
     if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
         app = app.with_probe(std::rc::Rc::new(FrameLog::default()));
     }
+    // Campy's own factory (pacing policy + optional screenshot) rather than
+    // zgui's default one; see `graphics` for why the pacing differs.
     #[cfg(not(feature = "ui-testing"))]
-    if let Some(path) = crate::snapshot::path() {
-        app = app.with_renderer(crate::snapshot::factory(path));
+    {
+        app = app.with_renderer(crate::graphics::factory(crate::snapshot::path()));
     }
     let view_ui = ui.clone();
     let handler = app
@@ -616,21 +636,36 @@ fn startup_size() -> (f32, f32) {
 struct FrameLog {
     frames: std::cell::Cell<u64>,
     since: std::cell::Cell<Option<std::time::Instant>>,
+    last: std::cell::Cell<Option<std::time::Instant>>,
+    gap_us: std::cell::Cell<u64>,
+    gap_max_us: std::cell::Cell<u64>,
 }
 
 impl zgui::runtime::probe::FrameProbe for FrameLog {
     fn frame_ended(&self, _window: &zgui::runtime::window::Window) {
+        zgui_profile::latency::flush();
+        crate::snapshot::trace("frame");
         self.frames.set(self.frames.get() + 1);
         let now = std::time::Instant::now();
+        if let Some(last) = self.last.get() {
+            let gap = now.duration_since(last).as_micros() as u64;
+            self.gap_us.set(self.gap_us.get() + gap);
+            self.gap_max_us.set(self.gap_max_us.get().max(gap));
+        }
+        self.last.set(Some(now));
         match self.since.get() {
             None => self.since.set(Some(now)),
             Some(start) if now.duration_since(start).as_secs_f64() >= 1.0 => {
+                let frames = self.frames.get();
                 eprintln!(
-                    "campy frames: {} in {:.2}s",
-                    self.frames.get(),
-                    now.duration_since(start).as_secs_f64()
+                    "campy frames: {frames} in {:.2}s mean_gap={:.1}ms max_gap={:.1}ms",
+                    now.duration_since(start).as_secs_f64(),
+                    self.gap_us.get() as f64 / frames.max(1) as f64 / 1000.0,
+                    self.gap_max_us.get() as f64 / 1000.0
                 );
                 self.frames.set(0);
+                self.gap_us.set(0);
+                self.gap_max_us.set(0);
                 self.since.set(Some(now));
             }
             Some(_) => {}
@@ -672,12 +707,19 @@ fn report_size(host: &Rc<Host>, size: zgui::geom::Size<zgui::geom::CssPx, zgui::
 }
 
 fn drain_session(host: &Rc<Host>) {
+    let drain_started = std::time::Instant::now();
     // Registrations and reaping stay app-wide; the per-session tick only
     // applies that session's queue.
     if let Some(state) = SESSION_STATE.with(|cell| cell.borrow().clone()) {
         adopt_registrations(&state);
         apply_commands(&state);
         reap_closed(&state);
+    }
+    if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
+        let micros = drain_started.elapsed().as_micros();
+        if micros > 2000 {
+            eprintln!("campy drain: {micros}us");
+        }
     }
     let _ = host;
 }
@@ -1041,6 +1083,12 @@ fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
                         .borrow_mut()
                         .insert(*control, (layer.clone(), items.clone()));
                 }
+            }
+        }
+        // One moment's changes, in the order they were made.
+        Op::Batch { ops } => {
+            for op in ops {
+                apply_op(host, op)?;
             }
         }
         Op::ReadText { control, key } => {

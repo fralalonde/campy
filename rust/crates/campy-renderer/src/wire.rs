@@ -168,6 +168,16 @@ pub enum Op {
         control: u64,
         key: String,
     },
+    /// Several ops that belong to one moment, applied as one command.
+    ///
+    /// A gesture changes a dozen things at once — the control's rectangle,
+    /// the selection's outline and grips, the inspector's fields. Sent as
+    /// separate commands they each wake the window, and the window draws a
+    /// frame between them: a drag became two presents per pointer move, and
+    /// the presents (vsync-paced) were what the pointer then waited on.
+    Batch {
+        ops: Vec<Op>,
+    },
     Resize {
         width: f64,
         height: f64,

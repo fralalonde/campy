@@ -7,6 +7,7 @@
 //! controls it created by id.
 
 pub mod controls;
+pub mod graphics;
 pub mod sessions;
 pub mod sheet;
 pub mod snapshot;

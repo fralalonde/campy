@@ -58,6 +58,10 @@ pub type Command {
   )
   ReadText(generation: Int, control: Int, key: String)
   Resize(generation: Int, width: Int, height: Int)
+  /// Several commands that belong to one moment, applied as one. One submit
+  /// is one wake and one frame: a gesture that used to wake the window per
+  /// changed field now wakes it once.
+  Batch(generation: Int, commands: List(Command))
 }
 
 /// One native event. Kinds:

@@ -1015,10 +1015,12 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>, passive: bool) -> AnyV
                                     position.x.0, position.y.0, button
                                 );
                             }
+                            let began = std::time::Instant::now();
                             down_host.emit_raw(
                                 &format!("pointer:{surface_id}:down"),
                                 pointer_payload(position, button, cx.modifiers),
                             );
+                            crate::snapshot::slow("emit down", began);
                         },
                     )
                     .on_with(
@@ -1029,10 +1031,12 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>, passive: bool) -> AnyV
                             if pointer_log() {
                                 eprintln!("pointer at {:.0},{:.0}", position.x.0, position.y.0);
                             }
+                            let began = std::time::Instant::now();
                             move_host.emit_raw(
                                 &format!("pointer:{surface_id}:move"),
                                 pointer_payload(position, None, cx.modifiers),
                             );
+                            crate::snapshot::slow("emit move", began);
                         },
                     )
                     .on_with(

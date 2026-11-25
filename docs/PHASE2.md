@@ -83,7 +83,32 @@ Diagnostics (no desktop injection needed):
 `CAMPY_UI_CLICK=x,y`, `CAMPY_UI_DRAG=x1,y1,x2,y2` and `CAMPY_UI_MODS=ctrl`
 hand the real window one platform pointer gesture after its first frame — the
 same `SurfaceEvent`s the winit backend sends, through the window's own input
-path. `CAMPY_POINTER_LOG=1` prints what the canvas heard.
+path. `CAMPY_UI_DRAG_STEPS`/`CAMPY_UI_DRAG_INTERVAL_MS` pace that drag like a
+hand (`CAMPY_UI_DRAG_TICK=1` also asks for a frame each step).
+`CAMPY_POINTER_LOG=1` prints what the canvas heard and
+`CAMPY_UI_FRAME_LOG=1` prints frames, their gaps, what a present costs and the
+pacing a window chose. `ZGUI_LATENCY=/path.jsonl` writes the framework's
+per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
+
+### Presentation is a first-class part of drag feel
+
+A drag must show a new position on the frame after the move, so what a present
+costs *is* what a drag feels like. Measured on a 1280×860 window at scale 1.4
+(1792×1204 device px), dragging a component with a paced pointer:
+
+| path | work per move | present wait | drag |
+|---|---|---|---|
+| `PresentPacing::Display` (wgpu `Fifo`) | BEAM 1.0–1.5 ms, frame ≤0.3 ms | 22–50 ms in `get_current_texture` | 120 steps at 8 ms took 4.8 s |
+| `PresentPacing::Platform` (`Mailbox`) | same | ~0 ms | the same 120 steps took 0.96 s |
+
+The wait is on the UI thread, which is also the thread that reads pointer
+events and runs the command drain, so a blocked present is a blocked drag. A
+window that is idle draws nothing on either path. Since Campy animates nothing
+that needs the display's cadence, `campy-renderer/src/graphics.rs` installs a
+factory that chooses `Platform` on a Wayland surface (and for any surface that
+paces itself), `Display` elsewhere; `CAMPY_UI_PACING=display|platform` is the
+A/B override. A gesture's whole diff crosses the bridge as one `Op::Batch`, so
+one pointer move is one wake and one frame rather than one per changed field.
 
 ## 1. Shared context (paste this section into every dispatch prompt)
 

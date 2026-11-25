@@ -662,6 +662,7 @@ dependencies = [
  "zgui-editor",
  "zgui-platform-headless",
  "zgui-platform-winit",
+ "zgui-profile",
  "zgui-render-vector-vello",
  "zgui-render-wgpu",
  "zgui-terminal",

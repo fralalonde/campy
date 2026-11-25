@@ -18,6 +18,9 @@ rustler = "=0.39.0"
 # which keeps the whole tree on one source. zgui-terminal is wired up in
 # task Z3.2 (console kind); it rides here so the whole pin compiles together.
 zgui = { git = "https://github.com/zortax/zgui" }
+# The frame-stage trace (`ZGUI_LATENCY`): what a frame spends its milliseconds
+# on. Already in the graph under zgui; this names it to read its marks.
+zgui-profile = { git = "https://github.com/zortax/zgui" }
 zgui-ui = { git = "https://github.com/zortax/zgui" }
 zgui-editor = { git = "https://github.com/zortax/zgui-editor" }
 zgui-terminal = { git = "https://github.com/zortax/zgui-terminal" }

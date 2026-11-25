@@ -878,33 +878,45 @@ pub fn load_commands(generation: Int, model: State) -> List(bridge.Command) {
 }
 
 /// Translate view-level ops into generation-tagged bridge commands.
+///
+/// More than one op is sent as a single `Batch`: the ops of one diff belong to
+/// one moment, and submitting them one by one woke the window once per op and
+/// drew a frame between the parts. A drag is a dozen ops per pointer move, so
+/// that was a dozen wakes and several presents per move — and the presents,
+/// which wait for the display, were what the pointer then queued behind.
 pub fn commands(generation: Int, ops: List(UiOp)) -> List(bridge.Command) {
-  list.map(ops, fn(op) {
-    case op {
-      SetText(control, value) -> bridge.SetText(generation, control, value)
-      SetBool(control, key, value) ->
-        bridge.SetBool(generation, control, key, value)
-      SetInt(control, key, value) ->
-        bridge.SetInt(generation, control, key, value)
-      SetModel(control, items) -> bridge.SetModel(generation, control, items)
-      SetGeometry(control, x, y, w, h) ->
-        bridge.SetGeometry(generation, control, x, y, w, h)
-      SetCode(control, source) -> bridge.SetCode(generation, control, source)
-      AppendConsole(control, bytes) ->
-        bridge.AppendConsole(generation, control, bytes)
-      SetMarks(control, layer, items) ->
-        bridge.SetMarks(generation, control, layer, items)
-      Reload(view) ->
-        bridge.LoadUi(
-          generation,
-          shell.window_title(view.title),
-          view.layout.width,
-          view.layout.height,
-          view.theme,
-          shell.desc(view),
-        )
-    }
-  })
+  case ops {
+    [] -> []
+    [op] -> [command(generation, op)]
+    many -> [bridge.Batch(generation, list.map(many, command(generation, _)))]
+  }
+}
+
+fn command(generation: Int, op: UiOp) -> bridge.Command {
+  case op {
+    SetText(control, value) -> bridge.SetText(generation, control, value)
+    SetBool(control, key, value) ->
+      bridge.SetBool(generation, control, key, value)
+    SetInt(control, key, value) ->
+      bridge.SetInt(generation, control, key, value)
+    SetModel(control, items) -> bridge.SetModel(generation, control, items)
+    SetGeometry(control, x, y, w, h) ->
+      bridge.SetGeometry(generation, control, x, y, w, h)
+    SetCode(control, source) -> bridge.SetCode(generation, control, source)
+    AppendConsole(control, bytes) ->
+      bridge.AppendConsole(generation, control, bytes)
+    SetMarks(control, layer, items) ->
+      bridge.SetMarks(generation, control, layer, items)
+    Reload(view) ->
+      bridge.LoadUi(
+        generation,
+        shell.window_title(view.title),
+        view.layout.width,
+        view.layout.height,
+        view.theme,
+        shell.desc(view),
+      )
+  }
 }
 
 /// The granular ops that move the loaded window from `previous` to `next`.

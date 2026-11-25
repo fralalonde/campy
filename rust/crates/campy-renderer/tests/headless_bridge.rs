@@ -399,6 +399,48 @@ fn loads_updates_clicks_reads_and_rejects() {
         "a control outside the designer surface still fires"
     );
 
+    // A batch is one command carrying one moment's changes: they apply in
+    // order, and the whole gesture costs one wake instead of one per field.
+    session
+        .submit(Command {
+            generation: 1,
+            op: Op::Batch {
+                ops: vec![
+                    Op::SetText {
+                        control: 2,
+                        value: "first".into(),
+                    },
+                    Op::SetGeometry {
+                        control: 2,
+                        x: 40.0,
+                        y: 24.0,
+                        w: 200.0,
+                        h: 30.0,
+                    },
+                    Op::SetText {
+                        control: 2,
+                        value: "second".into(),
+                    },
+                ],
+            },
+        })
+        .expect("a batch enqueues");
+    session
+        .submit(Command {
+            generation: 1,
+            op: Op::ReadText {
+                control: 2,
+                key: "text".into(),
+            },
+        })
+        .expect("the read enqueues");
+    wait_for(&sink, 1, "read:2:text");
+    assert_eq!(
+        events_of(&sink, "read:2:text"),
+        vec!["read:2:text second".to_owned()],
+        "the batch applied every part, in order"
+    );
+
     // A property field that holds the focus must not swallow undo: a designer
     // pressing Ctrl+Z means the document, and a field that captured it left
     // every shortcut dead (the counter behind the old filter never came back

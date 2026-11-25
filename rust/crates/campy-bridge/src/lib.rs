@@ -125,6 +125,8 @@ enum Command {
     SetMarks(i64, i64, String, Vec<(i64, i64, String)>),
     ReadText(i64, i64, String),
     Resize(i64, f64, f64),
+    /// Several commands that belong to one moment; the outer generation wins.
+    Batch(i64, Vec<Command>),
 }
 
 impl Command {
@@ -221,6 +223,15 @@ impl Command {
                 },
             ),
             Self::Resize(generation, width, height) => (generation, Op::Resize { width, height }),
+            Self::Batch(generation, commands) => (
+                generation,
+                Op::Batch {
+                    ops: commands
+                        .into_iter()
+                        .map(|command| command.split().1)
+                        .collect(),
+                },
+            ),
         }
     }
 }

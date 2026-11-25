@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 zgui.workspace = true
+zgui-profile.workspace = true
 zgui-ui.workspace = true
 zgui-editor.workspace = true
 zgui-terminal.workspace = true

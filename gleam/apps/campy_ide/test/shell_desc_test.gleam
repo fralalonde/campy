@@ -423,14 +423,24 @@ pub fn canvas_geometry_change_is_granular_test() {
 }
 
 pub fn commands_tag_ops_with_the_generation_test() {
+  // One op is one command.
+  ide_ui.commands(4, [ide_ui.SetText(7, "hi")])
+  |> should.equal([bridge.SetText(4, 7, "hi")])
+
+  // Several are one batch: the ops of a diff belong to one moment, and a
+  // submit per op used to wake the window (and draw a frame) per op.
   ide_ui.commands(4, [
     ide_ui.SetText(7, "hi"),
     ide_ui.SetBool(8, "visible", True),
   ])
   |> should.equal([
-    bridge.SetText(4, 7, "hi"),
-    bridge.SetBool(4, 8, "visible", True),
+    bridge.Batch(4, [
+      bridge.SetText(4, 7, "hi"),
+      bridge.SetBool(4, 8, "visible", True),
+    ]),
   ])
+
+  ide_ui.commands(4, []) |> should.equal([])
 }
 
 pub fn load_commands_start_with_the_whole_shell_test() {

@@ -1,4 +1,8 @@
-//! Debug screenshots of the live window.
+//! Debug screenshots of the live window, and the self-click probe.
+//!
+//! The renderer factory that wraps a window in a recorder lives in
+//! [`crate::graphics`], beside the pacing policy; this module owns the frame
+//! readback (below) and the platform-event probe at the bottom.
 //!
 //! `CAMPY_UI_SNAPSHOT=/tmp/opencode/ide.png` wraps each window's renderer in a
 //! thin recorder that copies the composed frame back once the window has
@@ -17,8 +21,6 @@
 //! repaint have landed.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use zgui::bits::DamageSet;
@@ -26,10 +28,36 @@ use zgui::geom::{Css, CssPx, Point};
 use zgui::platform::{AppHandler, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId, WakeReason};
 use zgui::render::{RenderTarget, Renderer};
 use zgui::vocab::{Modifiers, PointerAction, PointerButton, PointerEvent};
-use zgui_render_wgpu::{GroupPrecision, Pixels, PresentPacing, SharedGraphics};
+use zgui_render_wgpu::{Pixels, WgpuRenderer};
 
 /// The environment variable naming the PNG to write.
 pub const ENV: &str = "CAMPY_UI_SNAPSHOT";
+
+/// A monotonic clock shared by the diagnostics, in milliseconds.
+fn clock() -> f64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+    start.elapsed().as_secs_f64() * 1000.0
+}
+
+/// Prints how long `what` took, when the frame log is on and it took more than
+/// a millisecond. A listener that waits on another thread shows up here.
+pub fn slow(what: &str, began: Instant) {
+    if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
+        let micros = began.elapsed().as_micros();
+        if micros > 1000 {
+            eprintln!("campy {what}: {micros}us");
+        }
+    }
+}
+
+/// Prints one timeline line when the frame log is on, so a gesture can be read
+/// against the frames it produced (`CAMPY_UI_FRAME_LOG=1`).
+pub fn trace(tag: &str) {
+    if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
+        eprintln!("campy {tag} at {:.1}", clock());
+    }
+}
 /// A file whose existence asks for one more frame to be written, then removed.
 ///
 /// The timed frame above catches the settled startup state; this catches
@@ -58,44 +86,15 @@ fn delay() -> Duration {
         .unwrap_or(DEFAULT_DELAY)
 }
 
-/// The renderer factory a snapshotting application's windows are drawn
-/// through. Mirrors zgui's own factory (`zgui::app::graphics`) so that the
-/// frame drawn here is the frame a normal run would draw, then reads it back.
-pub fn factory(path: PathBuf) -> zgui::runtime::RendererFactory {
-    let graphics = SharedGraphics::new();
-    let precision = GroupPrecision::from_environment().unwrap_or_default();
-    // One counter across windows: the initial window takes the plain name and
-    // each later one a suffix, so a preview window does not overwrite the IDE.
-    let opened = AtomicU32::new(0);
-    Box::new(move |surface, target| {
-        let handles = Arc::clone(surface).gpu_shared().ok_or_else(|| {
-            zgui::runtime::AppError::Platform(zgui::platform::PlatformError::Backend(
-                "this window offers no handles a graphics API can draw into".to_owned(),
-            ))
-        })?;
-        let pacing = match surface.present_pacing() {
-            zgui::platform::PresentPacing::Platform => PresentPacing::Platform,
-            _ => PresentPacing::Display,
-        };
-        let mut renderer = graphics
-            .renderer_for_surface(target, handles, pacing, None)
-            .map_err(zgui::runtime::AppError::GpuUnavailable)?;
-        if pacing == PresentPacing::Platform {
-            let gate = Arc::clone(surface);
-            renderer.set_present_gate(Box::new(move || gate.present_now()));
-        }
-        renderer.set_crops_buffers(surface.crops_buffers());
-        renderer.set_group_precision(precision);
-        zgui_render_vector_vello::attach(&mut renderer, target.size);
-        let index = opened.fetch_add(1, Ordering::Relaxed);
-        Ok(Box::new(Snapshot {
-            inner: renderer,
-            path: numbered(&path, index),
-            due: Instant::now() + delay(),
-            taken: false,
-            trigger: trigger(),
-            asked: 0,
-        }))
+/// Wraps `inner` so one settled frame is copied out as PNG number `index`.
+pub fn recorder(inner: WgpuRenderer, path: PathBuf, index: u32) -> Box<dyn Renderer> {
+    Box::new(Snapshot {
+        inner,
+        path: numbered(&path, index),
+        due: Instant::now() + delay(),
+        taken: false,
+        trigger: trigger(),
+        asked: 0,
     })
 }
 
@@ -117,7 +116,7 @@ fn numbered(path: &Path, index: u32) -> PathBuf {
 
 /// The window's real renderer, with one frame copied out on the way past.
 struct Snapshot {
-    inner: zgui_render_wgpu::WgpuRenderer,
+    inner: WgpuRenderer,
     path: PathBuf,
     due: Instant,
     taken: bool,
@@ -299,6 +298,18 @@ pub const DRAG_ENV: &str = "CAMPY_UI_DRAG";
 /// `+`: `CAMPY_UI_MODS=ctrl`.
 pub const MODS_ENV: &str = "CAMPY_UI_MODS";
 
+/// How many moves a probe's drag crosses (`CAMPY_UI_DRAG_STEPS`, default 3).
+const STEPS_ENV: &str = "CAMPY_UI_DRAG_STEPS";
+
+/// The interval between a paced drag's moves in milliseconds
+/// (`CAMPY_UI_DRAG_INTERVAL_MS`, default 16).
+const INTERVAL_ENV: &str = "CAMPY_UI_DRAG_INTERVAL_MS";
+
+/// Asks for a frame at every step too (`CAMPY_UI_DRAG_TICK=1`): the loop then
+/// draws continuously, as it would if the platform were pacing it, instead of
+/// stop-start on each change.
+const TICK_ENV: &str = "CAMPY_UI_DRAG_TICK";
+
 /// How long the window is given to lay out and load before the probe clicks.
 const CLICK_DELAY: Duration = Duration::from_millis(3000);
 
@@ -351,6 +362,11 @@ pub struct ClickProbe<A> {
     /// Press-then-release points: the same point twice is a click.
     gesture: Option<(Point<CssPx, Css>, Point<CssPx, Css>)>,
     modifiers: Modifiers,
+    /// How many moves the drag crosses, and how far apart they are.
+    steps: u32,
+    interval: Duration,
+    /// The move the drag has reached (0 has pressed but not moved).
+    step: u32,
     due: Option<Instant>,
     surface: Option<zgui::platform::SurfaceId>,
     fired: bool,
@@ -363,65 +379,85 @@ impl<A: AppHandler> ClickProbe<A> {
             (Some(at), _) => Some((at, at)),
             (None, drag) => drag,
         };
+        let steps = std::env::var(STEPS_ENV)
+            .ok()
+            .and_then(|raw| raw.trim().parse().ok())
+            .unwrap_or(3)
+            .clamp(1, 500);
+        let interval = Duration::from_millis(
+            std::env::var(INTERVAL_ENV)
+                .ok()
+                .and_then(|raw| raw.trim().parse().ok())
+                .unwrap_or(16),
+        );
         Self {
             inner,
             gesture,
             modifiers: mods(),
+            steps,
+            interval,
+            step: 0,
             due: None,
             surface: None,
             fired: false,
         }
     }
 
-    fn click(
+    /// Sends one pointer event at `at`.
+    fn send(
         &mut self,
         cx: &dyn PlatformCx,
         surface: SurfaceId,
-        from: Point<CssPx, Css>,
-        to: Point<CssPx, Css>,
+        action: PointerAction,
+        at: Point<CssPx, Css>,
+        button: Option<PointerButton>,
     ) {
-        let modifiers = self.modifiers;
-        let timestamp = cx.clock().timestamp();
+        let mut pointer = PointerEvent::mouse(at);
+        if let Some(button) = button {
+            pointer = pointer.with_button(button);
+        }
+        self.inner.surface_event(
+            cx,
+            surface,
+            SurfaceEvent::Pointer {
+                action,
+                event: pointer,
+                modifiers: self.modifiers,
+                timestamp: cx.clock().timestamp(),
+            },
+        );
+    }
+
+    /// Starts the gesture: a move onto the point, then the press.
+    fn press(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, from: Point<CssPx, Css>) {
+        trace("probe press");
         eprintln!(
-            "campy click probe: {:?} from {:.0},{:.0} to {:.0},{:.0} mods ctrl={} shift={}",
+            "campy click probe: {:?} story from {:.0},{:.0} steps={} every {}ms mods ctrl={} shift={}",
             surface,
             from.x.0,
             from.y.0,
-            to.x.0,
-            to.y.0,
-            modifiers.control(),
-            modifiers.shift()
+            self.steps,
+            self.interval.as_millis(),
+            self.modifiers.control(),
+            self.modifiers.shift()
         );
-        let mut send =
-            |action: PointerAction, at: Point<CssPx, Css>, button: Option<PointerButton>| {
-                let mut pointer = PointerEvent::mouse(at);
-                if let Some(button) = button {
-                    pointer = pointer.with_button(button);
-                }
-                self.inner.surface_event(
-                    cx,
-                    surface,
-                    SurfaceEvent::Pointer {
-                        action,
-                        event: pointer,
-                        modifiers,
-                        timestamp,
-                    },
-                );
-            };
-        send(PointerAction::Moved, from, None);
-        send(PointerAction::Pressed, from, Some(PointerButton::Primary));
-        // A drag crosses the intermediate points, as a hand does; one jump is
-        // enough for a marquee, three makes the gesture recognisable as one.
-        for step in 1..=3u8 {
-            let fraction = f32::from(step) / 3.0;
-            let at = Point::new(
-                CssPx(from.x.0 + (to.x.0 - from.x.0) * fraction),
-                CssPx(from.y.0 + (to.y.0 - from.y.0) * fraction),
-            );
-            send(PointerAction::Moved, at, None);
-        }
-        send(PointerAction::Released, to, Some(PointerButton::Primary));
+        self.send(cx, surface, PointerAction::Moved, from, None);
+        self.send(
+            cx,
+            surface,
+            PointerAction::Pressed,
+            from,
+            Some(PointerButton::Primary),
+        );
+    }
+
+    /// The next point on the path from `from` to `to`.
+    fn path(&self, from: Point<CssPx, Css>, to: Point<CssPx, Css>, step: u32) -> Point<CssPx, Css> {
+        let fraction = step as f32 / self.steps as f32;
+        Point::new(
+            CssPx(from.x.0 + (to.x.0 - from.x.0) * fraction),
+            CssPx(from.y.0 + (to.y.0 - from.y.0) * fraction),
+        )
     }
 }
 
@@ -474,11 +510,44 @@ impl<A: AppHandler> AppHandler for ClickProbe<A> {
         else {
             return;
         };
-        if Instant::now() >= due {
+        if Instant::now() < due {
+            return;
+        }
+        if self.step == 0 {
+            // The first deadline is the layout's grace period: press.
+            self.press(cx, surface, from);
+        } else if self.step < self.steps {
+            trace("probe move");
+            // One move per interval: a hand's drag, not a burst, so the frame
+            // rate under the gesture is what a user would see.
+            self.send(
+                cx,
+                surface,
+                PointerAction::Moved,
+                self.path(from, to, self.step),
+                None,
+            );
+        } else {
+            trace("probe release");
+            self.send(
+                cx,
+                surface,
+                PointerAction::Released,
+                to,
+                Some(PointerButton::Primary),
+            );
             self.fired = true;
             self.due = None;
-            self.click(cx, surface, from, to);
+            return;
         }
+        self.step += 1;
+        if std::env::var_os(TICK_ENV).is_some() {
+            trace("probe tick");
+            self.inner
+                .surface_event(cx, surface, SurfaceEvent::RedrawRequested);
+        }
+        let now = Instant::now();
+        self.due = Some(now + self.interval);
     }
 
     fn shutting_down(&mut self, cx: &dyn PlatformCx) {
