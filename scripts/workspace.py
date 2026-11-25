@@ -80,7 +80,12 @@ def stop_process(child: subprocess.Popen) -> None:
     if os.name == "posix":
         os.killpg(child.pid, signal.SIGTERM)
     else:
-        child.terminate()
+        # Gleam launches Erlang as a child. Killing only the CLI leaves the
+        # VM (and its windows/NIF) alive after each development restart.
+        subprocess.run(
+            ["taskkill", "/PID", str(child.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
     try:
         child.wait(timeout=5)
     except subprocess.TimeoutExpired:
@@ -137,7 +142,7 @@ def stage_nif(profile: str = "debug") -> Path:
     destination = NATIVE / target_name
     if not source.is_file():
         raise SystemExit(
-            f"Missing {profile} NIF at {source.relative_to(ROOT)}; "
+            f"Missing {profile} NIF at {source}; "
             f"build Rust first (just build-rust{'-release' if profile == 'release' else ''})."
         )
     # Never overwrite a shared library mapped into a running BEAM VM.
@@ -163,13 +168,12 @@ def clean() -> None:
 
 
 def watch_files() -> list[Path]:
-    roots = [
-        ROOT / "gleam/apps/campy_ide/src",
-        ROOT / "gleam/packages/campy_form/src",
-        ROOT / "gleam/packages/campy_ui/src",
-    ]
     files: list[Path] = []
-    for root in roots:
+    for package in PACKAGES:
+        manifest = package / "gleam.toml"
+        if manifest.is_file():
+            files.append(manifest)
+        root = package / "src"
         if root.is_dir():
             files.extend(sorted(path for path in root.rglob("*") if path.is_file()))
     return files
@@ -190,15 +194,14 @@ def files_digest(files: list[Path]) -> bytes:
 
 def launch_ide() -> subprocess.Popen:
     return subprocess.Popen(
-        ["gleam", "run"], cwd=APP, env={**environment(), "CAMPY_WATCH": "1"},
+        [require_tool("gleam"), "run"], cwd=APP, env=environment(),
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         start_new_session=True,
     )
 
 
 def dev() -> None:
-    files = watch_files()
-    digest = files_digest(files)
+    digest = files_digest(watch_files())
     while True:
         child = launch_ide()
         closed = threading.Event()
@@ -215,12 +218,12 @@ def dev() -> None:
         try:
             while child.poll() is None:
                 time.sleep(0.4)
-                candidate = files_digest(files)
+                candidate = files_digest(watch_files())
                 if candidate == digest:
                     continue
                 digest = candidate
                 print("Sources changed; rebuilding the IDE (Rust is unchanged).", flush=True)
-                result = subprocess.run(["gleam", "build"], cwd=APP, env=environment())
+                result = subprocess.run([require_tool("gleam"), "build"], cwd=APP, env=environment())
                 if result.returncode == 0:
                     print("Build accepted; restarting the IDE.", flush=True)
                     restart = True
@@ -307,9 +310,9 @@ def check_shipment(shipment: Path) -> None:
     env["CAMPY_NIF_DIR"] = str(shipment / "campy_bridge/priv/native")
     probe = ('io:format("campy nif ~s loaded~n", '
              '[integer_to_list(campy_bridge_ffi:protocol_version())]), halt().')
-    ebins = sorted(str(path) for path in sorted(shipment.glob("*/ebin")))
+    ebins = sorted(str(path) for path in shipment.glob("*/ebin"))
     result = subprocess.run(
-        ["erl", "-noshell", "-eval", probe,
+        [require_tool("erl"), "-noshell", "-eval", probe,
          *[path for ebin in ebins for path in ("-pa", ebin)]],
         env=env, capture_output=True, text=True,
     )
@@ -321,9 +324,11 @@ def check_shipment(shipment: Path) -> None:
     print(result.stdout.strip(), flush=True)
 
 
-BUILD_APP_PROBE = """case campy_form@project:load(<<"%s">>) of
+BUILD_APP_PROBE = """ProjectPath = unicode:characters_to_binary(os:getenv("CAMPY_BUILD_PROJECT")),
+ModuleId = unicode:characters_to_binary(os:getenv("CAMPY_BUILD_MODULE")),
+case campy_form@project:load(ProjectPath) of
   {ok, Project} ->
-    case campy_broker:build(Project, <<"%s">>) of
+    case campy_broker:build(Project, ModuleId) of
       {ok, {Artifact, Manifest}} ->
         io:format("~s~n~s~n", [campy_manifest:to_summary(Manifest), Artifact]),
         halt(0);
@@ -341,17 +346,17 @@ end.
 def build_app(module_id: str) -> None:
     """Compile one project module into a broker artifact, end to end."""
     ebins = sorted(
-        str(path) for path in sorted(BROKER.glob("build/dev/erlang/*/ebin"))
+        str(path) for path in BROKER.glob("build/dev/erlang/*/ebin")
     )
     if not ebins:
         raise SystemExit(
             f"Missing {BROKER.relative_to(ROOT)}/build; run `just build-gleam` first."
         )
-    probe = BUILD_APP_PROBE % (PROJECT, module_id)
     result = subprocess.run(
-        ["erl", "-noshell", "-eval", probe,
+        [require_tool("erl"), "-noshell", "-eval", BUILD_APP_PROBE,
          *[path for ebin in ebins for path in ("-pa", ebin)]],
-        cwd=ROOT, env=environment(), capture_output=True, text=True,
+        cwd=ROOT, env={**environment(), "CAMPY_BUILD_PROJECT": str(PROJECT),
+                      "CAMPY_BUILD_MODULE": module_id}, capture_output=True, text=True,
     )
     if result.returncode:
         raise SystemExit(
@@ -402,7 +407,7 @@ def main() -> None:
                 expected="Generated and validated")
     elif action == "snapshot-ide":
         command(["gleam", "run", "-m", "campy_ide_snapshot"], cwd=APP,
-                expected="IDE snapshots written")
+                expected="IDE state transitions verified")
     elif action == "build-app":
         build_app(args[0] if args else "widgets")
     elif action == "dev":

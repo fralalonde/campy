@@ -1,267 +1,114 @@
 # Runtime architecture
 
-## Ownership
+## Ownership and rendering
 
-Each OS application process contains BEAM and the Rust NIF. The Linux and Windows UI runtime
-owns a single Slint Winit event loop on a dedicated supported thread. Multiple BEAM
-actors hold logical sessions. Ordinary controls are nodes, not mandatory actors;
-stateful components/windows may have actor owners.
+Each application process contains BEAM and the Rustler NIF. Gleam owns application
+state, document editing, and event handling. A dedicated Rust UI thread owns one
+zgui application and its winit event loop, with one window per bridge session.
+Linux and Windows support this embedding; macOS startup is not implemented.
 
-The IDE is a Gleam application using this same runtime, not a separate Rust product.
-Rust owns rendering, native integration, and queue transport only.
+The IDE uses the same control descriptions and bridge operations as its previews.
+The renderer uses zgui, wgpu and Vello, with zgui-editor for source editing and
+zgui-terminal for console output. There is no Slint interpreter or per-load UI
+compilation in the native runtime. See [ADR 0003](adr/0003-zgui-migration.md) for
+the migration rationale and [phase 2](PHASE2.md) for implementation history.
 
-The NIF supports live Linux and Windows sessions and display-free UI compilation. Compilation uses a native worker with an explicit 8 MiB stack, because Slint standard-widget compilation overflows a BEAM scheduler stack. A dirty I/O NIF waits for the result in this bootstrap. Live session NIFs enqueue commands and return immediately; their completions arrive asynchronously. The separate UI thread has its own 8 MiB stack.
+## Protocol and data flow
 
-## Canonical description
+The protocol-v2 contract is mirrored by `campy_bridge.gleam`, Rust `wire.rs`, and
+the Rustler decoder in `campy-bridge/src/lib.rs`:
 
-The author edits declarative Gleam. A component description contains interface
-descriptors, a visual expression tree, stable IDs, bindings, events, and metadata.
-The designer edits this supported source subset; arbitrary computed fragments
-are opaque and edited at their definition. Evaluation alone is not enough for
-round-trip editing, so source locations and declaration structure must be retained.
+1. The owning BEAM process opens a session and submits a `LoadUi` document: title,
+   size, theme, generation, and a tree of `ControlDesc` records with stable IDs.
+2. Short NIF calls decode and validate commands, then enqueue owned data on a
+   bounded queue. Enqueue success is distinct from UI-thread completion.
+3. A reactive wake signal drains commands on the UI thread. Idle windows do not
+   poll for commands. A platform event-loop proxy also wakes the native loop.
+4. The renderer reconciles descriptions by control ID, retaining unchanged nodes
+   and signals. Granular text, geometry, model, code, console, and mark operations
+   update existing controls. A `Batch` groups related changes into one submission.
+5. Native events return to the owner as `(session, generation, kind, payload)`.
+   `ui-loaded`, `command-failed`, `closed`, and `runtime-failed` report lifecycle
+   outcomes; control/editor/pointer events carry input; `read:` replies serve as
+   completion barriers.
 
-Derived artifacts are typed Gleam facades/codecs, Slint source, and diagnostic
-source maps. The native bridge interprets generic handles and values; it must not
-generate Rust component-specific accessors. Dependency resolution and expression
-validation are framework responsibilities.
+`LoadUi` must increase the generation; other operations must match the accepted
+generation. Loads cannot be batched. The NIF checks session ownership, and cleanup
+uses atomic flags so a full queue cannot prevent closing a session. UI handles
+stay on the UI thread. A native crash can still affect the whole VM.
 
-## Data flow
+## IDE and project state
 
-1. Actor sends a validated UI definition / model batch with a session and generation.
-2. Short NIF calls enqueue owned data, returning promptly with enqueue status.
-3. The UI thread compiles/creates/updates components and sends asynchronous results.
-4. Native callbacks send typed, versioned event payloads to the owner mailbox.
-5. Gleam reduces events into a model and effects, then publishes changed properties.
+`campy_form` represents designed controls, geometry, container layout, properties,
+and project/workspace persistence. `campy_ccl` defines the component catalog.
+Project files are versioned; supported older versions are migrated explicitly.
+External-source modules reference Gleam files rather than storing their contents
+inside the project.
 
-Use bounded queues, explicit completion messages, and ownership checks. A reference
-must not grant another actor permission to mutate a session accidentally. Resource
-destructors and owner-monitor callbacks set atomic cleanup flags; they never drop live UI
-handles on an arbitrary scheduler thread. Native failures can affect the whole VM.
+`campy_ide/state` reduces user actions and keeps undo/redo history. A pointer
+movement updates the active gesture; a completed drag records one undo step.
+`campy_ide/shell` builds the control tree, while `campy_ide/ide_ui` derives the
+operations needed to reconcile successive state snapshots. The designer renders
+controls passively inside a pointer surface so Gleam can manage selection,
+marquees, placement, movement, and resizing.
 
-## Bindings
+Preview windows are tracked per module and use `campy_form/live_preview` to build
+the same protocol-v2 descriptions. F7 updates a running preview. Preview events
+are logged; preview windows do not execute user handler code. The broker/app
+packages provide an experimental generation and build path, separate from the
+IDE's visual preview.
 
-Constants and pure expression ASTs become Slint bindings. Arbitrary Gleam functions
-remain on BEAM and publish computed values. Continuous native interaction never
-waits synchronously for an actor response. Editable controls apply local edits
-immediately; model revisions reconcile updates without feedback loops or stale writes.
+## Development and reload boundaries
 
-Layout compilation is driven by description changes, not keystrokes. Lists use
-native models and stable item keys instead of recompiling for every data update.
+- `just dev` watches source trees and manifests across workspace packages. It
+  rebuilds on edits, additions, and deletions, then restarts the IDE only when
+  compilation succeeds. A failed build leaves the running IDE in place.
+- F6 reloads Gleam modules in the running VM and rebuilds the shell description.
+  A project-format change reloads the workspace. Other incompatible state-shape
+  changes and Rust/NIF changes require a restart.
+- `just smoke-reload` exercises the narrower search-box definition reload in one
+  VM: successful updates, rejected definitions/builds, and recovery. This is not
+  a transactional upgrade of arbitrary application state.
 
-## Reload protocol
+BEAM module replacement is not a global transaction. Code and state compatibility
+must be handled explicitly; full migration/effect coordination remains roadmap
+work. See [ADR 0002](adr/0002-three-role-architecture.md).
 
-The target protocol is prepare → validate → snapshot/migrate → pause → commit →
-resume → retire. Each instance, generation, interface member, and effect has an
-identity. Failed preparation does not replace the active UI. Late results are
-discarded or explicitly rerouted according to their contract.
+## Package boundaries
 
-BEAM can retain current and old module code, but loading modules is not a global
-upgrade transaction. A stable runner resolves replaceable handlers by module,
-function, and generation rather than retaining closures into old modules. Migration
-decodes a versioned snapshot; it must not cast an old opaque state term to a new type.
-Do not create unlimited version-specific module atoms during development.
+| Package | Responsibility |
+| --- | --- |
+| `campy_ccl`, `campy_form` | Component catalog, forms, projects, workspaces, preview descriptions |
+| `campy_bridge` | Gleam wire types and native externals |
+| `campy-bridge` | Rustler decoding, session ownership, events, language-server transport |
+| `campy-renderer` | zgui controls, reconciliation, UI-thread lifecycle and headless driver |
+| `campy_ide` | Studio state, shell, editor integration and preview orchestration |
+| `campy_manifest`, `campy_app`, `campy_appgen` | Artifact contracts, application handling and generated source |
+| `campy_broker`, `campy_runner` | Experimental build/artifact and deployment/routing workflows |
+| `campy_ui`, `campy_runtime`, `campy_search_box` | Original definition/model/reload fixture |
 
-Development watching demonstrates a stable-ABI, one-module description reload. The
-host retains a pure search model and accepted generation. Native window replacement
-also copies compatible public properties and dimensions; it commits the description
-after the UI-thread completion event. It soft-purges old code,
-loads the new module, generates Slint, prepares the native candidate, and commits the
-description only after successful replacement. On failure the accepted UI generation stays unchanged, but the newly
-loaded BEAM code is not rolled back. Full transactional behavior is M3.
+The last group still includes legacy Slint text emitters used by fixture tests
+and `just generate`. That output is not loaded by the current native renderer.
+The comparison programs in `bench/` are likewise separate from the production
+Rust workspace; retaining Slint there supports historical comparisons.
 
-## Dependencies and native boundaries
+## Build and verification
 
-- `campy_ui`: pure description/validation/generation; no NIF dependency.
-- `campy_search_box`: depends on `campy_ui`; portable component implementation.
+The native stack ships as one platform library (`campy_bridge.dll` on Windows,
+`campy_bridge.so` on Linux) staged under the Gleam bridge's `priv/native` directory.
+Cargo lockfiles pin git dependencies, and build recipes use `--locked`. Release
+builds strip symbols and use fat LTO; development builds keep line-table debug
+information. `just package` stages the release NIF, exports an Erlang shipment,
+checks its NIF handshake, and bundles available native dependencies.
 
-## The bridge artifact
+`just check` runs formatting, Clippy, Python runner regressions, Rust tests and
+Gleam tests. The Rust integration test uses zgui's headless platform to exercise
+input and session behavior without a display. `just smoke-native` checks the
+same path through the BEAM/NIF boundary and stages a test NIF; `just build`
+restores the normal native build.
 
-`campy_bridge` is the whole native stack — windowing, wgpu, the vector
-rasteriser, the style engine, the text stack, the editor and the terminal —
-built into one `.so` that the Gleam package loads as a NIF. A release build is
-31 MB (`strip = "symbols"`, `lto = "fat"`, `codegen-units = 1`); the same build
-without those is 56 MB, of which 16 MB is symbol tables. The size is
-dependency-bound: `cargo bloat --release -p campy-bridge --crates` puts the
-style engine at 4.4 MB, std at 2.3, naga at 1.5, the runtime at 1.4, zbus at
-1.2 and wgpu's core at 1.1, over ~250 crates. Unlike the artifact, a debug NIF
-carries line tables only (`debug = "line-tables-only"`, 276 MB rather than
-780 MB) so a Rust change does not relink a quarter of a gigabyte of DWARF.
-- `campy_runtime`: lifecycle, generation, and future state/effect coordination.
-- `campy_bridge`: sole owner of Gleam native externals.
-- `campy_ide`: composes packages and runs the application.
-- `campy-bridge`: Rustler ABI and scheduler-safe command transport.
-- `campy-renderer`: Slint interpreter and thread-confined live UI state.
-
-See [ADR 0001](adr/0001-linux-ui-thread.md) for bounded session transport,
-owner monitoring, Linux and Windows startup, and the current polling/reload tradeoffs.
-
-Use OTP `priv/` assets for installed packages. Public package interfaces/source
-are additionally needed for statically typed consumer builds; runtime discovery
-uses versioned descriptors and decoders. Package loading is code execution within
-the VM and is not an untrusted-code sandbox.
-
-## IDE surface
-
-`campy_ccl` is the Campy Component Library: a dependency-free catalog of the
-basic LCL-inspired controls. It owns each component's key, label, category,
-default size/text, child acceptance, and event name. Both the designer palette
-and the form metadata derive from this catalog; rendering targets Slint's
-widget model where one exists (LCL properties are mapped to Slint semantics).
-
-`campy_form` owns the designer model (a flat list of absolutely positioned
-controls plus a parent map for adoption, an alignment map, a
-picture-transparency map, and per-container layouts), handler-name derivation
-and stub generation, the versioned project codec (v9), the workspace codec
-(v1), and the standalone form-window emitter. Container hit-testing lives here
-too (`container_at*`): placement and drag-drop reparenting resolve the same
-rendered bounds. Panels and the window root accept children; new/pasted
-controls are
-adopted by the selected accepting component, its first accepting ancestor, or the
-window. Copy/cut/paste snapshots a whole subtree and re-keys it on paste. A
-project is a set of modules, each with one form and its handler source; Campy
-opens its own project file (`campy.campy` at the repository root, whose first
-module is the Cat Café demo) and creates it on first run.
-
-`campy_ide/ide_ui` owns the shell's data side — snapshots of scalar state and
-models, scalar diffing, and the wire values pushed through the bridge — while
-`campy_ide/ide_ui/shell` generates the static Slint source: one-row
-menus/palette/Run controls, Projects navigator, module navigator, the tabbed
-module editor (a TabPanel component: one closable tab per opened module, driven
-by the tab model — Slint's TabWidget cannot take `for`-generated tabs), object
-inspector, code view, generated-Slint view, console pane, and settings/project
-dialogs — as one interpreted Slint component per structure, parameterized only
-by the window title and the baked-in scalar declarations. A single top-right
-button switches the editor between the form and the handler code; the form
-editor's bottom tabs switch between the actual design and the generated Slint
-source. The CCL palette shares the top row with the view toggle and Run/Stop;
-hovering a palette tile shows a hint chip (hover-state driven, because Slint
-tooltip dwell timers restart on every pointer move). A separate console pane
-sits below the editor canvas. The window uses a preferred (not fixed) size, so
-the window manager can resize and maximize it. Every panel is data-driven and
-every interaction returns through the generic callback channel, so the IDE uses
-exactly the same bridge as a designed app. Choosing the window (clicking the
-empty canvas) shows its title/size/layout in the inspector and makes it the
-adoption root.
-
-F6 is a development hot-reload path. `campy_hot_ffi:reload/0` runs `gleam build`
-in the app package, then hot-loads `campy_ide` first and every other currently
-loaded `campy_*` Beam from the build ebin (the NIF wrapper and the F6 module
-itself are excluded; if `campy_ide` cannot swap in, nothing else loads either,
-so the process never ends up with new leaf modules under the previous loop).
-The IDE loop re-enters through `campy_hot_ffi:continue/7`, an external call into
-`campy_ide:loop/7`, so the next iteration uses the newly loaded loop and dispatch.
-Because the still-running previous `campy_ide` may be the code executing right
-after the beams swap, the project-format migration (`state.ensure_current_format`)
-lives in the `state` module and is called across that boundary — both from the
-reload path and at the top of `loop` — so a project-format bump reloads the
-workspace from disk before any new code reads stale records.
-The host then regenerates the Slint shell from the new `ide_ui` and submits
-`LoadUi` with the next generation, resetting the diff snapshot so every scalar
-and model is re-applied to the refreshed window. The BEAM process, workspace, and
-project state survive. Rust/NIF changes and changes to `State`/record shapes
-beyond the versioned project format still
-require a process restart.
-
-The preview window is also model-driven. `campy_form/live_preview` emits a shell
-with a `PreviewControl` model, window title/size, layout switches, and one
-generic `event(string)` callback. `campy_ide/live_preview_ui` applies a snapshot
-(title, size, layout, control model, alignment/pictures). Run loads the shell
-once; F7 re-applies the active module's snapshot to the same session, so the
-running app updates without `LoadUi`, a window restart, or losing app state.
-Events arrive as control-id/event pairs and are mapped to the derived handler
-names. The static `preview` emitter remains for the generated-Slint tab.
-
-Projects are independent documents inside a workspace; switching projects
-changes the active project, module tabs, and editor models without reloading the
-window. The workspace and the active project are reconciled on each host
-transition and auto-saved to `projects/workspace.campy` (full project snapshots),
-so edits survive a restart even without an explicit project Save. Deleting a
-project removes only the workspace entry.
-
-The shell is loaded once and is not replaced by ordinary edits; the explicit F6
-hot reload submits a new `LoadUi` and re-applies all state. A root `FocusScope` owns the global
-keyboard bindings (undo/redo, clipboard, Delete, save/open, Run/Stop); it is the
-window's forward focus and the canvas re-focuses it on selection clicks, while
-text fields accept their own editing keys first. A snapshot history in
-`campy_ide/state` records committed document changes (form, inspector, module
-creation, handler Apply) and supports global undo/redo; navigation and settings
-changes are not recorded. System file dialogs are invoked through a small Erlang
-FFI that runs Zenity/KDialog when a display and helper are available and reports
-unavailability so the host falls back to the in-window dialog. Scalar state is
-root properties
-and the dynamic collections (navigator modules, open tabs, canvas controls, and
-code lines) are Slint models rendered by `for` loops. The host diffs the desired
-values and pushes `SetText`/`SetBool`/`SetInt`/`SetColor` plus `SetModel` (a
-small generic value tree of text/bool/int/list/struct/image converted to Slint
-structs and models). Theme colors are root color properties so the color scheme
-can change live; Slint's `Palette.color-scheme` is updated through an
-`init`/`changed` handler for the Light scheme.
-Structural edits — add/delete control, open module, apply code, load project —
-are model updates, so focus, selection, scroll, and the window itself survive.
-`LoadUi` is only used once at startup.
-
-The Free designer renders the form as a module window: its title bar moves a
-per-module canvas position (UI-only) and its corner handle resizes the form
-(committed to the form model). The form's controls remain form-relative.
-
-The console stores a capped line log in IDE state. Preview lifecycle and
-callback events are appended (the app's visible stdout); the input line is sent
-to the console (stdin is logged/reserved until handler execution lands).
-
-The optional MCP server is a small Erlang HTTP process bound to 127.0.0.1. It
-implements MCP initialize, tools/list and tools/call over JSON-RPC; tool calls
-are forwarded to the IDE loop, which owns the current state and replies with
-text. It is disabled by default and started/stopped from Settings → Agent.
-
-Layout is part of the form: **Free** uses absolute geometry (drag moves and any
-of the eight corner/side handles resize; the UI tracks the gesture locally and
-sends the deltas once on release), while **Column**/**Row** wrap the control
-model in Slint `VerticalLayout`/`HorizontalLayout`. Panels and group boxes can
-also choose Free/Column/Row for their direct children; the host resolves those
-bounds. A move drop re-parents the control to the smallest accepting container
-under the cursor (or to the window when dropped outside) — placement and
-drag-drop share one hit-tester (`campy_form.container_at*`), which resolves
-rendered bounds — and only highlights when
-the parent would change; `render_controls` sorts containers before their
-children so adopted controls draw above their panel. Free controls may also
-declare an LCL-style **alignment** (Top/Bottom/Left/Right/Client/Fill),
-relative to the parent container (or the window at the root). Fill uses the
-inner parent area minus the space occupied by siblings around the control.
-Containers have a **Border** margin; aligned and arranged children resolve
-against the inset inner rectangle. Designer and preview resolve the same
-geometry. Container layouts take precedence over alignment. The Free
-canvas uses a contrasting background and light grid, and module-window moves and
-resizes show an outline preview before committing on release.
-
-The inspector edits the active module's form; events create or open a handler
-stub in that module's source, and the code view displays the highlighted source
-or edits one handler at a time. The Settings → Editor dialog changes the code
-font family/size and the color scheme. Project files are compressed, versioned
-Erlang terms validated on load; v1 (single form), v2 (modules), v3 (layout),
-v4 (parent map), v5 (alignment), v6 (per-container layouts), v7 (icons), and
-v8 (container borders) files upgrade to v9 (picture transparency). Cargo builds use
-`scripts/cargo.sh`, which selects the compatible glibc toolchain when installed
-and avoids producing a NIF that requires a newer glibc than the runtime. The selected component can be
-removed with the inspector trashcan or the Delete key; both go through the
-undoable `delete_selected` transition. The UI command queue is bounded and the
-snapshot harness uses a ReadText barrier to drain updates before capturing.
-
-## Bootstrap validation
-
-The native compiler worker's larger stack is required in practice: compiling the
-full standard-widget search box on a BEAM dirty scheduler caused a native crash,
-while simple empty-window validation succeeded. The runner additionally requires
-runtime completion markers because Gleam 1.16 can return success after a native
-child-process crash. The integration test compiles the actual generated search box.
-
-## Primary references
-
-- [Slint threading and event loop](https://docs.slint.dev/latest/docs/rust/slint/)
-- [Slint interpreter compiler](https://docs.slint.dev/latest/docs/rust/slint_interpreter/struct.Compiler)
-- [Dynamic component API](https://docs.slint.dev/latest/docs/rust/slint_interpreter/struct.ComponentInstance)
-- [Experimental component embedding](https://github.com/slint-ui/slint/issues/2390)
-- [Erlang NIF lifecycle, scheduling, and messaging](https://www.erlang.org/doc/apps/erts/erl_nif.html)
-- [BEAM module code replacement](https://www.erlang.org/doc/system/code_loading.html)
-- [Gleam hot-reload limitations](https://gleam.run/frequently-asked-questions/)
-- [Slint licensing FAQ](https://github.com/slint-ui/slint/blob/master/FAQ.md)
-
+`just smoke` checks the original definition pipeline and protocol handshake.
+`just snapshot-ide` verifies state transitions against a live renderer using
+read barriers; its historical name does not imply PNG output. Live window tests
+are opt-in (`just test-live`). Headless tests do not verify GPU output or native
+operating-system input; those require a desktop session.

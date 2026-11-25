@@ -4,9 +4,8 @@
 //! event loop (`with_any_thread(true)`, so the BEAM may spawn it from a
 //! NIF) and one zgui application. The first bridge session owns the
 //! application's initial window; later sessions open their own windows via
-//! the runtime's `Windows` API. A `set_interval` timer inside the app
-//! drains the bounded command queue — the same shape as protocol v1, with
-//! zgui's reactive flush replacing Slint's event-loop timer.
+//! the runtime's `Windows` API. A reactive wake signal drains the bounded
+//! command queue; idle windows need no polling timer.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -50,7 +49,11 @@ pub struct Command {
 
 impl Command {
     pub fn validate(&self) -> Result<(), String> {
-        match &self.op {
+        Self::validate_op(&self.op)
+    }
+
+    fn validate_op(op: &Op) -> Result<(), String> {
+        match op {
             // A batch is one moment's changes: nothing in it may be a load,
             // which is a generation of its own, and every part is checked.
             Op::Batch { ops } => {
@@ -58,11 +61,7 @@ impl Command {
                     if matches!(op, Op::LoadUi(_)) {
                         return Err("LoadUi cannot be batched".into());
                     }
-                    Command {
-                        generation: self.generation,
-                        op: op.clone(),
-                    }
-                    .validate()?;
+                    Self::validate_op(op)?;
                 }
             }
             Op::LoadUi(doc) => {
@@ -1173,10 +1172,36 @@ mod tests {
     }
 
     #[test]
-    fn generation_enforcement_is_symmetric() {
-        // LoadUi must increase; other ops must match. Exercised end to end
-        // by the headless driver test; here we pin the constant contract.
-        assert_eq!(INITIAL_SESSION, 1);
-        assert_eq!(FIRST_DYNAMIC_SESSION, 2);
+    fn nested_batches_validate_every_operation() {
+        let batch = |op| Command {
+            generation: 1,
+            op: Op::Batch {
+                ops: vec![Op::Batch { ops: vec![op] }],
+            },
+        };
+        assert!(
+            batch(Op::SetText {
+                control: 1,
+                value: "ok".into()
+            })
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            batch(Op::SetText {
+                control: 1,
+                value: "x".repeat(wire::MAX_TEXT_BYTES + 1),
+            })
+            .validate()
+            .is_err()
+        );
+        let load = batch(Op::LoadUi(UiDocument {
+            title: "test".into(),
+            width: 100.0,
+            height: 100.0,
+            theme: "dark".into(),
+            controls: vec![],
+        }));
+        assert_eq!(load.validate().unwrap_err(), "LoadUi cannot be batched");
     }
 }

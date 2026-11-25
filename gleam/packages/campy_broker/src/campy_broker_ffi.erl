@@ -1,4 +1,5 @@
 -module(campy_broker_ffi).
+-include_lib("kernel/include/file.hrl").
 -export([run_build/1, root/0, remove_tree/1, copy_file/2, list_versions/1,
          list_files/1, getenv/1, write_file/2, save_state/2, load_state/1,
          now_ms/0]).
@@ -57,13 +58,40 @@ find_root(Dir) ->
 
 %% Delete a file or a directory tree. A missing path is already clean.
 remove_tree(Path) ->
-    case file:del_dir_r(unicode:characters_to_list(Path)) of
+    case remove_path(unicode:characters_to_list(Path)) of
         ok ->
             {ok, nil};
         {error, enoent} ->
             {ok, nil};
         {error, Reason} ->
             error_text("cannot remove ~ts: ~p", [Path, Reason])
+    end.
+
+%% Never descend through a dependency link. On Windows, directory symlinks
+%% need del_dir rather than delete; OTP 27's del_dir_r leaves those behind.
+remove_path(Path) ->
+    case file:read_link_info(Path) of
+        {ok, #file_info{type = symlink}} ->
+            case file:delete(Path) of
+                {error, eperm} -> file:del_dir(Path);
+                {error, eacces} -> file:del_dir(Path);
+                Result -> Result
+            end;
+        {ok, #file_info{type = directory}} ->
+            case file:list_dir(Path) of
+                {ok, Names} -> remove_children(Path, Names);
+                Error -> Error
+            end;
+        {ok, _} -> file:delete(Path);
+        {error, enoent} -> ok;
+        Error -> Error
+    end.
+
+remove_children(Path, []) -> file:del_dir(Path);
+remove_children(Path, [Name | Rest]) ->
+    case remove_path(filename:join(Path, Name)) of
+        ok -> remove_children(Path, Rest);
+        Error -> Error
     end.
 
 %% Copy one artifact file, creating the destination directory as needed.

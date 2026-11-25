@@ -1,4 +1,8 @@
-# MVP: one portable search box in a live Gleam application
+# Historical MVP: one portable search box in a live Gleam application
+
+This document records the original Slint-based MVP and its milestones. For the
+current zgui runtime and verification commands, see [architecture](ARCHITECTURE.md)
+and [phase 2](PHASE2.md).
 
 ## Definition of done
 
@@ -327,4 +331,3 @@ hardcoded control bindings become generic descriptors. Complete M2 before
 promising live model batches, then demonstrate M3 package loading/reload, and
 finally finish M4 with drag-and-drop, inspector-driven behavior, undo/redo, and
 source-aware hand edits.
-

@@ -38,7 +38,6 @@ enum TestOp {
 }
 
 struct Reply {
-    pump_surfaces: u64,
     dump: Vec<String>,
 }
 
@@ -115,7 +114,10 @@ const QUEUE_CAP: usize = 256;
 
 /// Runs the application headlessly; the UI thread then services the test
 /// queue forever. Returns only on error (the process ends with the VM).
-pub fn drive_headless(_ui: Rc<ThreadState>, runtime: zgui::runtime::Runtime) -> Result<(), String> {
+pub(crate) fn drive_headless(
+    _ui: Rc<ThreadState>,
+    runtime: zgui::runtime::Runtime,
+) -> Result<(), String> {
     let (sender, receiver) = sync_channel::<TestOp>(QUEUE_CAP);
     let _ = TEST_QUEUE.set(sender);
     let _ = TEST_REPLY.get_or_init(|| Mutex::new(Vec::new()));
@@ -141,10 +143,7 @@ pub fn drive_headless(_ui: Rc<ThreadState>, runtime: zgui::runtime::Runtime) -> 
                 event_time += Duration::from_millis(milliseconds);
                 harness.advance(Duration::from_millis(milliseconds));
                 harness.settle(64);
-                Reply {
-                    pump_surfaces: harness.platform().offscreens().len() as u64,
-                    dump: Vec::new(),
-                }
+                Reply { dump: Vec::new() }
             }
             TestOp::Pointer(action, x, y) => {
                 let action = match action.as_str() {
@@ -153,7 +152,6 @@ pub fn drive_headless(_ui: Rc<ThreadState>, runtime: zgui::runtime::Runtime) -> 
                     "release" => PointerAction::Released,
                     other => {
                         push_reply(Reply {
-                            pump_surfaces: 0,
                             dump: vec![format!("unknown pointer action {other}")],
                         });
                         continue;
@@ -173,10 +171,7 @@ pub fn drive_headless(_ui: Rc<ThreadState>, runtime: zgui::runtime::Runtime) -> 
                     timestamp,
                 });
                 harness.settle(8);
-                Reply {
-                    pump_surfaces: 0,
-                    dump: Vec::new(),
-                }
+                Reply { dump: Vec::new() }
             }
             TestOp::Resize(width, height) => {
                 harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
@@ -184,10 +179,7 @@ pub fn drive_headless(_ui: Rc<ThreadState>, runtime: zgui::runtime::Runtime) -> 
                     DevicePx(height),
                 )));
                 harness.settle(64);
-                Reply {
-                    pump_surfaces: 0,
-                    dump: Vec::new(),
-                }
+                Reply { dump: Vec::new() }
             }
             TestOp::Key(name, control, shift) => {
                 event_time += Duration::from_millis(16);
@@ -225,10 +217,7 @@ pub fn drive_headless(_ui: Rc<ThreadState>, runtime: zgui::runtime::Runtime) -> 
                     timestamp,
                 });
                 harness.settle(8);
-                Reply {
-                    pump_surfaces: 0,
-                    dump: Vec::new(),
-                }
+                Reply { dump: Vec::new() }
             }
             TestOp::Dump => {
                 let lines: Vec<String> = harness
@@ -253,35 +242,8 @@ pub fn drive_headless(_ui: Rc<ThreadState>, runtime: zgui::runtime::Runtime) -> 
                     })
                     .collect();
                 eprintln!("CAMPY DUMP: {lines:?}");
-                Reply {
-                    pump_surfaces: 0,
-                    dump: lines,
-                }
+                Reply { dump: lines }
             }
-            _ => Reply {
-                pump_surfaces: 0,
-                dump: harness
-                    .app()
-                    .windows()
-                    .iter()
-                    .map(|window| {
-                        let controls = window.nodes_with_class("campy-control").len();
-                        let button = window
-                            .box_with_class("campy-button")
-                            .map(|rect| {
-                                format!(
-                                    "button rect {} {} {} {}",
-                                    rect.origin.x.0,
-                                    rect.origin.y.0,
-                                    rect.size.width.0,
-                                    rect.size.height.0
-                                )
-                            })
-                            .unwrap_or_else(|| "button rect NONE".into());
-                        format!("window controls={controls} {button}")
-                    })
-                    .collect(),
-            },
         };
         push_reply(reply);
     }

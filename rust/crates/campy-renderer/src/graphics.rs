@@ -64,6 +64,49 @@ fn choose(overridden: Option<&str>, surface_paces: bool, wayland: bool) -> Prese
     PresentPacing::Display
 }
 
+/// The renderer factory an application's windows are drawn through.
+///
+/// `snapshot` names a PNG to write once the window has settled (see
+/// [`crate::snapshot`]); without one the renderer is the plain one.
+pub fn factory(snapshot: Option<std::path::PathBuf>) -> RendererFactory {
+    let graphics = SharedGraphics::new();
+    let precision = GroupPrecision::from_environment().unwrap_or_default();
+    // One counter across windows: the initial window takes the plain name and
+    // each later one a suffix, so a preview window does not overwrite the IDE.
+    let opened = AtomicU32::new(0);
+    Box::new(move |surface, target| {
+        let handles = Arc::clone(surface).gpu_shared().ok_or_else(|| {
+            zgui::runtime::AppError::Platform(zgui::platform::PlatformError::Backend(
+                "this window offers no handles a graphics API can draw into".to_owned(),
+            ))
+        })?;
+        let pacing = pacing(surface);
+        let mut renderer = graphics
+            .renderer_for_surface(target, handles, pacing, None)
+            .map_err(zgui::runtime::AppError::GpuUnavailable)?;
+        // A platform that paces its own frames also decides when a composed
+        // frame is handed over. winit's surface is always ready.
+        if pacing == PresentPacing::Platform {
+            let gate = Arc::clone(surface);
+            renderer.set_present_gate(Box::new(move || gate.present_now()));
+        }
+        if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
+            eprintln!("campy present: pacing={pacing:?} target={target:?}");
+        }
+        renderer.set_crops_buffers(surface.crops_buffers());
+        renderer.set_group_precision(precision);
+        // Without this a display list's vector passes are planned, counted and
+        // then drawn from nothing: every drawing in the window would be empty
+        // space.
+        zgui_render_vector_vello::attach(&mut renderer, target.size);
+        let index = opened.fetch_add(1, Ordering::Relaxed);
+        Ok(match &snapshot {
+            Some(path) => crate::snapshot::recorder(renderer, path.clone(), index),
+            None => Box::new(renderer),
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{PresentPacing, choose};
@@ -97,47 +140,4 @@ mod tests {
             PresentPacing::Display
         );
     }
-}
-
-/// The renderer factory an application's windows are drawn through.
-///
-/// `snapshot` names a PNG to write once the window has settled (see
-/// [`crate::snapshot`]); without one the renderer is the plain one.
-pub fn factory(snapshot: Option<std::path::PathBuf>) -> RendererFactory {
-    let graphics = SharedGraphics::new();
-    let precision = GroupPrecision::from_environment().unwrap_or_default();
-    // One counter across windows: the initial window takes the plain name and
-    // each later one a suffix, so a preview window does not overwrite the IDE.
-    let opened = AtomicU32::new(0);
-    Box::new(move |surface, target| {
-        let handles = Arc::clone(surface).gpu_shared().ok_or_else(|| {
-            zgui::runtime::AppError::Platform(zgui::platform::PlatformError::Backend(
-                "this window offers no handles a graphics API can draw into".to_owned(),
-            ))
-        })?;
-        let pacing = pacing(&surface);
-        let mut renderer = graphics
-            .renderer_for_surface(target, handles, pacing, None)
-            .map_err(zgui::runtime::AppError::GpuUnavailable)?;
-        // A platform that paces its own frames also decides when a composed
-        // frame is handed over. winit's surface is always ready.
-        if pacing == PresentPacing::Platform {
-            let gate = Arc::clone(&surface);
-            renderer.set_present_gate(Box::new(move || gate.present_now()));
-        }
-        if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
-            eprintln!("campy present: pacing={pacing:?} target={target:?}");
-        }
-        renderer.set_crops_buffers(surface.crops_buffers());
-        renderer.set_group_precision(precision);
-        // Without this a display list's vector passes are planned, counted and
-        // then drawn from nothing: every drawing in the window would be empty
-        // space.
-        zgui_render_vector_vello::attach(&mut renderer, target.size);
-        let index = opened.fetch_add(1, Ordering::Relaxed);
-        Ok(match &snapshot {
-            Some(path) => crate::snapshot::recorder(renderer, path.clone(), index),
-            None => Box::new(renderer),
-        })
-    })
 }

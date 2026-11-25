@@ -118,7 +118,7 @@ pub fn main() {
     })
 
   let _ = bridge.close_session(session)
-  io.println("IDE snapshots written")
+  io.println("IDE state transitions verified")
 }
 
 // Apply `model`'s ops against the live document at `generation`, ending with a

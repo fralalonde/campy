@@ -16,8 +16,7 @@ import gleeunit/should
 
 const fixture_path = "test/fixtures/cat_cafe_controls.txt"
 
-const fixture_header =
-  "# Cat Café form → ControlDesc document (golden, Z2.1).\n"
+const fixture_header = "# Cat Café form → ControlDesc document (golden, Z2.1).\n"
   <> "# One node per line, children indented: kind id= text= xy= wh= enabled= visible= props=.\n"
   <> "# Regenerate after a deliberate emitter change: CAMPY_UPDATE_FIXTURE=1 gleam test\n"
 

@@ -545,6 +545,56 @@ fn loads_updates_clicks_reads_and_rejects() {
 
     // Both sessions stay healthy; closing the preview reaps only it.
     assert_eq!(sessions::active_sessions(), 2);
+    // A document with only retained controls mounts no new rows on reload.
+    // Both this case and an empty document must still release queued ops.
+    let mut stable = form();
+    stable.controls.truncate(1);
+    for generation in [3, 4] {
+        preview
+            .submit(Command {
+                generation,
+                op: Op::LoadUi(stable.clone()),
+            })
+            .expect("unchanged document reloads");
+        preview
+            .submit(Command {
+                generation,
+                op: Op::ReadText {
+                    control: 1,
+                    key: "text".into(),
+                },
+            })
+            .expect("read after reload enqueues");
+        wait_for(&preview_sink, (generation - 2) as usize, "read:1:text");
+    }
+    assert_eq!(
+        events_of(&preview_sink, "read:1:text"),
+        vec![
+            "read:1:text Label 0".to_owned(),
+            "read:1:text Label 0".to_owned(),
+        ]
+    );
+    stable.controls.clear();
+    preview
+        .submit(Command {
+            generation: 5,
+            op: Op::LoadUi(stable),
+        })
+        .expect("empty document reloads");
+    preview
+        .submit(Command {
+            generation: 5,
+            op: Op::ReadText {
+                control: 1,
+                key: "text".into(),
+            },
+        })
+        .expect("read from empty document enqueues");
+    wait_for(&preview_sink, 1, "command-failed");
+    assert_eq!(
+        events_of(&preview_sink, "command-failed"),
+        vec!["command-failed Unknown control 1".to_owned(),]
+    );
     preview.close(1);
     wait_for(&preview_sink, 1, "closed");
     let _ = first_sink;

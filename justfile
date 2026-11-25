@@ -10,8 +10,6 @@ export PATH := home_directory() / ".asdf" / "shims" \
   + ":" + home_directory() / ".local/bin" \
   + ":" + env_var_or_default("PATH", "")
 
-root := justfile_directory()
-
 default:
     @just --list
 
@@ -64,21 +62,20 @@ build-app module="widgets": build-gleam
 dogfood:
     python scripts/make_dogfood.py
 
-# Generate the current search-box UI without hand-editing Slint.
+# Emit the legacy search-box Slint fixture (not used by the native renderer).
 generate: build
     python scripts/workspace.py generate
 
-# Render the IDE shell states (property/model updates, no reloads) to generated/.
+# Verify IDE state transitions against a live renderer (opens a window).
 snapshot-ide: build
     python scripts/workspace.py snapshot-ide
 
-# The Rust half of the suite — green now. The ui-testing feature builds
+# The Rust half of the suite. The ui-testing feature builds
 # the headless zgui driver the bridge integration test rides.
 test-rust:
     ./scripts/cargo.sh test --manifest-path rust/Cargo.toml --locked --features campy-renderer/ui-testing
 
-# Full suite; red during the protocol-v2 transition window until Z2.3
-# (see docs/PHASE2.md §1.5).
+# Full suite with the development NIF staged for Gleam tests.
 test: stage-nif
     just test-rust
     python scripts/workspace.py gleam test
@@ -92,22 +89,25 @@ fmt-check:
     ./scripts/cargo.sh clippy --manifest-path rust/Cargo.toml --locked --all-targets
     python scripts/workspace.py gleam format --check
 
-check: fmt-check test
+test-scripts:
+    python -m unittest discover -s scripts -p 'test_*.py'
+
+check: fmt-check test-scripts test
 
 
-# Linux integration smoke; temporarily edits and restores the search-box fixture.
+# Headless reload smoke; temporarily edits and restores the search-box fixture.
 smoke-reload: build
     python scripts/smoke_reload.py
 
-# Headless compiler/NIF bootstrap for CI and display-free verification.
+# Headless definition/NIF bootstrap for CI and display-free verification.
 smoke: build
     python scripts/workspace.py smoke
 
-# Native rendering/input/lifecycle test; `just smoke-native x11` tests X11.
-smoke-native backend="auto": build-gleam
+# Native NIF input/lifecycle test through the headless platform driver.
+smoke-native: build-gleam
     ./scripts/cargo.sh build --manifest-path rust/Cargo.toml --locked --features campy-bridge/ui-testing
     python scripts/workspace.py stage-nif
-    python scripts/smoke_native.py {{backend}}
+    python scripts/smoke_native.py
 
 # Native drag-gesture probe: verifies the designer's hybrid drag contract
 # (click selects, drag from a selection moves, drag from empty space or an

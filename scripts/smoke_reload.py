@@ -6,30 +6,28 @@ restores it even on failure. The first slice tests descriptions, not live widget
 """
 
 import hashlib
-import os
-from pathlib import Path
-import signal
 import subprocess
-import sys
 import time
 
-ROOT = Path(__file__).resolve().parent.parent
+from workspace import APP, NATIVE, RELOAD, ROOT, environment, nif_names, require_tool, stop_process
+
 SOURCE = ROOT / "gleam/packages/campy_search_box/src/campy_search_box.gleam"
-NATIVE = ROOT / "gleam/packages/campy_bridge/priv/native/campy_bridge.so"
 LOG = ROOT / "generated/reload-smoke.log"
 
 
 def main():
-    if sys.platform != "linux":
-        raise SystemExit("This first process-lifecycle smoke test targets Linux.")
-    original = SOURCE.read_text()
-    native_hash = hashlib.sha256(NATIVE.read_bytes()).digest()
+    original_bytes = SOURCE.read_bytes()
+    original = original_bytes.decode("utf-8")
+    native = NATIVE / nif_names()[1]
+    native_hash = hashlib.sha256(native.read_bytes()).digest()
+    previous_signal = RELOAD.read_bytes() if RELOAD.exists() else None
+    gleam = require_tool("gleam")
     LOG.parent.mkdir(exist_ok=True)
     with LOG.open("w") as output:
         child = subprocess.Popen(
-            [sys.executable, "scripts/workspace.py", "dev"],
-            cwd=ROOT, stdout=output, stderr=subprocess.STDOUT,
-            start_new_session=True, env={**os.environ, "CAMPY_HEADLESS": "1"},
+            [gleam, "run", "-m", "campy_bootstrap"],
+            cwd=APP, stdout=output, stderr=subprocess.STDOUT,
+            start_new_session=True, env={**environment(), "CAMPY_WATCH": "1"},
         )
 
         def wait_for(text):
@@ -43,30 +41,39 @@ def main():
                 time.sleep(0.1)
             raise AssertionError(f"Timed out waiting for {text!r}:\n{LOG.read_text()}")
 
+        def rebuild(source, accepted=True):
+            SOURCE.write_bytes(source.encode("utf-8"))
+            result = subprocess.run([gleam, "build"], cwd=APP, env=environment(),
+                                    stdout=output, stderr=subprocess.STDOUT)
+            if (result.returncode == 0) != accepted:
+                raise AssertionError(f"Unexpected build status {result.returncode}:\n{LOG.read_text()}")
+            if accepted:
+                RELOAD.write_text(str(time.monotonic_ns()))
+
         try:
             wait_for("Watching search-box builds")
-            SOURCE.write_text(original.replace('TextLiteral("Search")', 'TextLiteral("Find")'))
+            rebuild(original.replace('TextLiteral("Search")', 'TextLiteral("Find")'))
             wait_for("Accepted UI generation 2")
-            SOURCE.write_text(original.replace('id: "query-input"', 'id: "9-invalid"'))
+            rebuild(original.replace('id: "query-input"', 'id: "9-invalid"'))
             wait_for("Reload rejected; keeping last accepted UI")
-            SOURCE.write_text(original + "\nthis is deliberately invalid Gleam\n")
-            wait_for("Build rejected; running host retains its accepted UI.")
-            SOURCE.write_text(original)
+            rebuild(original + "\nthis is deliberately invalid Gleam\n", accepted=False)
+            assert child.poll() is None, "Rejected build stopped the host"
+            rebuild(original)
             wait_for("Accepted UI generation 3")
             assert LOG.read_text().count("Campy bootstrap:") == 1, "VM restarted"
-            assert hashlib.sha256(NATIVE.read_bytes()).digest() == native_hash, "NIF changed"
+            assert hashlib.sha256(native.read_bytes()).digest() == native_hash, "NIF changed"
             print("Reload smoke passed: same host, accepted update, rejected UI/code, recovery, unchanged NIF.")
         finally:
             try:
-                os.killpg(child.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            child.wait(timeout=10)
-            SOURCE.write_text(original)
-            # Restore on-disk BEAM code as well, without touching Rust.
-            subprocess.run(
-                ["gleam", "build"], cwd=ROOT / "gleam/apps/campy_ide", check=True,
-            )
+                stop_process(child)
+            finally:
+                SOURCE.write_bytes(original_bytes)
+                if previous_signal is None:
+                    RELOAD.unlink(missing_ok=True)
+                else:
+                    RELOAD.write_bytes(previous_signal)
+                # Restore on-disk BEAM code as well, without touching Rust.
+                subprocess.run([gleam, "build"], cwd=APP, env=environment(), check=True)
 
 
 if __name__ == "__main__":

@@ -31,8 +31,11 @@ run(Title, Width, Height, Theme, Controls, ClickId, ClickX, ClickY, LabelId, Lab
     io:format("NATIVE_SMOKE_READ_OK~n"),
 
     %% A platform resize keeps the document live.
-    {ok, nil} = campy_bridge_ffi:test_resize(640.0, 420.0),
-    {ok, _} = campy_bridge_ffi:test_pump(32),
+    {ok, nil} = campy_bridge_ffi:test_resize(800.0, 480.0),
+    %% Test input and UI commands have separate asynchronous queues. Wait for
+    %% the resize itself, otherwise close may overtake it and leave the test
+    %% driver delivering input to a window that no longer exists.
+    <<"800;480">> = await(Id, 1, <<"size">>, 5000),
 
     %% A non-increasing generation is rejected without touching the document.
     {ok, nil} = campy_bridge_ffi:submit(

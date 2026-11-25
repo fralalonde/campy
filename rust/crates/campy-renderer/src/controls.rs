@@ -49,6 +49,9 @@ const MENU_WIDTH: f64 = 260.0;
 /// The BEAM-facing event channel (session, generation, kind, payload).
 pub type EventSink = Arc<dyn Fn(u64, u64, String, String) + Send + Sync>;
 
+/// A pending editor layer and its (line, column, message) marks.
+type EditorMarks = (String, Vec<(u64, u64, String)>);
+
 /// Everything the control builders and the command applier share about one
 /// session window. Lives on the UI thread only.
 pub struct Host {
@@ -86,7 +89,7 @@ pub struct Host {
     /// re-creates the editors, so a command can be addressed to one that does
     /// not exist yet; it is kept here and applied on mount rather than rejected.
     pub pending_code: RefCell<HashMap<u64, String>>,
-    pub pending_marks: RefCell<HashMap<u64, (String, Vec<(u64, u64, String)>)>>,
+    pub pending_marks: RefCell<HashMap<u64, EditorMarks>>,
     /// Live console feeds (`console` kind): AppendConsole bytes go here.
     pub consoles: RefCell<HashMap<u64, flume::Sender<Vec<u8>>>>,
     /// Whether this session's window came through the runtime's
@@ -517,6 +520,9 @@ pub fn reconcile(doc: &UiDocument, host: &Rc<Host>) {
         }
     }
     for id in &rekey {
+        // A rebuilt row must register fresh signals before queued commands
+        // may use it; stale entries must not count toward readiness.
+        host.controls.borrow_mut().remove(id);
         let shape = host.shapes.borrow().get(id).cloned();
         match shape {
             Some(shape) => shape.update(|count| *count = count.wrapping_add(1)),
@@ -572,6 +578,16 @@ pub fn reconcile(doc: &UiDocument, host: &Rc<Host>) {
     }
     host.structure
         .update(|count| *count = count.wrapping_add(1));
+    // An unchanged or removal-only document may mount no rows at all.
+    // Finish it here instead of waiting for a build_control callback.
+    mark_document_ready(host);
+}
+
+fn mark_document_ready(host: &Rc<Host>) {
+    if !host.document_ready.get() && host.controls.borrow().len() == host.docs.borrow().len() {
+        host.document_ready.set(true);
+        host.shared.nudge();
+    }
 }
 
 /// Every control's absolute rectangle from the live geometry signals.
@@ -945,19 +961,9 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>, passive: bool) -> AnyV
         enabled: RwSignal::new_local(desc.enabled),
         visible: RwSignal::new_local(desc.visible),
     };
-    {
-        let mut controls = host.controls.borrow_mut();
-        controls.insert(desc.id, signals.clone());
-        // The document can take commands addressed to it once every control in
-        // it has a node. The last row to build flips this, and the queue that
-        // parked waiting for it is woken.
-        let expected = host.docs.borrow().len();
-        if controls.len() >= expected && !host.document_ready.get() {
-            drop(controls);
-            host.document_ready.set(true);
-            host.shared.nudge();
-        }
-    }
+    host.controls.borrow_mut().insert(desc.id, signals.clone());
+    // The last rebuilt row wakes commands parked waiting for the document.
+    mark_document_ready(host);
 
     let rect = signals.rect;
     let enabled = signals.enabled;
@@ -991,10 +997,7 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>, passive: bool) -> AnyV
         // A designed control is a picture: the pointer passes through its
         // whole subtree to the surface, whose capture listeners are the form
         // editor. Nothing inside can focus itself or claim a press.
-        .class_toggle(ClassName::new("campy-passive"), {
-            let passive = passive;
-            move || passive
-        });
+        .class_toggle(ClassName::new("campy-passive"), move || passive);
 
     // A control that carries a hint reports the pointer arriving and leaving, so
     // the loop can put the hint on the status line (the hover half of the old

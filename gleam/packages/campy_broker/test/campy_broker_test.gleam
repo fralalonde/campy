@@ -28,6 +28,13 @@ fn list_files(directory: String) -> Result(List(String), String)
 @external(erlang, "campy_broker_ffi", "write_file")
 fn write_file(path: String, contents: String) -> Result(Nil, String)
 
+@external(erlang, "campy_broker_test_ffi", "remove_tree_keeps_link_target")
+fn remove_tree_keeps_link_target(path: String) -> Nil
+
+pub fn remove_tree_keeps_link_target_test() {
+  remove_tree_keeps_link_target(campy_broker.app_dir("broker_symlink_probe"))
+}
+
 fn fast_only() -> Bool {
   getenv("CAMPY_FAST_ONLY") != None
 }

@@ -1,0 +1,5 @@
+# Formatters and generated-text fixtures use LF on every platform.
+* text=auto eol=lf
+*.campy binary
+*.beam binary
+*.png binary
