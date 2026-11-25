@@ -552,63 +552,22 @@ fn ui_event_loop() -> Result<winit::event_loop::EventLoop<zgui_platform_winit::U
 /// renders correctly, while a rebuild of an existing deferred window
 /// rides a reactive-tracking path that does not fire in the runtime's
 /// window-open flow; ADR 0003 records the finding).
+/// `LoadUi` application: the document signal is written and the window's
+/// reactive hole rebuilds from it.
+///
+/// v1 parity was a *window swap* — a fresh window with the new document, the old
+/// one closed — because a deferred window built through `windows.open` did not
+/// rebuild from a signal change (ADR 0003). That no longer holds: a preview and
+/// the shell both rebuild in place, so a reload keeps the window, its position
+/// and its focus, and nothing is created or destroyed.
 fn swap_load(
     host: &Rc<Host>,
     doc: UiDocument,
-    windows: &Option<zgui::runtime::windows::Windows>,
+    _windows: &Option<zgui::runtime::windows::Windows>,
 ) -> Option<Rc<Host>> {
-    let old_handle = host.window.borrow().clone();
-    let Some(handle) = old_handle else {
-        // The window is not built yet: the deferred build renders the
-        // document directly.
-        host.document_ready.set(false);
-        host.document.set(Some(doc));
-        return None;
-    };
-    if !host.view_built.get() {
-        // The view has not built its document child yet (the queue woke us
-        // mid-build): the document goes into the window being built, whose
-        // child reads it. Swapping here would open a window from inside
-        // another window's build, and that window never gets a frame.
-        host.document_ready.set(false);
-        host.document.set(Some(doc));
-        return None;
-    }
-    let Some(windows) = windows.as_ref() else {
-        host.document_ready.set(false);
-        host.document.set(Some(doc));
-        return None;
-    };
-    let size = handle.size().get_untracked();
-    let sink = host.sink_handle();
-    let control = host.control.borrow().as_ref().map(Arc::clone);
-    let replacement = Host::new(host.session, sink, Arc::clone(&host.shared));
-    if let Some(control) = control {
-        replacement.adopt_control(control);
-    }
-    replacement.generation.set(host.generation.get());
-    replacement
-        .live_generation
-        .store(host.generation.get(), Ordering::Release);
-    replacement.document.set(Some(doc.clone()));
-    if std::env::var_os("CAMPY_UI_TRACE").is_some() {
-        eprintln!("campy swap session={} opening replacement", host.session);
-    }
-    let _new_handle = windows.open(
-        zgui::runtime::windows::WindowOptions::new(doc.title.clone())
-            .with_size(size.width.0, size.height.0),
-        session_view(replacement.clone()),
-    );
-    // The replacement keeps the session's id and control; the old window is
-    // closed by us, so its close hook must not mark that shared control closed
-    // (which would reap the session the replacement just took over).
-    host.window_swapped.set(true);
-    handle.close();
-    if std::env::var_os("CAMPY_UI_TRACE").is_some() {
-        eprintln!("campy swap session={} closed the old window", host.session);
-    }
-    host.window.borrow_mut().take();
-    Some(replacement)
+    host.document_ready.set(false);
+    host.document.set(Some(doc));
+    None
 }
 
 /// Adopts newly registered sessions, applies queued commands, reaps

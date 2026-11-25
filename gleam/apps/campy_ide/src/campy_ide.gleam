@@ -129,8 +129,14 @@ fn debug_view(model: State) -> State {
       |> state.pointer_down(266, 252)
       |> state.pointer_up(266, 252, True)
     "run" -> run_form(model)
-    // Run, then update the running app once: the F7 path end to end.
-    "run-update" -> update_app(run_form(model))
+    // Run, then edit the form and update the running app: the F7 path end to
+    // end, with a visible difference to look for.
+    "run-update" ->
+      update_app(
+        run_form(model)
+        |> state.select("label-1")
+        |> state.commit_field("text", "Updated!"),
+      )
     "events" -> state.set_tab(state.select(model, "pet-button"), state.Events)
     _ -> model
   }
