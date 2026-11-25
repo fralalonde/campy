@@ -83,12 +83,23 @@ decode_projects([Project | Rest], Decoded) ->
 decode_projects(_, _) ->
     error.
 
-decode_project({project, Version, Title, Modules, Path, Icon})
-  when is_integer(Version), is_binary(Title), is_list(Modules),
-       is_binary(Path), is_binary(Icon) ->
+%% v13 adds the project's default module. A v12 file (the same tuple without
+%% it) is read as v13 with no default module: dropping a user's project over a
+%% field that can be defaulted is worse than this one-step migration.
+decode_project({project, 12, Title, Modules, Path, Icon})
+  when is_binary(Title), is_list(Modules), is_binary(Path), is_binary(Icon) ->
     case decode_modules(Modules, []) of
         {ok, Next} ->
-            {ok, {project, Version, Title, Next, Path, Icon}};
+            {ok, {project, 13, Title, Next, Path, Icon, <<>>}};
+        error ->
+            error
+    end;
+decode_project({project, Version, Title, Modules, Path, Icon, DefaultModule})
+  when is_integer(Version), is_binary(Title), is_list(Modules),
+       is_binary(Path), is_binary(Icon), is_binary(DefaultModule) ->
+    case decode_modules(Modules, []) of
+        {ok, Next} ->
+            {ok, {project, Version, Title, Next, Path, Icon, DefaultModule}};
         error ->
             error
     end;

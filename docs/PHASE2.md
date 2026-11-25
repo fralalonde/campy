@@ -90,6 +90,44 @@ hand (`CAMPY_UI_DRAG_TICK=1` also asks for a frame each step).
 pacing a window chose. `ZGUI_LATENCY=/path.jsonl` writes the framework's
 per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
 
+### Form editor polish (gestures, inspector, apps)
+
+- **One undo step per gesture.** A drag or resize changes the document under
+  the pointer but records nothing until the button is released; the step is
+  the document as the press found it. Escape mid-gesture puts it back (a
+  cancel, not a commit).
+- **The selection moves as a block.** The delta is clamped by the selection's
+  own outline, so the first component to reach an edge stops them all instead
+  of the block tearing apart; the outline is also the grab area, so pressing
+  the gap between two selected components drags the block.
+- **The marquee shows its contents while it grows.** A transparent band (no
+  fill) plus live outlines and handles for the components it would take; the
+  real selection is unchanged until release (`State.preview_selection`).
+- **Moving the module window** takes its delta in canvas coordinates. Form
+  coordinates move with the window being dragged, so a delta taken in them
+  chases its own output — the jitter the drag had.
+- **Popups** read the live geometry signals when they open (a resize or a move
+  changes those, not the loaded document), and closing keeps the card mounted
+  but hidden so its area is repainted instead of left as an empty box.
+- **The inspector keeps its tab** when the selection changes; **double-clicking**
+  a component opens its default handler (`clicked`/`toggled`/`edited`/… by
+  kind) in the code pane without switching the inspector to Events.
+- **The Form/Raw tabs are gone**: there is no generated form source to show,
+  only the form and the handler code (`Ctrl+Tab` still toggles those).
+- **Apps run from the navigator rows.** Each module row carries a run button
+  at its right end (green ▶ to start, red ■ to stop, both drawn from a fixed
+  slot pool so the document's shape does not change with the number of rows);
+  a project row carries one too when the project names an app — its
+  `default module`, chosen in the project inspector. Running a project's app
+  switches to that project first. Several can run at once, each in its own
+  window; a project with no default module is not runnable as a project.
+- Codec v13 adds `Project.default_module`. A v12 file (checked in as
+  `gleam/packages/campy_form/test/fixtures/project-v12.campy`) is read as v13
+  with no default module, so a user's workspace survives the upgrade; older
+  versions are still rejected.
+- The in-app file browser filters by what the dialog is for (project files,
+  images), so the Open dialog cannot offer files the codec will refuse.
+
 ### Presentation is a first-class part of drag feel
 
 A drag must show a new position on the frame after the move, so what a present

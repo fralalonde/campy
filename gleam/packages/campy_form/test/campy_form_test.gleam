@@ -322,7 +322,7 @@ pub fn project_roundtrip_preserves_modules_test() {
   let assert Ok(saved) = project.save(original, path)
   saved.path |> should.equal(path)
   let assert Ok(loaded) = project.load(path)
-  loaded.version |> should.equal(12)
+  loaded.version |> should.equal(13)
   loaded.icon |> should.equal("assets/camping-tent.png")
   loaded.title |> should.equal("Campy")
   loaded.modules
@@ -832,6 +832,7 @@ fn external_project(path: String) -> project.Project {
     ],
     "/tmp/external.campy",
     "",
+    "",
   )
 }
 
@@ -895,7 +896,22 @@ pub fn empty_external_source_path_is_rejected_test() {
   }
 }
 
-// Codec v12 has no upgrade chain: an older version tag is an explicit error.
+// A v12 file (no default module) still loads: dropping a whole project over a
+// field the codec can default is worse than one migration step.
+pub fn a_v12_project_loads_with_no_default_module_test() {
+  let assert Ok(loaded) =
+    project.load("gleam/packages/campy_form/test/fixtures/project-v12.campy")
+  loaded.version |> should.equal(13)
+  loaded.default_module |> should.equal("")
+  // Everything else is the same project.
+  loaded.title |> should.equal("Campy")
+  loaded.modules
+  |> list.map(fn(module) { module.name })
+  |> should.equal(["Cat Café", "Widgets", "Welcome", "Search box"])
+}
+
+// Older versions have no upgrade chain: an older version tag is an explicit
+// error.
 pub fn legacy_project_version_is_rejected_test() {
   let path = "/tmp/campy-form-legacy-version-test.campy"
   let legacy = project.Project(..project.campy(), version: 11)
@@ -904,9 +920,9 @@ pub fn legacy_project_version_is_rejected_test() {
   |> should.equal(Error("Unsupported project version"))
 }
 
-// The checked-in demo is the codec's reference file: it loads at v12 and is
+// The checked-in demo is the codec's reference file: it loads at v13 and is
 // exactly what `project.campy()` builds (path aside).
-pub fn checked_in_campy_project_is_the_v12_demo_test() {
+pub fn checked_in_campy_project_is_the_current_demo_test() {
   let loaded = case project.load("campy.campy") {
     Ok(loaded) -> loaded
     Error(_) ->
@@ -915,7 +931,7 @@ pub fn checked_in_campy_project_is_the_v12_demo_test() {
         Error(error) -> panic as { "cannot load campy.campy: " <> error }
       }
   }
-  loaded.version |> should.equal(12)
+  loaded.version |> should.equal(13)
   project.Project(..loaded, path: project.default_path)
   |> should.equal(project.campy())
   let assert [first, ..] = loaded.modules

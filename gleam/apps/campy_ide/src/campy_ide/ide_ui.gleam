@@ -101,12 +101,18 @@ pub fn snapshot(model: State) -> Snapshot {
     theme: theme_name(model.scheme),
     status: model.status,
     path: model.project.path,
-    running: is_running(model),
+    running: state.any_running(model),
+    project_apps: list.map(model.workspace.projects, fn(target) {
+      case project.default_module(target) {
+        Some(module) -> module.id
+        None -> ""
+      }
+    }),
+    running_modules: list.map(model.previews, fn(preview) { preview.module }),
     code_view: is_code_view(model),
-    raw_tab: model.raw_tab,
     events_tab: is_events_tab(model),
     hints: model.hints,
-    has_selection: !list.is_empty(model.selection),
+    has_selection: !list.is_empty(shown_selection(model)),
     selection_free: selection_free(model),
     selection_label: selection_label(model),
     can_delete_project: list.length(model.workspace.projects) > 1,
@@ -115,6 +121,14 @@ pub fn snapshot(model: State) -> Snapshot {
     project_title: model.project.title,
     project_path: model.project.path,
     project_selected: model.selected_project,
+    project_app: case project.default_module(model.project) {
+      Some(module) -> module.name
+      None -> "None"
+    },
+    project_app_options: list.append(
+      ["None"],
+      list.map(model.project.modules, fn(module) { module.name }),
+    ),
     settings_open: model.settings_open,
     agent_open: model.agent_open,
     project_dialog_open: model.project_dialog_open,
@@ -257,10 +271,37 @@ fn item_list(control: campy_form.Control) -> List(String) {
   |> list.filter(fn(item) { item != "" })
 }
 
+/// What the canvas outlines. While a marquee is down that is the set it would
+/// select, so the frame shows its contents — outlines and handles — as it
+/// grows, before the button is released.
+fn shown_selection(model: State) -> List(String) {
+  case model.preview_selection {
+    [] -> model.selection
+    preview -> preview
+  }
+}
+
+/// The component the grips belong to: the preview's first, or the selection's.
+fn shown_primary(model: State) -> Option(campy_form.Control) {
+  let ids = shown_selection(model)
+  let id = case list.first(ids) {
+    Ok(id) -> id
+    Error(_) -> ""
+  }
+  case active_form(model), id {
+    Some(form), _ ->
+      case campy_form.find_control(form, id) {
+        Some(control) -> Some(control)
+        None -> state.selected_control(model)
+      }
+    None, _ -> state.selected_control(model)
+  }
+}
+
 /// Whether the primary selection can be resized by its grips: its parent has
 /// to lay its children out itself, the same test `state.grip_at` makes.
 fn selection_free(model: State) -> Bool {
-  case state.selected_control(model), active_form(model) {
+  case shown_primary(model), active_form(model) {
     Some(control), Some(form) ->
       campy_form.layout_of(form, campy_form.parent_of(form, control.id))
       == campy_form.Free
@@ -275,7 +316,7 @@ fn canvas_selection(model: State) -> #(Int, Int, Int, Int) {
     Some(form) -> {
       let #(window_x, window_y) = state.window_position(model)
       let boxes =
-        model.selection
+        shown_selection(model)
         |> list.filter_map(fn(id) {
           case campy_form.find_control(form, id) {
             Some(control) -> {
@@ -296,7 +337,7 @@ fn selection_boxes(model: State) -> List(#(Int, Int, Int, Int)) {
     None -> []
     Some(form) -> {
       let #(window_x, window_y) = state.window_position(model)
-      model.selection
+      shown_selection(model)
       |> list.filter_map(fn(id) {
         case campy_form.find_control(form, id) {
           Some(control) -> {
@@ -1137,10 +1178,7 @@ fn prop_change(
 fn code_ops(previous: Snapshot, next: Snapshot) -> List(UiOp) {
   case previous.code_source == next.code_source {
     True -> []
-    False -> [
-      SetCode(shell.section_id("code-view"), next.code_source),
-      SetCode(shell.section_id("raw-view"), next.code_source),
-    ]
+    False -> [SetCode(shell.section_id("code-view"), next.code_source)]
   }
 }
 
@@ -1252,13 +1290,6 @@ fn line_span_loop(
 // ---------------------------------------------------------------------------
 // State accessors
 // ---------------------------------------------------------------------------
-
-fn is_running(model: State) -> Bool {
-  case model.preview {
-    Some(_) -> True
-    None -> False
-  }
-}
 
 fn is_code_view(model: State) -> Bool {
   case model.view {

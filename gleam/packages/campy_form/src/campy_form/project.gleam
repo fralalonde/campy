@@ -28,12 +28,19 @@ pub type Project {
     modules: List(Module),
     path: String,
     icon: String,
+    /// The module a project runs: its "app". Empty means the project is not
+    /// runnable. A module id, so renaming a module's title does not move it.
+    default_module: String,
   )
 }
 
 // Codec version: bump on every on-disk shape change. There is no upgrade
 // chain; a file from an older codec is an explicit version error on load.
-pub const version = 12
+//
+// v13 added `Project.default_module`. A v12 file is read as v13 with no default
+// module — the one migration this reader carries, because a user's whole
+// project would otherwise be thrown away over a field the codec can default.
+pub const version = 13
 
 pub const camping_icon = "assets/camping-tent.png"
 
@@ -72,6 +79,7 @@ pub fn campy() -> Project {
     ],
     default_path,
     camping_icon,
+    "cat-cafe",
   )
 }
 
@@ -528,12 +536,34 @@ pub fn new_project(title: String, path: String) -> Project {
     ],
     path,
     "",
+    "",
   )
 }
 
 pub fn find_module(project: Project, id: String) -> Option(Module) {
   list.find(project.modules, fn(module) { module.id == id })
   |> to_option
+}
+
+/// The module a project runs, when it names one that still exists.
+pub fn default_module(project: Project) -> Option(Module) {
+  case project.default_module {
+    "" -> None
+    id -> find_module(project, id)
+  }
+}
+
+/// Names (or clears, with "") the module a project runs. Only a module the
+/// project has can be its default.
+pub fn set_default_module(project: Project, id: String) -> Project {
+  case id {
+    "" -> Project(..project, default_module: "")
+    _ ->
+      case find_module(project, id) {
+        Some(_) -> Project(..project, default_module: id)
+        None -> project
+      }
+  }
 }
 
 pub fn update_module(project: Project, updated: Module) -> Project {
@@ -556,6 +586,11 @@ pub fn remove_module(project: Project, id: String) -> Project {
   Project(
     ..project,
     modules: list.filter(project.modules, fn(module) { module.id != id }),
+    // A project whose app was deleted is not runnable until another is picked.
+    default_module: case project.default_module == id {
+      True -> ""
+      False -> project.default_module
+    },
   )
 }
 

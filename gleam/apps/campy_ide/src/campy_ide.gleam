@@ -9,7 +9,7 @@ import campy_ide/live_preview_ui
 import campy_ide/mcp
 import campy_ide/shell
 import campy_ide/state.{
-  type Popup, type State, Events, NoPopup, OpenFile, PickPicture,
+  type Popup, type Preview, type State, Events, NoPopup, OpenFile, PickPicture,
   PickProjectIcon, Preview, Properties, SaveAs,
 }
 import gleam/float
@@ -778,24 +778,24 @@ fn control_event(kind: String) -> Option(#(Int, String)) {
 fn section_names() -> List(String) {
   [
     "menu-bar", "menu-rule", "menu-file", "menu-edit", "menu-settings",
-    "palette", "run", "stop", "nav", "nav-projects-title", "project-delete",
-    "project-add", "projects-nav", "nav-rule", "nav-modules-title", "module-add",
-    "modules-nav", "tab-strip", "tab-close", "canvas", "canvas-title",
-    "canvas-form", "selection-rect", "marquee-rect", "canvas-rule", "form-tab",
-    "raw-tab", "raw-view", "view-toggle", "code-title", "code-handler",
-    "code-view", "completions", "console-pane", "console-title", "console-state",
-    "console-clear", "console", "right-pane", "insp-tab-properties",
-    "insp-tab-events", "insp-rule", "insp-selection", "insp-delete",
-    "project-panel", "project-icon", "project-icon-glyph", "project-icon-choose",
-    "project-icon-clear", "project-title-label", "project-title",
-    "project-path-label", "project-path", "inspector", "inspector-events",
-    "status-bar", "status", "status-path", "settings-panel", "settings-title",
-    "settings-font-label", "settings-font", "settings-size-label",
-    "settings-size", "settings-scheme-label", "settings-scheme",
-    "settings-hints", "settings-close", "agent-panel", "agent-title",
-    "agent-mcp", "agent-port-label", "agent-port", "agent-status",
-    "agent-endpoint", "agent-note", "agent-close", "project-dialog",
-    "project-dialog-title", "project-dialog-body", "project-new", "project-open",
+    "palette", "nav", "nav-projects-title", "project-delete", "project-add",
+    "projects-nav", "nav-rule", "nav-modules-title", "module-add", "modules-nav",
+    "tab-strip", "tab-close", "canvas", "canvas-title", "canvas-form",
+    "selection-rect", "marquee-rect", "canvas-rule", "view-toggle", "code-title",
+    "code-handler", "code-view", "completions", "console-pane", "console-title",
+    "console-state", "console-clear", "console", "right-pane",
+    "insp-tab-properties", "insp-tab-events", "insp-rule", "insp-selection",
+    "insp-delete", "project-panel", "project-icon", "project-icon-glyph",
+    "project-icon-choose", "project-icon-clear", "project-title-label",
+    "project-title", "project-app-label", "project-app", "project-path-label",
+    "project-path", "inspector", "inspector-events", "status-bar", "status",
+    "status-path", "settings-panel", "settings-title", "settings-font-label",
+    "settings-font", "settings-size-label", "settings-size",
+    "settings-scheme-label", "settings-scheme", "settings-hints",
+    "settings-close", "agent-panel", "agent-title", "agent-mcp",
+    "agent-port-label", "agent-port", "agent-status", "agent-endpoint",
+    "agent-note", "agent-close", "project-dialog", "project-dialog-title",
+    "project-dialog-body", "project-new", "project-open",
     "project-dialog-cancel", "browser-panel", "browser-title", "browser-home",
     "browser-new-dir", "browser-dir", "browser-up", "browser-entries",
     "browser-name-label", "browser-name", "browser-accept", "browser-cancel",
@@ -953,7 +953,15 @@ fn on_pointer(
                 // The form editor also owns hovering: the components inside the
                 // canvas are passive, so their own enter/leave never fires.
                 "move" -> hover_under(model |> state.pointer_move(x, y), x, y)
-                "up" -> state.pointer_up(model, x, y, additive)
+                // A double-click on a component opens its default handler.
+                "up" -> {
+                  let released = state.pointer_up(model, x, y, additive)
+                  let #(noted, pair) = state.click_pair(released, now_ms())
+                  case pair {
+                    True -> state.open_default_event(noted)
+                    False -> noted
+                  }
+                }
                 _ -> model
               }
               advance(native, next, submitted, accepted, last)
@@ -1120,7 +1128,11 @@ fn on_control(
   case
     case control_name(id) {
       Some(name) -> Some(name)
-      None -> tab_name(model, id)
+      None ->
+        case tab_name(model, id) {
+          Some(name) -> Some(name)
+          None -> shell.nav_run_name(id)
+        }
     }
   {
     None -> keep(model, submitted, accepted, last)
@@ -1160,16 +1172,28 @@ fn derived_control(
   event_key: String,
   payload: String,
 ) -> ControlEffect {
-  case string.starts_with(name, "tab:") {
-    True -> ControlRun("tab-module", string.drop_start(name, 4))
+  case string.starts_with(name, "run-p:") {
+    True -> ControlRun("toggle-project-run", string.drop_start(name, 6))
     False ->
-      case string.starts_with(name, "tile:") {
-        True -> ControlRun("add-component", string.drop_start(name, 5))
+      case string.starts_with(name, "run-m:") {
+        True -> ControlRun("toggle-module-run", string.drop_start(name, 6))
         False ->
-          case string.starts_with(name, "insp:") {
-            True ->
-              inspector_effect(string.drop_start(name, 5), event_key, payload)
-            False -> section_effect(model, name, event_key, payload)
+          case string.starts_with(name, "tab:") {
+            True -> ControlRun("tab-module", string.drop_start(name, 4))
+            False ->
+              case string.starts_with(name, "tile:") {
+                True -> ControlRun("add-component", string.drop_start(name, 5))
+                False ->
+                  case string.starts_with(name, "insp:") {
+                    True ->
+                      inspector_effect(
+                        string.drop_start(name, 5),
+                        event_key,
+                        payload,
+                      )
+                    False -> section_effect(model, name, event_key, payload)
+                  }
+              }
           }
       }
   }
@@ -1224,15 +1248,11 @@ fn section_effect(
 
 fn button_action(name: String) -> ControlEffect {
   let action = case name {
-    "run" -> "run-app"
-    "stop" -> "stop-app"
     "project-add" -> "open-project-dialog"
     "project-delete" -> "delete-project"
     "module-add" -> "file-new-module"
     "tab-close" -> "nav-close-tab"
     "view-toggle" -> "toggle-view"
-    "form-tab" -> "show-form"
-    "raw-tab" -> "show-raw"
     "console-clear" -> "clear-console"
     "insp-tab-properties" -> "tab-properties"
     "insp-tab-events" -> "tab-events"
@@ -1309,6 +1329,7 @@ fn list_action(model: State, name: String, payload: String) -> ControlEffect {
 fn edit_action(name: String, payload: String) -> ControlEffect {
   case name {
     "project-title" -> ControlRun("field-project-title", payload)
+    "project-app" -> ControlRun("field-project-app", payload)
     "agent-port" -> ControlRun("mcp-port", payload)
     "browser-name" -> ControlRun("browser-set-name", payload)
     _ -> ControlKeep
@@ -1484,8 +1505,8 @@ fn preview_event(
   kind: String,
   payload: String,
 ) -> Option(State) {
-  case model.preview {
-    Some(preview) if preview.id == event_session ->
+  case list.find(model.previews, fn(preview) { preview.id == event_session }) {
+    Ok(preview) ->
       case kind {
         "ui-loaded" ->
           Some(
@@ -1498,7 +1519,7 @@ fn preview_event(
           // like a session that never opened.
           let _ = bridge.close_session(preview.session)
           Some(
-            state.set_preview(model, None)
+            state.drop_preview_session(model, event_session)
             |> state.set_status("App stopped")
             |> state.log_console("■ App stopped"),
           )
@@ -1521,7 +1542,7 @@ fn preview_event(
             None -> None
           }
       }
-    _ -> None
+    Error(_) -> None
   }
 }
 
@@ -1534,8 +1555,6 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "cut-component" -> state.cut_selected(model)
     "paste-component" -> state.paste(model)
     "toggle-view" -> state.toggle_view(model)
-    "show-form" -> state.set_raw_tab(model, False)
-    "show-raw" -> state.set_raw_tab(model, True)
     "console-input" -> state.console_input(model, payload)
     "clear-console" -> state.clear_console(model)
     "browse-picture" -> pick_picture(model)
@@ -1556,6 +1575,8 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "dialog-open-project" ->
       state.set_project_dialog_open(open_with_dialog(model), False)
     "field-project-title" -> state.commit_project_field(model, "title", payload)
+    "field-project-app" ->
+      state.commit_project_field(model, "default-module", payload)
     "open-agent" ->
       state.set_agent_open(state.set_settings_open(model, False), True)
     "close-agent" -> state.set_agent_open(model, False)
@@ -1676,6 +1697,8 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "run-app" -> run_form(model)
     "update-app" -> update_app(model)
     "stop-app" -> stop_form(model)
+    "toggle-project-run" -> toggle_project_run(model, payload)
+    "toggle-module-run" -> toggle_module_run(model, payload)
     "prev-tab" -> state.cycle_tab(model, -1)
     "next-tab" -> state.cycle_tab(model, 1)
     "context-menu-key" -> context_menu_at_selection(model)
@@ -1898,22 +1921,94 @@ fn run_form(model: State) -> State {
   case gate_compile_errors(model, "Run") {
     Error(blocked) -> blocked
     Ok(model) ->
-      case model.preview {
-        Some(_) ->
-          state.set_status(
-            model,
-            "App is already running; press F6 to update it",
-          )
-        None ->
-          case state.active_module(model) {
-            None -> state.set_status(model, "Open a module first")
-            Some(module) ->
-              case campy_form.validate(module.form) {
-                Error(error) -> state.set_status(model, "Cannot run: " <> error)
-                Ok(_) -> open_preview(model, module)
-              }
+      case state.active_module(model) {
+        None -> state.set_status(model, "Open a module first")
+        Some(module) ->
+          case state.running_module(model, module.id) {
+            True ->
+              state.set_status(
+                model,
+                module.name <> " is already running; press F7 to update it",
+              )
+            False -> start_app(model, module)
           }
       }
+  }
+}
+
+/// Starts one module as an app. Several can run at once, each in its own
+/// window, so this never consults or replaces another module's preview.
+fn start_app(model: State, module: project.Module) -> State {
+  case campy_form.validate(module.form) {
+    Error(error) -> state.set_status(model, "Cannot run: " <> error)
+    Ok(_) -> open_preview(model, module)
+  }
+}
+
+/// A project row's button: runs the project's app, switching to that project
+/// first because the window is built from the project the row names.
+fn toggle_project_run(model: State, index: String) -> State {
+  case int.parse(string.trim(index)) {
+    Error(_) -> model
+    Ok(index) ->
+      case list.drop(model.workspace.projects, index) {
+        [target, ..] ->
+          case project.default_module(target) {
+            None ->
+              state.set_status(model, target.title <> " has no app module")
+            Some(module) -> {
+              let model = case target.path == model.project.path {
+                True -> model
+                False -> state.switch_project(model, target.path)
+              }
+              toggle_run(model, module.id)
+            }
+          }
+        [] -> model
+      }
+  }
+}
+
+/// A module row's button: that module's own app.
+fn toggle_module_run(model: State, index: String) -> State {
+  case int.parse(string.trim(index)) {
+    Error(_) -> model
+    Ok(index) ->
+      case list.drop(model.project.modules, index) {
+        [module, ..] -> toggle_run(model, module.id)
+        [] -> model
+      }
+  }
+}
+
+/// The app a run button toggles: green starts it, red stops it.
+fn toggle_run(model: State, module_id: String) -> State {
+  case project.find_module(model.project, module_id) {
+    None -> state.set_status(model, "That module is gone")
+    Some(module) ->
+      case state.running_module(model, module_id) {
+        True -> stop_app(model, module_id)
+        False -> start_app(model, module)
+      }
+  }
+}
+
+fn stop_app(model: State, module_id: String) -> State {
+  case state.preview_for(model, module_id) {
+    None -> state.set_status(model, "That app is not running")
+    Some(preview) -> {
+      let _ = bridge.close_session(preview.session)
+      state.drop_preview(model, module_id)
+      |> state.set_status("Stopped " <> preview_name(model, module_id))
+      |> state.log_console("■ Stopped " <> preview_name(model, module_id))
+    }
+  }
+}
+
+fn preview_name(model: State, module_id: String) -> String {
+  case project.find_module(model.project, module_id) {
+    Some(module) -> module.name
+    None -> module_id
   }
 }
 
@@ -1947,9 +2042,9 @@ fn open_preview(model: State, module: project.Module) -> State {
               state.set_status(model, "Cannot run: " <> error)
             }
             Ok(_) ->
-              state.set_preview(
+              state.put_preview(
                 model,
-                Some(Preview(preview_session, id, module.id, 1)),
+                Preview(preview_session, id, module.id, 1),
               )
               |> state.set_status("Starting " <> module.name)
               |> state.log_console("▶ Running " <> module.name)
@@ -1964,11 +2059,15 @@ fn update_app(model: State) -> State {
   case gate_compile_errors(model, "Update") {
     Error(blocked) -> blocked
     Ok(model) ->
-      case model.preview {
-        None -> run_form(model)
-        // The running app keeps the module it was launched with: switching the
-        // editor to another module and pressing F7 updates *that* app, it does
-        // not swap the window to whatever is on screen now.
+      case update_target(model) {
+        None ->
+          state.set_status(model, case model.previews {
+            [] -> "No app is running; press F5 to start one"
+            _ -> "Select a running module, or use its button"
+          })
+        // A running app keeps the module it was launched with: switching the
+        // editor to another module and pressing F7 updates a *running* app,
+        // never swaps a window to whatever is on screen now.
         Some(preview) ->
           case project.find_module(model.project, preview.module) {
             None -> state.set_status(model, "The running module is gone")
@@ -1987,22 +2086,22 @@ fn update_app(model: State) -> State {
                     )
                   {
                     Ok(_) ->
-                      state.set_preview(
+                      state.put_preview(
                         model,
-                        Some(Preview(
+                        Preview(
                           preview.session,
                           preview.id,
                           module.id,
                           generation,
-                        )),
+                        ),
                       )
                       |> state.set_status("App updated — " <> module.name)
                       |> state.log_console("⟳ Updated " <> module.name)
                     Error(_) -> {
                       let _ = bridge.close_session(preview.session)
-                      state.set_preview(model, None)
+                      state.drop_preview(model, preview.module)
                       |> state.set_status(
-                        "App window is gone; press F6 to start it",
+                        "App window is gone; press F5 to start it",
                       )
                     }
                   }
@@ -2014,13 +2113,29 @@ fn update_app(model: State) -> State {
 }
 
 fn stop_form(model: State) -> State {
-  case model.preview {
-    None -> state.set_status(model, "Form is not running")
-    Some(preview) -> {
-      let _ = bridge.close_session(preview.session)
-      state.set_preview(model, None)
-      |> state.set_status("Form stopped")
-      |> state.log_console("■ App stopped")
-    }
+  case update_target(model) {
+    None -> state.set_status(model, "No app is running")
+    Some(preview) -> stop_app(model, preview.module)
+  }
+}
+
+/// Which running app F7 (update) and Shift+F5 (stop) address: the active
+/// module's own window, or the only one running when the editor is elsewhere.
+fn update_target(model: State) -> Option(Preview) {
+  case state.active_module(model) {
+    Some(module) ->
+      case state.preview_for(model, module.id) {
+        Some(preview) -> Some(preview)
+        None ->
+          case model.previews {
+            [only] -> Some(only)
+            _ -> None
+          }
+      }
+    None ->
+      case model.previews {
+        [only] -> Some(only)
+        _ -> None
+      }
   }
 }

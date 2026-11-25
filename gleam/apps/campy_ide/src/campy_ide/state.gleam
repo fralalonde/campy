@@ -105,7 +105,6 @@ pub type History {
     active: String,
     opened: List(String),
     view: ModuleView,
-    raw_tab: Bool,
     selected: Option(String),
     selection: List(String),
     tab: Tab,
@@ -121,19 +120,28 @@ pub type State {
     active: String,
     opened: List(String),
     view: ModuleView,
-    raw_tab: Bool,
     selected: Option(String),
     selection: List(String),
+    /// The components a marquee currently *would* select, while the button is
+    /// still down. Drawn as outlines and handles so the frame shows its
+    /// contents as it grows, without touching the real selection.
+    preview_selection: List(String),
     tab: Tab,
     editor: Editor,
     active_handler: Option(String),
     highlight: Option(#(Int, Int)),
     editing: Option(Editing),
-    preview: Option(Preview),
+    /// Every running app window, one per module. A project's app and any of
+    /// its modules can run at the same time; each preview owns its session.
+    previews: List(Preview),
     popup: Popup,
     undo: List(History),
     redo: List(History),
     merge_undo: Bool,
+    /// The document when the current gesture began. A drag or resize records
+    /// one undo step — this state — when the button is released, not one per
+    /// pointer move.
+    gesture_base: Option(History),
     /// Which property field is mid-typing (`<control>:<field>`), so a run of
     /// keystrokes in one field is one undo step. Cleared by any other change.
     edit_run: Option(String),
@@ -177,6 +185,8 @@ pub type State {
     nav_id: String,
     gesture: Gesture,
     last_pointer: #(Int, Int),
+    /// The previous click: which component and when, for double-click.
+    last_click: Option(#(String, Int)),
     status: String,
     /// The window's CSS size as the renderer last reported it: the shell
     /// layout stretches to it and pointer coordinates are mapped with it.
@@ -230,19 +240,20 @@ pub fn initial_workspace(workspace: Workspace) -> State {
       id -> [id]
     },
     view: FormView,
-    raw_tab: False,
     selected: None,
     selection: [],
+    preview_selection: [],
     tab: Properties,
     editor: View,
     active_handler: None,
     highlight: None,
     editing: None,
-    preview: None,
+    previews: [],
     popup: NoPopup,
     undo: [],
     redo: [],
     merge_undo: False,
+    gesture_base: None,
     edit_run: None,
     clipboard: None,
     font: "monospace",
@@ -284,6 +295,7 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     nav_id: "",
     gesture: Idle,
     last_pointer: #(0, 0),
+    last_click: None,
     status: "Ready",
     window_size: #(shell.window_width, shell.window_height),
     hover_status: None,
@@ -296,7 +308,6 @@ fn history(state: State) -> History {
     state.active,
     state.opened,
     state.view,
-    state.raw_tab,
     state.selected,
     state.selection,
     state.tab,
@@ -312,7 +323,6 @@ fn restore(state: State, past: History) -> State {
     active: past.active,
     opened: past.opened,
     view: past.view,
-    raw_tab: past.raw_tab,
     selected: past.selected,
     selection: past.selection,
     tab: past.tab,
@@ -395,7 +405,7 @@ fn with_project(state: State, workspace: Workspace, project: Project) -> State {
     font_size: state.font_size,
     scheme: state.scheme,
     clipboard: state.clipboard,
-    preview: state.preview,
+    previews: state.previews,
     selected_project: True,
     caret: state.caret,
     diagnostics: state.diagnostics,
@@ -659,10 +669,6 @@ pub fn toggle_view(state: State) -> State {
   }
 }
 
-pub fn set_raw_tab(state: State, raw_tab: Bool) -> State {
-  State(..state, raw_tab: raw_tab)
-}
-
 pub fn add(state: State, kind: Kind) -> State {
   case active_form(state) {
     None -> status(state, "Open a module first")
@@ -735,7 +741,7 @@ pub fn select(state: State, id: String) -> State {
                 selected: Some(id),
                 selection: [id],
                 selected_project: False,
-                tab: Properties,
+                tab: state.tab,
                 active_handler: None,
                 highlight: None,
                 editing: None,
@@ -780,7 +786,7 @@ pub fn toggle_select(state: State, id: String) -> State {
                 selected: Some(id),
                 selection: list.append(state.selection, [id]),
                 selected_project: False,
-                tab: Properties,
+                tab: state.tab,
                 active_handler: None,
                 highlight: None,
                 editing: None,
@@ -1085,12 +1091,28 @@ pub fn toggle_field(state: State, field: String, value: Bool) -> State {
 // Cursor gestures commit once on release; the UI tracks the drag locally and
 // sends X then Y (or W then H), which share one undo entry.
 pub fn begin_gesture(state: State) -> State {
-  State(..state, merge_undo: False, edit_run: None)
-}
-
-pub fn end_gesture(state: State) -> State {
   State(
     ..state,
+    merge_undo: False,
+    edit_run: None,
+    gesture_base: Some(history(state)),
+  )
+}
+
+/// Ends a gesture and records it as one undo step: what the document was when
+/// the button went down, and everything the gesture did to it, is one entry.
+pub fn end_gesture(state: State) -> State {
+  let state = case state.gesture_base {
+    Some(base) ->
+      case base == history(state) {
+        True -> state
+        False -> State(..state, undo: [base, ..state.undo], redo: [])
+      }
+    None -> state
+  }
+  State(
+    ..state,
+    gesture_base: None,
     merge_undo: False,
     drop_active: False,
     drop_candidate: "",
@@ -1098,19 +1120,38 @@ pub fn end_gesture(state: State) -> State {
   )
 }
 
-// Move the selection (including each root's subtree) by a delta, clamped to
-// the canvas.
+// A change while a gesture is in flight: the document moves, but the undo
+// entry is the gesture's, recorded on release.
+fn gesture_change(state: State, next: State) -> State {
+  State(
+    ..next,
+    undo: state.undo,
+    redo: state.redo,
+    merge_undo: False,
+    edit_run: None,
+  )
+}
+
+// Move the selection (including each root's subtree) by a delta.
+//
+// The block moves as one: the delta is clamped by the *selection's outline*,
+// not by each component, so the first component to reach an edge stops them
+// all instead of the block tearing apart.
 fn move_selected_raw(state: State, dx: Int, dy: Int) -> State {
   case state.selection, active_form(state) {
     [_, ..], Some(form) -> {
+      let ids = selection_subtree_ids(state, form)
+      let #(dx, dy) = case union_bounds(form, ids) {
+        Some(#(left, top, width, height)) -> #(
+          int.clamp(dx, -left, campy_form.max_coordinate - left - width),
+          int.clamp(dy, -top, campy_form.max_coordinate - top - height),
+        )
+        None -> #(dx, dy)
+      }
       let next =
-        list.fold(selection_subtree_ids(state, form), form, fn(acc, id) {
+        list.fold(ids, form, fn(acc, id) {
           campy_form.update_selected(acc, id, fn(control) {
-            campy_form.Control(
-              ..control,
-              x: int.clamp(control.x + dx, 0, campy_form.max_coordinate),
-              y: int.clamp(control.y + dy, 0, campy_form.max_coordinate),
-            )
+            campy_form.Control(..control, x: control.x + dx, y: control.y + dy)
           })
         })
       update_active_form(state, fn(_) { next })
@@ -1119,21 +1160,47 @@ fn move_selected_raw(state: State, dx: Int, dy: Int) -> State {
   }
 }
 
+/// The smallest rectangle around `ids`, in form coordinates. It is both the
+/// block's allowed travel and its grab area.
+pub fn union_bounds(
+  form: Form,
+  ids: List(String),
+) -> Option(#(Int, Int, Int, Int)) {
+  ids
+  |> list.filter_map(fn(id) {
+    case campy_form.find_control(form, id) {
+      Some(control) -> Ok(campy_form.bounds(form, control))
+      None -> Error(Nil)
+    }
+  })
+  |> list.fold(None, fn(acc, box) {
+    case acc {
+      None -> Some(box)
+      Some(#(left, top, width, height)) -> {
+        let #(bx, by, bw, bh) = box
+        let next_left = int.min(left, bx)
+        let next_top = int.min(top, by)
+        Some(#(
+          next_left,
+          next_top,
+          int.max(left + width, bx + bw) - next_left,
+          int.max(top + height, by + bh) - next_top,
+        ))
+      }
+    }
+  })
+}
+
 pub fn move_selected(state: State, dx: Int, dy: Int) -> State {
   commit(state, move_selected_raw(state, dx, dy))
 }
 
 pub fn move_gesture_x(state: State, dx: Int) -> State {
-  let committed = commit(state, move_selected_raw(state, dx, 0))
-  State(
-    ..committed,
-    merge_undo: list.length(committed.undo) > list.length(state.undo),
-  )
+  gesture_change(state, move_selected_raw(state, dx, 0))
 }
 
 pub fn move_gesture_y(state: State, dy: Int) -> State {
-  let committed = commit(state, move_selected_raw(state, 0, dy))
-  reparent_after_drop(State(..committed, merge_undo: False))
+  reparent_after_drop(gesture_change(state, move_selected_raw(state, 0, dy)))
 }
 
 // Dropping a control over a panel (or group box) adopts it. Dropping outside
@@ -1212,16 +1279,11 @@ pub fn resize_selected(state: State, dw: Int, dh: Int) -> State {
 }
 
 pub fn resize_gesture_w(state: State, dw: Int) -> State {
-  let committed = commit(state, resize_selected_raw(state, dw, 0))
-  State(
-    ..committed,
-    merge_undo: list.length(committed.undo) > list.length(state.undo),
-  )
+  gesture_change(state, resize_selected_raw(state, dw, 0))
 }
 
 pub fn resize_gesture_h(state: State, dh: Int) -> State {
-  let committed = commit(state, resize_selected_raw(state, 0, dh))
-  State(..committed, merge_undo: False)
+  gesture_change(state, resize_selected_raw(state, 0, dh))
 }
 
 fn resize_left_raw(state: State, dx: Int) -> State {
@@ -1281,29 +1343,19 @@ fn resize_bottom_raw(state: State, dy: Int) -> State {
 }
 
 pub fn resize_left(state: State, dx: Int) -> State {
-  let committed = commit(state, resize_left_raw(state, dx))
-  State(
-    ..committed,
-    merge_undo: list.length(committed.undo) > list.length(state.undo),
-  )
+  gesture_change(state, resize_left_raw(state, dx))
 }
 
 pub fn resize_right(state: State, dx: Int) -> State {
-  let committed = commit(state, resize_right_raw(state, dx))
-  State(
-    ..committed,
-    merge_undo: list.length(committed.undo) > list.length(state.undo),
-  )
+  gesture_change(state, resize_right_raw(state, dx))
 }
 
 pub fn resize_top(state: State, dy: Int) -> State {
-  let committed = commit(state, resize_top_raw(state, dy))
-  State(..committed, merge_undo: False)
+  gesture_change(state, resize_top_raw(state, dy))
 }
 
 pub fn resize_bottom(state: State, dy: Int) -> State {
-  let committed = commit(state, resize_bottom_raw(state, dy))
-  State(..committed, merge_undo: False)
+  gesture_change(state, resize_bottom_raw(state, dy))
 }
 
 pub fn layout_from_name(name: String) -> campy_form.Layout {
@@ -1821,6 +1873,25 @@ pub fn commit_project_field(
         project.Project(..state.project, title: value),
         "Project title updated",
       )
+    "default-module" -> {
+      // The chooser offers module names; the model stores the id.
+      let id = case value {
+        "" -> ""
+        _ ->
+          case
+            list.find(state.project.modules, fn(module) { module.name == value })
+          {
+            Ok(module) -> module.id
+            Error(_) -> value
+          }
+      }
+      let next = project.set_default_module(state.project, id)
+      let note = case project.default_module(next) {
+        Some(module) -> "App: " <> module.name
+        None -> "Project has no app (not runnable)"
+      }
+      commit_project(state, next, note)
+    }
     _ -> state
   }
 }
@@ -1882,16 +1953,11 @@ fn resize_form_raw(state: State, dw: Int, dh: Int) -> State {
 }
 
 pub fn resize_window_w(state: State, dw: Int) -> State {
-  let committed = commit(state, resize_form_raw(state, dw, 0))
-  State(
-    ..committed,
-    merge_undo: list.length(committed.undo) > list.length(state.undo),
-  )
+  gesture_change(state, resize_form_raw(state, dw, 0))
 }
 
 pub fn resize_window_h(state: State, dh: Int) -> State {
-  let committed = commit(state, resize_form_raw(state, 0, dh))
-  State(..committed, merge_undo: False)
+  gesture_change(state, resize_form_raw(state, 0, dh))
 }
 
 pub fn scheme_from_name(name: String) -> Scheme {
@@ -1932,6 +1998,56 @@ pub fn open_event(state: State, event_key: String) -> State {
             ),
           )
         }
+      }
+  }
+}
+
+/// How close two clicks must be in time to make a double-click.
+pub const double_click_ms = 400
+
+/// Records a click on the current selection and says whether it completes a
+/// pair: two clicks on the same component within `double_click_ms`.
+pub fn click_pair(state: State, at: Int) -> #(State, Bool) {
+  case state.selected {
+    None -> #(State(..state, last_click: None), False)
+    Some(id) ->
+      case state.last_click {
+        Some(#(last_id, last_at))
+          if last_id == id && at >= last_at && at - last_at <= double_click_ms
+        -> #(State(..state, last_click: None), True)
+        _ -> #(State(..state, last_click: Some(#(id, at))), False)
+      }
+  }
+}
+
+/// The event a double-click opens: what this kind is for. A button is
+/// clicked, a check box toggled, a field edited, a list or menu selected.
+pub fn default_event(kind: Kind) -> Option(String) {
+  let keys =
+    campy_ccl.events(campy_form.kind_key(kind))
+    |> list.map(fn(event) { event.key })
+  let preferred = [
+    "clicked", "toggled", "edited", "selected", "changed", "accepted",
+  ]
+  case list.find(preferred, fn(key) { list.contains(keys, key) }) {
+    Ok(key) -> Some(key)
+    Error(_) ->
+      case list.first(keys) {
+        Ok(key) -> Some(key)
+        Error(_) -> None
+      }
+  }
+}
+
+/// Double-clicking a component opens its default handler in the code pane.
+/// The inspector keeps whichever tab it was showing.
+pub fn open_default_event(state: State) -> State {
+  case selected_control(state) {
+    None -> state
+    Some(control) ->
+      case default_event(control.kind) {
+        Some(key) -> open_event(state, key)
+        None -> state
       }
   }
 }
@@ -2377,9 +2493,30 @@ fn sort_entries(entries: List(#(String, Bool))) -> List(BrowserEntry) {
   list.append(dirs, files)
 }
 
-fn read_entries(dir: String) -> List(BrowserEntry) {
+/// Files the dialog offers, by what it is for: a project picker shows project
+/// files and a picture picker shows images, so a click cannot open something
+/// the codec will refuse.
+fn entry_matches(mode: Popup, name: String) -> Bool {
+  let lower = string.lowercase(name)
+  case mode {
+    OpenFile | SaveAs -> string.ends_with(lower, ".campy")
+    PickPicture | PickProjectIcon ->
+      list.any(
+        [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"],
+        fn(extension) { string.ends_with(lower, extension) },
+      )
+    _ -> True
+  }
+}
+
+fn read_entries(mode: Popup, dir: String) -> List(BrowserEntry) {
   case fs_list_dir(dir) {
-    Ok(entries) -> sort_entries(entries)
+    Ok(entries) ->
+      sort_entries(
+        list.filter(entries, fn(entry) {
+          { entry }.1 || entry_matches(mode, { entry }.0)
+        }),
+      )
     Error(_) -> []
   }
 }
@@ -2403,7 +2540,7 @@ pub fn browser_open(
   State(
     ..state,
     popup: mode,
-    browser: Some(Browser(mode, dir, name, read_entries(dir))),
+    browser: Some(Browser(mode, dir, name, read_entries(mode, dir))),
   )
 }
 
@@ -2412,7 +2549,9 @@ pub fn browser_navigate(state: State, dir: String) -> State {
     Some(browser) ->
       State(
         ..state,
-        browser: Some(Browser(..browser, dir: dir, entries: read_entries(dir))),
+        browser: Some(
+          Browser(..browser, dir: dir, entries: read_entries(browser.mode, dir)),
+        ),
       )
     None -> state
   }
@@ -2594,8 +2733,45 @@ pub fn set_popup(state: State, popup: Popup) -> State {
   State(..state, popup: popup)
 }
 
-pub fn set_preview(state: State, preview: Option(Preview)) -> State {
-  State(..state, preview: preview)
+/// The app window running `module_id`, if it has one.
+pub fn preview_for(state: State, module_id: String) -> Option(Preview) {
+  case list.find(state.previews, fn(preview) { preview.module == module_id }) {
+    Ok(preview) -> Some(preview)
+    Error(_) -> None
+  }
+}
+
+pub fn running_module(state: State, module_id: String) -> Bool {
+  list.any(state.previews, fn(preview) { preview.module == module_id })
+}
+
+pub fn any_running(state: State) -> Bool {
+  !list.is_empty(state.previews)
+}
+
+/// Starts (or replaces) the app window of one module.
+pub fn put_preview(state: State, preview: Preview) -> State {
+  State(..state, previews: [
+    preview,
+    ..list.filter(state.previews, fn(other) { other.module != preview.module })
+  ])
+}
+
+pub fn drop_preview(state: State, module_id: String) -> State {
+  State(
+    ..state,
+    previews: list.filter(state.previews, fn(preview) {
+      preview.module != module_id
+    }),
+  )
+}
+
+/// Forgets the preview whose session closed (the user closed its window).
+pub fn drop_preview_session(state: State, session: Int) -> State {
+  State(
+    ..state,
+    previews: list.filter(state.previews, fn(preview) { preview.id != session }),
+  )
 }
 
 // Cycle the open tabs (the renderer's list rows cannot be clicked yet, so the
@@ -2672,9 +2848,9 @@ pub fn clear_console(state: State) -> State {
 
 pub fn console_input(state: State, text: String) -> State {
   let next = log_console(state, "> " <> text)
-  let next = case state.preview {
-    Some(_) -> log_console(next, "stdin → running app")
-    None -> log_console(next, "stdin: app is not running")
+  let next = case state.previews {
+    [_, ..] -> log_console(next, "stdin → running app")
+    [] -> log_console(next, "stdin: app is not running")
   }
   State(..next, status: "Console input sent")
 }
@@ -2729,33 +2905,7 @@ pub fn select_frame(state: State, additive: Bool) -> State {
   case active_form(state) {
     None -> state
     Some(form) -> {
-      let #(x, y, w, h) = state.rect
-      let min_x = int.min(x, x + w)
-      let max_x = int.max(x, x + w)
-      let min_y = int.min(y, y + h)
-      let max_y = int.max(y, y + h)
-      let picked =
-        campy_form.render_controls(form)
-        |> list.filter(fn(control) {
-          let #(bx, by, bw, bh) = campy_form.bounds(form, control)
-          [
-            #(bx, by),
-            #(bx + bw / 2, by),
-            #(bx + bw, by),
-            #(bx, by + bh / 2),
-            #(bx + bw, by + bh / 2),
-            #(bx, by + bh),
-            #(bx + bw / 2, by + bh),
-            #(bx + bw, by + bh),
-          ]
-          |> list.any(fn(point) {
-            point.0 >= min_x
-            && point.0 <= max_x
-            && point.1 >= min_y
-            && point.1 <= max_y
-          })
-        })
-        |> list.map(fn(control) { control.id })
+      let picked = frame_ids(form, state.rect)
       // Shift/Ctrl extends the frame selection instead of replacing it.
       let selection = case additive {
         True -> list.unique(list.append(state.selection, picked))
@@ -2921,17 +3071,31 @@ pub fn pointer_down(state: State, x: Int, y: Int) -> State {
     None ->
       case active_form(state) {
         None -> State(..state, gesture: Idle)
-        // The module window's title bar: drag to move the window.
+        // The module window's title bar: drag to move the window. The point
+        // is kept in canvas coordinates: form coordinates move with the
+        // window, and a delta taken from them chases its own output.
         Some(form) if y < 0 && y >= -28 && x >= 0 && x <= form.width ->
-          State(..state, gesture: MovingWindow(#(x, y)))
+          State(..state, gesture: MovingWindow(canvas_point(state, x, y)))
         Some(form) ->
           case grip_at(state, form, x, y) {
             Some(#(mode, window)) ->
-              State(..state, gesture: Resizing(mode, #(x, y), window))
+              State(
+                ..begin_gesture(state),
+                gesture: Resizing(mode, #(x, y), window),
+              )
             None -> {
-              let target = case control_at(form, x, y) {
-                Some(control) -> control.id
-                None -> ""
+              // The selection's outline is its grab area, and it is checked
+              // first: pressing the gap between two selected components (or
+              // their container's background) drags the block. Pressing a
+              // component that is not in the block selects that component.
+              let grabbed = selection_grab(state, form, x, y)
+              let target = case grabbed {
+                "" ->
+                  case control_at(form, x, y) {
+                    Some(control) -> control.id
+                    None -> ""
+                  }
+                id -> id
               }
               State(..state, gesture: Pressing(#(x, y), target))
             }
@@ -3024,8 +3188,9 @@ pub fn pointer_move(state: State, x: Int, y: Int) -> State {
     Marqueing(origin) -> marquee_to(state, origin, x, y)
     Placing(origin) -> marquee_to(state, origin, x, y)
     MovingWindow(last) -> {
-      let next = move_window(state, x - last.0, y - last.1)
-      State(..next, gesture: MovingWindow(#(x, y)))
+      let #(canvas_x, canvas_y) = canvas_point(state, x, y)
+      let next = move_window(state, canvas_x - last.0, canvas_y - last.1)
+      State(..next, gesture: MovingWindow(#(canvas_x, canvas_y)))
     }
     Resizing(mode, last, window) -> resized(state, mode, last, x, y, window)
   }
@@ -3077,12 +3242,66 @@ fn dragged(state: State, last: #(Int, Int), x: Int, y: Int) -> State {
 }
 
 fn marquee_to(state: State, origin: #(Int, Int), x: Int, y: Int) -> State {
-  State(..state, last_pointer: #(x, y), rect: #(
-    origin.0,
-    origin.1,
-    x - origin.0,
-    y - origin.1,
-  ))
+  let rect = #(origin.0, origin.1, x - origin.0, y - origin.1)
+  // The components the frame would select, live: the shell outlines them and
+  // draws their handles while the button is still down.
+  let preview = case active_form(state) {
+    Some(form) -> frame_ids(form, rect)
+    None -> []
+  }
+  State(..state, last_pointer: #(x, y), rect: rect, preview_selection: preview)
+}
+
+/// The components a marquee frame would pick: any of the eight points around
+/// a control (corners, edge midpoints) inside the frame.
+pub fn frame_ids(form: Form, rect: #(Int, Int, Int, Int)) -> List(String) {
+  let #(x, y, w, h) = normal_rect(rect)
+  campy_form.render_controls(form)
+  |> list.filter(fn(control) {
+    let #(bx, by, bw, bh) = campy_form.bounds(form, control)
+    [
+      #(bx, by),
+      #(bx + bw / 2, by),
+      #(bx + bw, by),
+      #(bx, by + bh / 2),
+      #(bx + bw, by + bh / 2),
+      #(bx, by + bh),
+      #(bx + bw / 2, by + bh),
+      #(bx + bw, by + bh),
+    ]
+    |> list.any(fn(point) {
+      point.0 >= x && point.0 <= x + w && point.1 >= y && point.1 <= y + h
+    })
+  })
+  |> list.map(fn(control) { control.id })
+}
+
+/// The id a press inside the selection's outline grabs: the primary
+/// selection, or the last one added when nothing is primary. Pressing the gap
+/// between two selected components drags the block, like pressing either.
+fn selection_grab(state: State, form: Form, x: Int, y: Int) -> String {
+  case state.selection {
+    [] -> ""
+    _ ->
+      case union_bounds(form, selection_subtree_ids(state, form)) {
+        Some(#(left, top, width, height))
+          if x >= left && x <= left + width && y >= top && y <= top + height
+        ->
+          case state.selected {
+            Some(id) -> id
+            None -> result.unwrap(list.last(state.selection), "")
+          }
+        _ -> ""
+      }
+  }
+}
+
+// The pointer arrives in form coordinates, and the form moves with the window
+// being dragged: a delta taken in those coordinates chases its own output.
+// Adding the window's offset back gives the canvas point, which does not move.
+fn canvas_point(state: State, x: Int, y: Int) -> #(Int, Int) {
+  let #(window_x, window_y) = window_position(state)
+  #(x + window_x, y + window_y)
 }
 
 fn resized(
@@ -3145,7 +3364,7 @@ pub fn pointer_up(state: State, x: Int, y: Int, additive: Bool) -> State {
         False, _ -> select(released, target)
       }
     }
-    Moving(_) -> State(..end_gesture(state), gesture: Idle)
+    Moving(_) -> State(..end_gesture(state), gesture: Idle, last_click: None)
     Marqueing(_) | Placing(_) -> {
       let #(left, top, width, height) = normal_rect(state.rect)
       let released =
@@ -3155,6 +3374,7 @@ pub fn pointer_up(state: State, x: Int, y: Int, additive: Bool) -> State {
           gesture: Idle,
           last_pointer: #(x, y),
         )
+      let released = State(..released, preview_selection: [])
       case state.gesture {
         Placing(_) -> place_component(released)
         _ ->
@@ -3168,22 +3388,42 @@ pub fn pointer_up(state: State, x: Int, y: Int, additive: Bool) -> State {
           }
       }
     }
-    MovingWindow(_) -> State(..select(state, ""), gesture: Idle)
-    Resizing(_, _, _) -> State(..end_gesture(state), gesture: Idle)
+    MovingWindow(_) ->
+      State(..select(state, ""), gesture: Idle, last_click: None)
+    Resizing(_, _, _) ->
+      State(..end_gesture(state), gesture: Idle, last_click: None)
   }
 }
 
 // Escape, a window switch, or a lost pointer: drop the gesture without
 // committing anything half-finished.
 pub fn pointer_cancel(state: State) -> State {
+  let idle =
+    State(..state, gesture: Idle, rect: #(0, 0, 0, 0), preview_selection: [])
   case state.gesture {
     Idle -> state
-    Pressing(_, _) -> State(..state, gesture: Idle)
-    Moving(_) -> State(..end_gesture(state), gesture: Idle)
-    Marqueing(_) | Placing(_) ->
-      State(..state, gesture: Idle, rect: #(0, 0, 0, 0))
-    MovingWindow(_) -> State(..state, gesture: Idle)
-    Resizing(_, _, _) -> State(..end_gesture(state), gesture: Idle)
+    Pressing(_, _) -> idle
+    // A cancelled drag goes back to what it started from: no half-moved
+    // selection, and no undo entry for a gesture nobody finished.
+    Moving(_) | Resizing(_, _, _) -> {
+      let next = case state.gesture_base {
+        Some(base) -> restore(state, base)
+        None -> idle
+      }
+      State(
+        ..next,
+        gesture: Idle,
+        rect: #(0, 0, 0, 0),
+        preview_selection: [],
+        gesture_base: None,
+        merge_undo: False,
+        drop_active: False,
+        drop_candidate: "",
+        drag_control: None,
+      )
+    }
+    Marqueing(_) | Placing(_) -> idle
+    MovingWindow(_) -> idle
   }
 }
 

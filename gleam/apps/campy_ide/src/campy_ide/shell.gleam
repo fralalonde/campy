@@ -37,8 +37,6 @@
 //// | `marquee-rect` | panel | marquee outline (`SetGeometry`, `SetBool visible`) |
 //// | `view-toggle` | button | form/code switch (glyph flips with `SetText`) |
 //// | `canvas-rule` | panel | 1px rule above the Form/Raw tabs |
-//// | `form-tab`, `raw-tab` | button | bottom tabs of the form editor |
-//// | `raw-view` | memo | read-only source pane of the Raw tab (`SetCode`) |
 //// | `code-title`, `code-handler` | label | handler header |
 //// | `code-view` | code_editor | handler source (`SetCode`, `editor:<id>:changed`) |
 //// | `completions` | list | completion popup (`SetModel`, positioned by `SetGeometry`) |
@@ -404,8 +402,12 @@ pub type ShellView {
     status: String,
     path: String,
     running: Bool,
+    /// Per project row, the module that project's app runs ("" = not
+    /// runnable). The navigator draws a run button on the row's right end.
+    project_apps: List(String),
+    /// Module ids whose app window is up: their row's button is a stop button.
+    running_modules: List(String),
     code_view: Bool,
-    raw_tab: Bool,
     events_tab: Bool,
     hints: Bool,
     has_selection: Bool,
@@ -419,6 +421,10 @@ pub type ShellView {
     project_title: String,
     project_path: String,
     project_selected: Bool,
+    /// The module this project runs, and the modules it could run. Empty means
+    /// the project is not runnable and the top bar offers no project button.
+    project_app: String,
+    project_app_options: List(String),
     settings_open: Bool,
     agent_open: Bool,
     project_dialog_open: Bool,
@@ -475,8 +481,9 @@ pub fn empty_view() -> ShellView {
     status: "",
     path: "",
     running: False,
+    project_apps: [],
+    running_modules: [],
     code_view: False,
-    raw_tab: False,
     events_tab: False,
     hints: False,
     has_selection: False,
@@ -488,6 +495,8 @@ pub fn empty_view() -> ShellView {
     project_title: "",
     project_path: "",
     project_selected: False,
+    project_app: "",
+    project_app_options: [],
     settings_open: False,
     agent_open: False,
     project_dialog_open: False,
@@ -714,15 +723,105 @@ fn menu_bar(view: ShellView) -> ControlDesc {
     menu("menu-edit", "Edit", 70, 58, edit_menu(), "Undo, redo, clipboard"),
     menu("menu-settings", "Settings", 132, 90, settings_menu(), "Editor, agent"),
     palette(view),
-    node("run", "button", "▶", l.width - 82, 7, 34, 32)
-      |> with_class("campy-run")
-      |> with_props([hint_prop("Run (F5)")])
-      |> enabled_as(!view.running),
-    node("stop", "button", "■", l.width - 42, 7, 34, 32)
-      |> with_class("campy-stop")
-      |> with_props([hint_prop("Stop (Shift+F5)")])
-      |> enabled_as(view.running),
   ])
+}
+
+/// Run buttons laid over the navigator rows: one at the right end of each
+/// project row whose project has an app, and one on each module row. A running
+/// app's button is red and stops it; several can run at once.
+fn nav_run_buttons(view: ShellView) -> List(ControlDesc) {
+  let l = view.layout
+  let project_rows =
+    list.index_map(indices(project_run_pool), fn(index, _) {
+      let app = at_string(view.project_apps, index)
+      run_row_button(
+        "run-p:" <> int.to_string(index),
+        l.nav_w - 32,
+        projects_row_y + index * nav_row,
+        app,
+        list.contains(view.running_modules, app),
+      )
+      |> shown(app != "" && index < list.length(view.project_apps))
+    })
+  let module_rows =
+    list.index_map(indices(module_run_pool), fn(index, _) {
+      let id = case list.drop(view.modules, index) {
+        [module, ..] -> module.id
+        [] -> ""
+      }
+      run_row_button(
+        "run-m:" <> int.to_string(index),
+        l.nav_w - 32,
+        modules_row_y + index * nav_row,
+        id,
+        list.contains(view.running_modules, id),
+      )
+      |> shown(id != "")
+    })
+  list.append(project_rows, module_rows)
+}
+
+/// The run/stop button of one navigator row, or an inert placeholder slot
+/// (shown only when its row exists).
+fn run_row_button(
+  name: String,
+  x: Int,
+  y: Int,
+  target: String,
+  running: Bool,
+) -> ControlDesc {
+  node(
+    name,
+    "button",
+    case running {
+      True -> "■"
+      False -> "▶"
+    },
+    x,
+    y + 1,
+    22,
+    nav_row - 2,
+  )
+  |> with_class("campy-nav-run")
+  |> with_class(case running {
+    True -> "campy-stop"
+    False -> "campy-run"
+  })
+  |> with_props([
+    hint_prop(case target {
+      "" -> ""
+      _ ->
+        case running {
+          True -> "Stop this app"
+          False -> "Run this app"
+        }
+    }),
+  ])
+}
+
+/// Resolves a navigator run button's wire id back to its name. The ids are
+/// derived (one per pool slot), like the module tabs'.
+pub fn nav_run_name(id: Int) -> Option(String) {
+  let names =
+    list.append(
+      list.map(indices(project_run_pool), fn(index) {
+        "run-p:" <> int.to_string(index)
+      }),
+      list.map(indices(module_run_pool), fn(index) {
+        "run-m:" <> int.to_string(index)
+      }),
+    )
+  case list.find(names, fn(name) { campy_form.wire_id(name) == id }) {
+    Ok(name) -> Some(name)
+    Error(_) -> None
+  }
+}
+
+fn at_string(items: List(String), index: Int) -> String {
+  case list.drop(items, index) {
+    [first, ..] -> first
+    [] -> ""
+  }
 }
 
 fn menu(
@@ -811,59 +910,77 @@ fn palette(view: ShellView) -> ControlDesc {
 
 // --- navigator --------------------------------------------------------------
 
+/// The navigator's list rows: the renderer's `VirtualList` row size, and the
+/// tops of the two lists under their titles. The row buttons are siblings of
+/// the list (a list's rows are built by the renderer), so they are positioned
+/// from these.
+const nav_row = 24
+
+const projects_row_y = 40
+
+const modules_row_y = 196
+
+/// How many rows can carry a button, so the document's shape stays fixed.
+const project_run_pool = 8
+
+const module_run_pool = 12
+
 fn navigator(view: ShellView) -> ControlDesc {
   let l = view.layout
   node("nav", "panel", "", 0, l.body_y, l.nav_w, l.nav_h)
   |> with_class("campy-nav")
   |> with_props([layout_prop("free")])
-  |> with_children([
-    node("nav-projects-title", "label", "Projects", 8, 8, 90, 28)
-      |> with_class("campy-title"),
-    node("project-delete", "button", "⌫", l.nav_w - 66, 10, 26, 24)
-      |> with_class("campy-icon-button")
-      |> with_props([hint_prop("Remove project")])
-      |> enabled_as(view.can_delete_project),
-    node("project-add", "button", "+", l.nav_w - 34, 10, 26, 24)
-      |> with_class("campy-icon-button")
-      |> with_props([hint_prop("Add project")]),
-    list_node(
-      "projects-nav",
-      8,
-      40,
-      l.nav_w - 16,
-      110,
-      list.map(view.projects, fn(item: ProjectItem) {
-        WireStruct([
-          #("text", WireText(item.title)),
-          #("id", WireText(item.id)),
-          #("active", WireBool(item.active)),
-          #("icon", WireText(item.icon)),
-        ])
-      }),
-    )
-      |> with_class("campy-nav-list"),
-    rule("nav-rule", 8, 156, l.nav_w - 16, 1),
-    node("nav-modules-title", "label", "Modules", 8, 162, 90, 28)
-      |> with_class("campy-title"),
-    node("module-add", "button", "+", l.nav_w - 34, 164, 26, 26)
-      |> with_class("campy-icon-button")
-      |> with_props([hint_prop("New module")]),
-    list_node(
-      "modules-nav",
-      8,
-      196,
-      l.nav_w - 16,
-      l.nav_h - 208,
-      list.map(view.modules, fn(item: ModuleItem) {
-        WireStruct([
-          #("text", WireText(item.name)),
-          #("id", WireText(item.id)),
-          #("active", WireBool(item.active)),
-        ])
-      }),
-    )
-      |> with_class("campy-nav-list"),
-  ])
+  |> with_children(list.append(
+    [
+      node("nav-projects-title", "label", "Projects", 8, 8, 90, 28)
+        |> with_class("campy-title"),
+      node("project-delete", "button", "⌫", l.nav_w - 66, 10, 26, 24)
+        |> with_class("campy-icon-button")
+        |> with_props([hint_prop("Remove project")])
+        |> enabled_as(view.can_delete_project),
+      node("project-add", "button", "+", l.nav_w - 34, 10, 26, 24)
+        |> with_class("campy-icon-button")
+        |> with_props([hint_prop("Add project")]),
+      list_node(
+        "projects-nav",
+        8,
+        40,
+        l.nav_w - 16,
+        110,
+        list.map(view.projects, fn(item: ProjectItem) {
+          WireStruct([
+            #("text", WireText(item.title)),
+            #("id", WireText(item.id)),
+            #("active", WireBool(item.active)),
+            #("icon", WireText(item.icon)),
+          ])
+        }),
+      )
+        |> with_class("campy-nav-list"),
+      rule("nav-rule", 8, 156, l.nav_w - 16, 1),
+      node("nav-modules-title", "label", "Modules", 8, 162, 90, 28)
+        |> with_class("campy-title"),
+      node("module-add", "button", "+", l.nav_w - 34, 164, 26, 26)
+        |> with_class("campy-icon-button")
+        |> with_props([hint_prop("New module")]),
+      list_node(
+        "modules-nav",
+        8,
+        196,
+        l.nav_w - 16,
+        l.nav_h - 208,
+        list.map(view.modules, fn(item: ModuleItem) {
+          WireStruct([
+            #("text", WireText(item.name)),
+            #("id", WireText(item.id)),
+            #("active", WireBool(item.active)),
+          ])
+        }),
+      )
+        |> with_class("campy-nav-list"),
+    ],
+    nav_run_buttons(view),
+  ))
 }
 
 // --- centre -----------------------------------------------------------------
@@ -876,32 +993,7 @@ fn centre(view: ShellView) -> List(ControlDesc) {
       |> with_class("campy-icon-button")
       |> with_props([hint_prop("Close tab")]),
     canvas(view),
-    node(
-      "raw-view",
-      "memo",
-      view.code_source,
-      l.canvas_x,
-      l.canvas_y,
-      l.canvas_w,
-      l.canvas_h,
-    )
-      |> with_class("campy-raw")
-      |> with_props([
-        #("language", WireText("gleam")),
-        #("read-only", WireBool(True)),
-      ])
-      |> shown(!view.code_view && view.raw_tab),
     rule("canvas-rule", l.canvas_x, l.rule_y, l.centre_w, 1)
-      |> shown(!view.code_view),
-    node("form-tab", "button", "▦ Form", l.centre_x + 4, l.tabs_y, 90, 30)
-      |> with_class("campy-tab-button")
-      |> with_class_if("campy-tab-on", !view.raw_tab)
-      |> with_props([hint_prop("Design canvas")])
-      |> shown(!view.code_view),
-    node("raw-tab", "button", "⌨ Raw", l.centre_x + 98, l.tabs_y, 90, 30)
-      |> with_class("campy-tab-button")
-      |> with_class_if("campy-tab-on", view.raw_tab)
-      |> with_props([hint_prop("Module source")])
       |> shown(!view.code_view),
     node(
       "view-toggle",
@@ -1025,7 +1117,7 @@ fn canvas(view: ShellView) -> ControlDesc {
   )
   |> with_class("campy-canvas")
   |> with_props([layout_prop("free")])
-  |> shown(!view.code_view && !view.raw_tab)
+  |> shown(!view.code_view)
   |> with_children(list.append(
     [
       node(
@@ -1250,6 +1342,11 @@ fn project_panel(view: ShellView) -> ControlDesc {
       |> with_class("campy-field-label"),
     node("project-path", "label", view.project_path, 76, 102, 236, 28)
       |> with_class("campy-field-text"),
+    node("project-app-label", "label", "App", 8, 134, 64, 28)
+      |> with_class("campy-field-label"),
+    node("project-app", "combo", view.project_app, 76, 134, 236, 28)
+      |> with_class("campy-field-edit")
+      |> with_props([model_prop(list.map(view.project_app_options, WireText))]),
   ])
 }
 

@@ -195,6 +195,11 @@ pub const CAMPY_SHEET: &str = css!(
                                        border-color: transparent; }",
     ".campy-stop .campy-widget-button { background: var(--campy-danger); color: #ffffff;
                                         border-color: transparent; }",
+    // Run buttons sit inside navigator rows: small, and not a full-height
+    // control that would push the row around.
+    ".campy-nav-run .campy-widget-button { min-height: 0; padding: 0; font-size: 10px;
+                                          line-height: 1; border-radius: 4px;
+                                          border-color: transparent; }",
     // Icon-sized affordances.
     ".campy-icon-button .campy-widget-button { background: transparent;
                                                border-color: transparent;
@@ -292,8 +297,10 @@ pub const CAMPY_SHEET: &str = css!(
                   border: 1px solid var(--campy-accent); border-radius: 2px; }",
     ".campy-grip-window { background: var(--campy-raised);
                           border-color: var(--campy-border); }",
+    // The selection frame is a rubber band, not a veil: the components it
+    // would take are outlined behind it, and must stay readable through it.
     ".campy-marquee { border: 1px solid var(--campy-accent);
-                      background: var(--campy-accent-soft); pointer-events: none; }",
+                      background: transparent; pointer-events: none; }",
     // --- inspector ----------------------------------------------------------
     ".campy-insp-label { color: var(--campy-muted); font-size: 12px; }",
     ".campy-insp-selection { font-weight: 600; }",

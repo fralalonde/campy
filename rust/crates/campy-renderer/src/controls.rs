@@ -561,15 +561,57 @@ pub fn reconcile(doc: &UiDocument, host: &Rc<Host>) {
             && let Some(menu) = first_of_kind(&doc.controls, &["menu"])
         {
             host.popup.set(Some(menu));
+            host.bump_popup();
         }
         if std::env::var_os("CAMPY_UI_OPEN_CHOICE").is_some()
             && let Some(choice) = first_of_kind(&doc.controls, &["combo", "menu-list"])
         {
             host.popup.set(Some(choice));
+            host.bump_popup();
         }
     }
     host.structure
         .update(|count| *count = count.wrapping_add(1));
+}
+
+/// Every control's absolute rectangle from the live geometry signals.
+///
+/// `host.rects` is the document as it was loaded; a resize or a move changes
+/// the signals and the *next* document write may be a long way off, so a popup
+/// opened in between has to read the signals or it lands where the control used
+/// to be.
+fn live_rects(host: &Rc<Host>) -> HashMap<u64, (f64, f64, f64, f64)> {
+    fn walk(
+        docs: &HashMap<u64, FlatControl>,
+        controls: &HashMap<u64, ControlSignals>,
+        id: u64,
+        origin: (f64, f64),
+        out: &mut HashMap<u64, (f64, f64, f64, f64)>,
+    ) {
+        let Some(entry) = docs.get(&id) else {
+            return;
+        };
+        let (x, y, w, h) = match controls.get(&id) {
+            Some(signals) => match signals.rect.try_get() {
+                Some(rect) => rect,
+                None => (entry.desc.x, entry.desc.y, entry.desc.w, entry.desc.h),
+            },
+            None => (entry.desc.x, entry.desc.y, entry.desc.w, entry.desc.h),
+        };
+        let absolute = (origin.0 + x, origin.1 + y, w, h);
+        out.insert(id, absolute);
+        for child in &entry.children {
+            walk(docs, controls, *child, (absolute.0, absolute.1), out);
+        }
+    }
+
+    let docs = host.docs.borrow();
+    let controls = host.controls.borrow();
+    let mut out = HashMap::new();
+    for root in host.roots.borrow().iter() {
+        walk(&docs, &controls, *root, (0.0, 0.0), &mut out);
+    }
+    out
 }
 
 /// One control's children as keyed rows: the list reconciles by
@@ -757,11 +799,24 @@ fn first_of_kind(controls: &[ControlDesc], kinds: &[&str]) -> Option<u64> {
 /// `control()` row each, drawn at the document root above everything.
 fn popup_card(host: &Rc<Host>) -> AnyView {
     let _version = host.popup_version();
+    // Closing keeps the last card's rectangle: the layer below hides in place
+    // instead of being unmounted, so the area it covered is repainted. An
+    // unmounted popup left its pixels behind (the "empty box" on close).
     let Some(control) = host.popup.get() else {
-        host.popup_rect.set(None);
-        return AnyView::new(r#box());
+        let Some((x, y, width, height)) = host.popup_rect.get() else {
+            return AnyView::new(r#box());
+        };
+        return AnyView::new(
+            r#box()
+                .class("campy-popup-layer")
+                .style_property("left", Some(px(x)))
+                .style_property("top", Some(px(y)))
+                .style_property("width", Some(px(width)))
+                .style_property("height", Some(px(height)))
+                .style_property("display", Some("none".to_owned())),
+        );
     };
-    let Some(&(x, y, trigger_w, h)) = host.rects.borrow().get(&control) else {
+    let Some(&(x, y, trigger_w, h)) = live_rects(host).get(&control) else {
         return AnyView::new(r#box());
     };
     let is_menu = host
@@ -808,6 +863,7 @@ fn popup_card(host: &Rc<Host>) -> AnyView {
     };
     host.popup_rect.set(Some((x, top, width, height)));
     let mut card = r#box()
+        .class("campy-popup-layer")
         .class(if is_menu {
             "campy-menu-popup"
         } else {

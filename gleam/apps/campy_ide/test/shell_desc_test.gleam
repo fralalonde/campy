@@ -95,8 +95,6 @@ pub fn every_wire_contract_section_is_present_test() {
     #("menu-settings", "menu"),
     #("palette", "panel"),
     #("view-toggle", "button"),
-    #("run", "button"),
-    #("stop", "button"),
     #("status", "label"),
     #("projects-nav", "list"),
     #("modules-nav", "list"),
@@ -132,9 +130,9 @@ pub fn root_is_the_window_root_and_ids_are_unique_test() {
 pub fn section_ids_are_stable_wire_ids_test() {
   let document = shell.desc(demo_view())
   let names = [
-    "menu-bar", "palette", "run", "stop", "status", "projects-nav", "tab-strip",
-    "canvas", "inspector", "code-view", "console", "settings-panel",
-    "context-menu", "nav-context",
+    "menu-bar", "palette", "status", "projects-nav", "tab-strip", "canvas",
+    "inspector", "code-view", "console", "settings-panel", "context-menu",
+    "nav-context",
   ]
   list.each(names, fn(name) {
     by_name(document, name).id |> should.equal(campy_form.wire_id(name))
@@ -338,7 +336,6 @@ pub fn code_change_is_set_code_ops_test() {
   ide_ui.ops(previous, next)
   |> should.equal([
     ide_ui.SetCode(campy_form.wire_id("code-view"), source),
-    ide_ui.SetCode(campy_form.wire_id("raw-view"), source),
     ide_ui.SetMarks(campy_form.wire_id("code-view"), "diagnostics", []),
   ])
 }
@@ -420,6 +417,40 @@ pub fn canvas_geometry_change_is_granular_test() {
     }
   })
   |> should.be_true
+}
+
+pub fn navigator_rows_carry_run_buttons_test() {
+  let document = shell.desc(demo_view())
+  let find = fn(name) {
+    let id = shell.section_id(name)
+    case list.find(flatten(document), fn(control) { control.id == id }) {
+      Ok(control) -> control
+      Error(_) -> panic as { "missing navigator control " <> name }
+    }
+  }
+  // One run button per module row, at the row's right end.
+  list.each([0, 1, 2], fn(index) {
+    let button = find("run-m:" <> int.to_string(index))
+    button.kind |> should.equal("button")
+    button.x |> should.equal(158)
+    button.y |> should.equal(197 + index * 24)
+    button.visible |> should.be_true
+  })
+  // A slot past the last row stays in the document, hidden, so the shape of
+  // the shell does not change with the number of modules.
+  find("run-m:5").visible |> should.be_false
+  // The project row runs the project's app (the demo names `cat-cafe`).
+  find("run-p:0").visible |> should.be_true
+  // Without an app there is no button on the row.
+  shell.desc(shell.empty_view())
+  |> flatten
+  |> list.find(fn(control) { control.id == shell.section_id("run-p:0") })
+  |> should.be_ok
+  |> fn(found) { found.visible }
+  |> should.be_false
+  // The ids resolve back through the shell's pools.
+  shell.nav_run_name(shell.section_id("run-m:2"))
+  |> should.equal(Some("run-m:2"))
 }
 
 pub fn commands_tag_ops_with_the_generation_test() {

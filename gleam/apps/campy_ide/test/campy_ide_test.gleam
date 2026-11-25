@@ -62,8 +62,6 @@ pub fn toolbar_and_dialog_controls_are_buttons_test() {
   let document = shell.desc(ide_ui.snapshot(demo_state()))
   list.each(
     [
-      #("run", "button"),
-      #("stop", "button"),
       #("view-toggle", "button"),
       #("module-add", "button"),
       #("tab-close", "button"),
@@ -581,15 +579,144 @@ pub fn selection_edge_grip_resizes_the_control_test() {
   control.width |> should.equal(160)
 }
 
-pub fn pointer_cancel_drops_the_gesture_test() {
+pub fn pointer_cancel_puts_the_gesture_back_test() {
   let model = demo_state() |> state.select("pet-button")
   let dragged = state.pointer_move(state.pointer_down(model, 60, 240), 100, 280)
   let cancelled = state.pointer_cancel(dragged)
   cancelled.gesture |> should.equal(state.Idle)
   let assert Some(control) = state.selected_control(cancelled)
-  // The move itself already happened (previews are model edits); the undo
-  // gesture is closed so F6/undo start a fresh step.
+  // Escape mid-drag is a cancel, not a commit: the component goes back to
+  // where the press found it, and no undo step is left behind.
+  control.x |> should.equal(44)
+  control.y |> should.equal(236)
+  list.length(cancelled.undo) |> should.equal(list.length(model.undo))
+}
+
+pub fn a_drag_is_one_undo_step_test() {
+  let model = demo_state() |> state.select("pet-button")
+  let moved =
+    model
+    |> state.pointer_down(60, 240)
+    |> state.pointer_move(80, 260)
+    |> state.pointer_move(90, 270)
+    |> state.pointer_move(100, 280)
+    |> state.pointer_up(100, 280, False)
+  let assert Some(control) = state.selected_control(moved)
   control.x |> should.equal(84)
+  // One entry for the whole drag, whatever the number of pointer moves.
+  list.length(moved.undo) |> should.equal(list.length(model.undo) + 1)
+  let assert Some(back) = state.selected_control(state.undo(moved))
+  back.x |> should.equal(44)
+  back.y |> should.equal(236)
+}
+
+pub fn a_resize_is_one_undo_step_test() {
+  let model = demo_state() |> state.select("pet-button")
+  let resized =
+    model
+    |> state.pointer_down(184, 250)
+    |> state.pointer_move(194, 250)
+    |> state.pointer_move(204, 250)
+    |> state.pointer_up(204, 250, False)
+  let assert Some(control) = state.selected_control(resized)
+  control.width |> should.equal(160)
+  list.length(resized.undo) |> should.equal(list.length(model.undo) + 1)
+  let assert Some(back) = state.selected_control(state.undo(resized))
+  back.width |> should.equal(140)
+}
+
+pub fn a_block_stops_when_one_member_reaches_the_edge_test() {
+  let model =
+    demo_state()
+    |> state.toggle_select("pet-button")
+    |> state.toggle_select("feed-button")
+  let assert Some(pet) =
+    state.control_at(
+      {
+        let assert Some(form) = state.active_form(model)
+        form
+      },
+      60,
+      240,
+    )
+  let assert Some(block) = state.active_form(model)
+  let #(pet_x, _, _, _) = campy_form.bounds(block, pet)
+  // Drag the block far past the left edge: the block keeps its shape.
+  let moved =
+    model
+    |> state.pointer_down(60, 240)
+    |> state.pointer_move(-500, 240)
+    |> state.pointer_up(-500, 240, False)
+  let assert Some(form) = state.active_form(moved)
+  let assert Some(pet_after) = campy_form.find_control(form, "pet-button")
+  let assert Some(feed_after) = campy_form.find_control(form, "feed-button")
+  let assert Some(feed_before) = campy_form.find_control(block, "feed-button")
+  pet_after.x |> should.equal(0)
+  // Whatever the press reached, both members moved by the same amount.
+  feed_after.x - pet_after.x |> should.equal(feed_before.x - pet_x)
+}
+
+pub fn a_marquee_outlines_its_candidates_before_release_test() {
+  let model = demo_state() |> state.select("")
+  let dragging =
+    state.pointer_move(state.pointer_down(model, 60, 240), 300, 300)
+  // The frame already knows what it would take, without selecting it.
+  list.length(dragging.preview_selection) |> should.equal(2)
+  dragging.selection |> should.equal([])
+  let released = state.pointer_up(dragging, 300, 300, False)
+  released.preview_selection |> should.equal([])
+  list.length(released.selection) |> should.equal(2)
+}
+
+pub fn a_press_in_the_selection_gap_drags_the_block_test() {
+  let model =
+    demo_state()
+    |> state.toggle_select("pet-button")
+    |> state.toggle_select("feed-button")
+  // A point inside the block's outline but on no component: 60,260 is under
+  // pet-button's box? use the gap between the two boxes instead.
+  let assert Some(form) = state.active_form(model)
+  let assert Some(pet) = campy_form.find_control(form, "pet-button")
+  let assert Some(feed) = campy_form.find_control(form, "feed-button")
+  let pet_box = campy_form.bounds(form, pet)
+  let feed_box = campy_form.bounds(form, feed)
+  let gap_x = pet_box.0 + pet_box.2 + 4
+  let gap_y = pet_box.1 + 4
+  let dragged =
+    model
+    |> state.pointer_down(gap_x, gap_y)
+    |> state.pointer_move(gap_x + 10, gap_y + 10)
+    |> state.pointer_up(gap_x + 10, gap_y + 10, False)
+  let assert Some(after) = state.active_form(dragged)
+  let assert Some(pet_after) = campy_form.find_control(after, "pet-button")
+  let assert Some(feed_after) = campy_form.find_control(after, "feed-button")
+  pet_after.x |> should.equal(pet_box.0 + 10)
+  feed_after.x |> should.equal(feed_box.0 + 10)
+}
+
+pub fn changing_the_selection_keeps_the_inspector_tab_test() {
+  let on_events =
+    demo_state()
+    |> state.select("pet-button")
+    |> state.set_tab(state.Events)
+  let other = state.select(on_events, "feed-button")
+  other.tab |> should.equal(state.Events)
+}
+
+pub fn two_quick_clicks_open_the_default_handler_test() {
+  let model = demo_state() |> state.select("pet-button")
+  let #(noted, pair) = state.click_pair(model, 1000)
+  pair |> should.be_false
+  let #(noted, pair) = state.click_pair(noted, 1300)
+  pair |> should.be_true
+  // Too slow is two clicks, not a double.
+  let #(_, slow) = state.click_pair(noted, 1900)
+  slow |> should.be_false
+  state.default_event(campy_form.Button) |> should.equal(Some("clicked"))
+  state.default_event(campy_form.CheckBox) |> should.equal(Some("toggled"))
+  let opened = state.open_default_event(model)
+  opened.view |> should.equal(state.CodeView)
+  opened.tab |> should.equal(state.Properties)
 }
 
 // ---------------------------------------------------------------------------
@@ -713,8 +840,10 @@ pub fn drag_and_resize_gestures_are_one_undo_step_test() {
   let moved =
     demo_state()
     |> state.select("pet-button")
+    |> state.begin_gesture
     |> state.move_gesture_x(10)
     |> state.move_gesture_y(20)
+    |> state.end_gesture
   let assert Some(control) = state.selected_control(moved)
   control.x |> should.equal(54)
   control.y |> should.equal(256)
@@ -728,8 +857,10 @@ pub fn drag_and_resize_gestures_are_one_undo_step_test() {
   let resized =
     demo_state()
     |> state.select("pet-button")
+    |> state.begin_gesture
     |> state.resize_gesture_w(20)
     |> state.resize_gesture_h(5)
+    |> state.end_gesture
   let assert Some(control) = state.selected_control(resized)
   control.width |> should.equal(160)
   control.height |> should.equal(37)
