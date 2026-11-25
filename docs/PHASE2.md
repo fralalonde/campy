@@ -573,9 +573,22 @@ now CLOSED: a `menu` renders its `model` as a popup of base `control()`
 rows at the document root (positioned from the trigger's absolute
 rectangle, one `selected` event per item with the label the loop already
 routes), which reaches File/Edit/Settings without depending on zgui-ui's
-DropdownMenu — whose input path is still the unverified one. Still open
-for G1/Wave 4: gaps 6/7 (hover, console-goto) and Z4.1 (smoke-native
+DropdownMenu — whose input path is still the unverified one. Gap 6 is
+CLOSED too: a control with a `hint` prop reports `pointer enter`/`leave`
+and the loop puts the hint on the status line (restoring the previous
+message on leave, and gated by the settings dialog's "Show UI hints").
+Still open for G1/Wave 4: gap 7 (console-goto) and Z4.1 (smoke-native
 PNG removal).
+
+**Shell layout and controls (after the visual pass).** The shell is no
+longer a fixed 1280×860 frame: `shell.layout(width, height)` derives
+every pane from the window size, the renderer reports the window's CSS
+size on change (a `size` event), and the resize reaches the document as
+`SetGeometry` ops — the side panes keep their widths, the centre column,
+canvas and console take the rest, and dialogs centre themselves.
+Choice rows are real dropdowns on the same popup machinery as menus
+(a check on the current value, `selected` with the option text), which
+retires the click-to-cycle stopgap.
 
 **Visual pass (live window, first look):** the shell now renders as a
 dark IDE rather than a wall of blue buttons. Four causes, all fixed:

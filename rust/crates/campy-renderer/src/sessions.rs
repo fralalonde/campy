@@ -305,9 +305,10 @@ fn run(receiver: Receiver<(u64, Command)>, shared: Arc<Shared>) -> Result<(), St
 
     SESSION_STATE.with(|cell| *cell.borrow_mut() = Some(ui.clone()));
     #[allow(unused_mut)]
+    let (width, height) = startup_size();
     let mut app = zgui::app()
         .with_title("Campy")
-        .with_size(1280.0, 860.0)
+        .with_size(width, height)
         .with_stylesheet(CAMPY_SHEET);
     #[cfg(feature = "ui-testing")]
     {
@@ -439,6 +440,26 @@ fn swap_load(
 
 /// Adopts newly registered sessions, applies queued commands, reaps
 /// closed ones.
+/// The window's startup size: the shell's own 1280x860 unless
+/// `CAMPY_UI_SIZE=WxH` asks for another (a validation aid — the shell
+/// stretches to whatever the window is).
+fn startup_size() -> (f32, f32) {
+    let Some(requested) = std::env::var("CAMPY_UI_SIZE").ok() else {
+        return (1280.0, 860.0);
+    };
+    let mut parts = requested.split(['x', 'X', ',']);
+    let width = parts
+        .next()
+        .and_then(|part| part.trim().parse::<f32>().ok());
+    let height = parts
+        .next()
+        .and_then(|part| part.trim().parse::<f32>().ok());
+    match (width, height) {
+        (Some(width), Some(height)) if width >= 640.0 && height >= 480.0 => (width, height),
+        _ => (1280.0, 860.0),
+    }
+}
+
 /// A validation run needs a surface whose origin is known: a fullscreen
 /// toplevel covers the output exactly, so a pointer coordinate in device pixels
 /// follows from the layout's CSS pixels without asking the compositor where the
@@ -465,7 +486,26 @@ fn drain(ui: &Rc<ThreadState>) {
 }
 
 /// One session's drain (the per-window timer path).
+/// Tells the BEAM the window's CSS size whenever it changes: the shell layout
+/// stretches to it, so a resize is a document change, not a renderer one.
+fn report_size(host: &Rc<Host>) {
+    let handle = host.window.borrow().clone();
+    let Some(window) = handle else {
+        return;
+    };
+    let size = window.size().get_untracked();
+    let next = (
+        size.width.0.round().max(1.0) as u32,
+        size.height.0.round().max(1.0) as u32,
+    );
+    if next != host.last_size.get() {
+        host.last_size.set(next);
+        host.emit_raw("size", format!("{};{}", next.0, next.1));
+    }
+}
+
 fn drain_session(host: &Rc<Host>) {
+    report_size(host);
     // Registrations and reaping stay app-wide; the per-session tick only
     // applies that session's queue.
     if let Some(state) = SESSION_STATE.with(|cell| cell.borrow().clone()) {

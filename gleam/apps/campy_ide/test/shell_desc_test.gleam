@@ -451,3 +451,58 @@ pub fn empty_snapshot_produces_no_ops_test() {
   ide_ui.ops(ide_ui.empty_snapshot(), ide_ui.empty_snapshot())
   |> should.equal([])
 }
+
+// ---------------------------------------------------------------------------
+// Layout: the shell stretches to the window
+// ---------------------------------------------------------------------------
+
+pub fn layout_matches_the_designed_frame_test() {
+  let l = shell.layout(shell.window_width, shell.window_height)
+  l.canvas_x |> should.equal(191)
+  l.canvas_y |> should.equal(79)
+  l.canvas_w |> should.equal(768)
+  l.canvas_h |> should.equal(550)
+  l.right_x |> should.equal(960)
+  l.console_y |> should.equal(663)
+  l.status_y |> should.equal(834)
+}
+
+pub fn layout_stretches_the_centre_column_test() {
+  let small = shell.layout(1280, 860)
+  let large = shell.layout(1700, 1050)
+  // The side panes keep their widths; the centre column takes the difference.
+  large.nav_w |> should.equal(small.nav_w)
+  large.right_w |> should.equal(small.right_w)
+  large.centre_w |> should.equal(small.centre_w + 420)
+  large.right_x |> should.equal(small.right_x + 420)
+  large.canvas_h |> should.equal(small.canvas_h + 190)
+  large.status_y |> should.equal(1024)
+}
+
+/// A resize is geometry, not a reload: every pane moves with `SetGeometry` and
+/// the document keeps its shape, so the console and editor survive it.
+pub fn window_resize_moves_the_panes_without_reloading_test() {
+  let before = demo_view()
+  let resized = state.set_window_size(demo_state(), 1700, 1050)
+  let after = ide_ui.snapshot(resized)
+  let ops = ide_ui.ops(before, after)
+  let reloaded =
+    list.any(ops, fn(op) {
+      case op {
+        ide_ui.Reload(_) -> True
+        _ -> False
+      }
+    })
+  reloaded |> should.be_false
+  let moved =
+    list.any(ops, fn(op) {
+      case op {
+        ide_ui.SetGeometry(id, _, _, _, _) ->
+          id == shell.section_id("status-bar")
+          || id == shell.section_id("right-pane")
+          || id == shell.section_id("canvas")
+        _ -> False
+      }
+    })
+  moved |> should.be_true
+}

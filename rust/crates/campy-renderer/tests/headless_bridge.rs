@@ -68,7 +68,7 @@ fn form() -> UiDocument {
                 h: 40.0,
                 enabled: true,
                 visible: true,
-                props: vec![],
+                props: vec![("hint".into(), PropValue::Text("Click me — a hint".into()))],
                 children: vec![],
             },
             ControlDesc {
@@ -197,6 +197,13 @@ fn loads_updates_clicks_reads_and_rejects() {
     testing::test_pointer("click", 170.0, 120.0).expect("the click is enqueued");
     testing::test_pump(32).expect("a pump is enqueued");
     wait_for(&sink, 1, "control:2:clicked");
+    // The pointer entered a control that carries a hint, so the loop was told:
+    // this is the hover half of the old shell's tooltips.
+    let hovers = events_of(&sink, "hover");
+    assert!(
+        hovers.contains(&"hover Click me — a hint".to_owned()),
+        "expected a hover hint, got {hovers:?}"
+    );
     let clicks = events_of(&sink, "control:2:");
     assert_eq!(
         clicks,

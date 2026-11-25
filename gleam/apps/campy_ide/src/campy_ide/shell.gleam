@@ -186,23 +186,104 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 
-/// Fixed shell size (LoadUi width/height).
+/// The size the shell opens at (LoadUi width/height when the window has not
+/// reported its own yet). The layout below stretches to any size: the window
+/// reports a resize and the document is re-emitted against it.
 pub const window_width = 1280
 
 pub const window_height = 860
 
-/// The designer canvas pane inside the shell (window CSS px). `campy_ide`'s
-/// pointer routing subtracts these to reach form-local coordinates.
-pub const canvas_x = 191
-
-pub const canvas_y = 79
-
-pub const canvas_w = 768
-
-pub const canvas_h = 550
-
 /// The module window's title-bar height inside the canvas.
 pub const form_title_height = 28
+
+/// Every pane rectangle for one window size, in window CSS pixels.
+///
+/// The shell is one hand-placed frame: the navigator and the inspector keep
+/// their widths, the menu bar and status line their heights, and the centre
+/// column, the canvas and the console take whatever is left. `campy_ide`'s
+/// pointer routing subtracts `canvas_x`/`canvas_y` to reach form-local
+/// coordinates, so the canvas lives here rather than in a constant.
+pub type Layout {
+  Layout(
+    width: Int,
+    height: Int,
+    /// Menu bar height, and the body's top edge (the 1px rule sits between).
+    menu_h: Int,
+    body_y: Int,
+    nav_w: Int,
+    nav_h: Int,
+    centre_x: Int,
+    centre_w: Int,
+    right_x: Int,
+    right_w: Int,
+    right_h: Int,
+    /// The inspector/project panel's height (below the inspector's tabs).
+    pane_h: Int,
+    status_y: Int,
+    status_h: Int,
+    tabstrip_y: Int,
+    tabstrip_h: Int,
+    canvas_x: Int,
+    canvas_y: Int,
+    canvas_w: Int,
+    canvas_h: Int,
+    /// The 1px rule above the form/raw tabs, the tab row, the console.
+    rule_y: Int,
+    tabs_y: Int,
+    console_y: Int,
+    console_h: Int,
+    console_w: Int,
+  )
+}
+
+/// The panes for a window of `width` x `height`.
+pub fn layout(width: Int, height: Int) -> Layout {
+  let menu_h = 46
+  let body_y = menu_h + 1
+  let nav_w = 190
+  let right_w = 320
+  let status_h = 26
+  let tabstrip_h = 32
+  let console_h = 171
+  let tabs_h = 30
+  let centre_x = nav_w + 1
+  let right_x = int.max(width - right_w, centre_x)
+  // A window dragged smaller than the chrome cannot have a negative pane: the
+  // centre column and the canvas keep a usable minimum and the rest clips.
+  let centre_w = int.max(right_x - centre_x - 1, 160)
+  let status_y = height - status_h
+  let console_y = int.max(status_y - console_h, body_y + 120)
+  let tabs_y = console_y - tabs_h
+  let rule_y = int.max(tabs_y - 4, body_y + 120)
+  let canvas_y = body_y + tabstrip_h
+  Layout(
+    width: width,
+    height: height,
+    menu_h: menu_h,
+    body_y: body_y,
+    nav_w: nav_w,
+    nav_h: int.max(height - body_y - status_h, 200),
+    centre_x: centre_x,
+    centre_w: centre_w,
+    right_x: right_x,
+    right_w: right_w,
+    right_h: int.max(height - body_y - status_h, 200),
+    pane_h: int.max(height - body_y - status_h - 88, 112),
+    status_y: status_y,
+    status_h: status_h,
+    tabstrip_y: body_y,
+    tabstrip_h: tabstrip_h,
+    canvas_x: centre_x,
+    canvas_y: canvas_y,
+    canvas_w: centre_w,
+    canvas_h: int.max(rule_y - canvas_y, 120),
+    rule_y: rule_y,
+    tabs_y: tabs_y,
+    console_y: console_y,
+    console_h: console_h,
+    console_w: centre_w,
+  )
+}
 
 /// Font and size choices offered by the settings dialog (public: `ide_ui` maps
 /// the current font/size onto the same lists, so value and model agree).
@@ -308,6 +389,8 @@ pub type PropItem {
 /// Everything the shell displays, derived from IDE state by `ide_ui.snapshot`.
 pub type ShellView {
   ShellView(
+    /// Where every pane sits for this window size.
+    layout: Layout,
     title: String,
     theme: String,
     status: String,
@@ -372,6 +455,7 @@ pub type ShellView {
 /// A view with nothing in it: the diff baseline (`ide_ui.empty_snapshot`).
 pub fn empty_view() -> ShellView {
   ShellView(
+    layout: layout(window_width, window_height),
     title: "",
     theme: "dark",
     status: "",
@@ -578,11 +662,12 @@ pub fn event_keys() -> List(String) {
 /// The whole IDE window: one root (id 0) whose children are the shell sections
 /// and the hidden dialogs/overlays.
 pub fn desc(view: ShellView) -> List(ControlDesc) {
+  let l = view.layout
   let root =
-    node("ide-root", "panel", "", 0, 0, window_width, window_height)
+    node("ide-root", "panel", "", 0, 0, l.width, l.height)
     |> with_class("campy-ide-root")
     |> with_children(list.append(
-      [menu_bar(view), rule("menu-rule", 0, 46, window_width, 1)],
+      [menu_bar(view), rule("menu-rule", 0, l.menu_h, l.width, 1)],
       list.append(
         [navigator(view)],
         list.append(centre(view), [
@@ -604,19 +689,20 @@ pub fn desc(view: ShellView) -> List(ControlDesc) {
 // --- menu bar ---------------------------------------------------------------
 
 fn menu_bar(view: ShellView) -> ControlDesc {
-  node("menu-bar", "panel", "", 0, 0, window_width, 46)
+  let l = view.layout
+  node("menu-bar", "panel", "", 0, 0, l.width, l.menu_h)
   |> with_class("campy-menubar")
   |> with_props([layout_prop("free")])
   |> with_children([
     menu("menu-file", "File", 8, 58, file_menu(), "New, open, save"),
     menu("menu-edit", "Edit", 70, 58, edit_menu(), "Undo, redo, clipboard"),
     menu("menu-settings", "Settings", 132, 90, settings_menu(), "Editor, agent"),
-    palette(),
-    node("run", "button", "▶", 1198, 7, 34, 32)
+    palette(view),
+    node("run", "button", "▶", l.width - 82, 7, 34, 32)
       |> with_class("campy-run")
       |> with_props([hint_prop("Run (F5)")])
       |> enabled_as(!view.running),
-    node("stop", "button", "■", 1238, 7, 34, 32)
+    node("stop", "button", "■", l.width - 42, 7, 34, 32)
       |> with_class("campy-stop")
       |> with_props([hint_prop("Stop (Shift+F5)")])
       |> enabled_as(view.running),
@@ -676,7 +762,7 @@ fn separator() -> String {
   "—"
 }
 
-fn palette() -> ControlDesc {
+fn palette(view: ShellView) -> ControlDesc {
   let tiles =
     campy_ccl.all()
     |> list.index_map(fn(component: campy_ccl.Component, index: Int) {
@@ -701,7 +787,7 @@ fn palette() -> ControlDesc {
         hint_prop(component.label),
       ])
     })
-  node("palette", "panel", "", 228, 4, 960, 38)
+  node("palette", "panel", "", 228, 4, view.layout.width - 320, 38)
   |> with_class("campy-palette")
   |> with_props([layout_prop("free")])
   |> with_children(tiles)
@@ -710,24 +796,25 @@ fn palette() -> ControlDesc {
 // --- navigator --------------------------------------------------------------
 
 fn navigator(view: ShellView) -> ControlDesc {
-  node("nav", "panel", "", 0, 47, 190, 787)
+  let l = view.layout
+  node("nav", "panel", "", 0, l.body_y, l.nav_w, l.nav_h)
   |> with_class("campy-nav")
   |> with_props([layout_prop("free")])
   |> with_children([
     node("nav-projects-title", "label", "Projects", 8, 8, 90, 28)
       |> with_class("campy-title"),
-    node("project-delete", "button", "⌫", 124, 10, 26, 24)
+    node("project-delete", "button", "⌫", l.nav_w - 66, 10, 26, 24)
       |> with_class("campy-icon-button")
       |> with_props([hint_prop("Remove project")])
       |> enabled_as(view.can_delete_project),
-    node("project-add", "button", "+", 156, 10, 26, 24)
+    node("project-add", "button", "+", l.nav_w - 34, 10, 26, 24)
       |> with_class("campy-icon-button")
       |> with_props([hint_prop("Add project")]),
     list_node(
       "projects-nav",
       8,
       40,
-      174,
+      l.nav_w - 16,
       110,
       list.map(view.projects, fn(item: ProjectItem) {
         WireStruct([
@@ -739,18 +826,18 @@ fn navigator(view: ShellView) -> ControlDesc {
       }),
     )
       |> with_class("campy-nav-list"),
-    rule("nav-rule", 8, 156, 174, 1),
+    rule("nav-rule", 8, 156, l.nav_w - 16, 1),
     node("nav-modules-title", "label", "Modules", 8, 162, 90, 28)
       |> with_class("campy-title"),
-    node("module-add", "button", "+", 156, 164, 26, 26)
+    node("module-add", "button", "+", l.nav_w - 34, 164, 26, 26)
       |> with_class("campy-icon-button")
       |> with_props([hint_prop("New module")]),
     list_node(
       "modules-nav",
       8,
       196,
-      174,
-      579,
+      l.nav_w - 16,
+      l.nav_h - 208,
       list.map(view.modules, fn(item: ModuleItem) {
         WireStruct([
           #("text", WireText(item.name)),
@@ -766,40 +853,82 @@ fn navigator(view: ShellView) -> ControlDesc {
 // --- centre -----------------------------------------------------------------
 
 fn centre(view: ShellView) -> List(ControlDesc) {
+  let l = view.layout
   [
     tab_strip(view),
-    node("tab-close", "button", "×", 909, 51, 24, 24)
+    node("tab-close", "button", "×", l.right_x - 51, l.body_y + 4, 24, 24)
       |> with_class("campy-icon-button")
       |> with_props([hint_prop("Close tab")]),
     canvas(view),
-    node("raw-view", "memo", view.code_source, 191, 79, 768, 550)
+    node(
+      "raw-view",
+      "memo",
+      view.code_source,
+      l.canvas_x,
+      l.canvas_y,
+      l.canvas_w,
+      l.canvas_h,
+    )
       |> with_class("campy-raw")
       |> with_props([
         #("language", WireText("gleam")),
         #("read-only", WireBool(True)),
       ])
       |> shown(!view.code_view && view.raw_tab),
-    rule("canvas-rule", 191, 629, 768, 1) |> shown(!view.code_view),
-    node("form-tab", "button", "▦ Form", 195, 633, 90, 30)
+    rule("canvas-rule", l.canvas_x, l.rule_y, l.centre_w, 1)
+      |> shown(!view.code_view),
+    node("form-tab", "button", "▦ Form", l.centre_x + 4, l.tabs_y, 90, 30)
       |> with_class("campy-tab-button")
       |> with_class_if("campy-tab-on", !view.raw_tab)
       |> with_props([hint_prop("Design canvas")])
       |> shown(!view.code_view),
-    node("raw-tab", "button", "⌨ Raw", 289, 633, 90, 30)
+    node("raw-tab", "button", "⌨ Raw", l.centre_x + 98, l.tabs_y, 90, 30)
       |> with_class("campy-tab-button")
       |> with_class_if("campy-tab-on", view.raw_tab)
       |> with_props([hint_prop("Module source")])
       |> shown(!view.code_view),
-    node("view-toggle", "button", toggle_glyph(view), 915, 86, 36, 36)
+    node(
+      "view-toggle",
+      "button",
+      toggle_glyph(view),
+      l.right_x - 45,
+      l.canvas_y + 7,
+      36,
+      36,
+    )
       |> with_class("campy-view-toggle")
       |> with_props([hint_prop("Toggle form/code (Ctrl+Tab)")]),
-    node("code-title", "label", "Handler code", 201, 87, 100, 20)
+    node(
+      "code-title",
+      "label",
+      "Handler code",
+      l.centre_x + 10,
+      l.canvas_y + 8,
+      100,
+      20,
+    )
       |> with_class("campy-code-title")
       |> shown(view.code_view),
-    node("code-handler", "label", view.code_handler, 305, 87, 400, 20)
+    node(
+      "code-handler",
+      "label",
+      view.code_handler,
+      l.centre_x + 114,
+      l.canvas_y + 8,
+      400,
+      20,
+    )
       |> with_class("campy-code-handler")
       |> shown(view.code_view),
-    node("code-view", "code_editor", view.code_source, 191, 111, 768, 552)
+    node(
+      "code-view",
+      "code_editor",
+      view.code_source,
+      l.canvas_x,
+      l.canvas_y + 32,
+      l.canvas_w,
+      l.canvas_h + 2,
+    )
       |> with_class("campy-code")
       |> with_props([
         #("language", WireText("gleam")),
@@ -809,8 +938,8 @@ fn centre(view: ShellView) -> List(ControlDesc) {
       |> shown(view.code_view),
     list_node(
       "completions",
-      500,
-      300,
+      l.canvas_x + { l.centre_w - 280 } / 2,
+      l.canvas_y + 221,
       280,
       184,
       list.map(view.completions, fn(item: CompletionItem) {
@@ -840,7 +969,15 @@ fn tab_strip(view: ShellView) -> ControlDesc {
       |> with_class_if("campy-tab-on", item.active)
       |> with_props([hint_prop("Switch to this module")])
     })
-  node("tab-strip", "panel", "", 191, 47, 740, 32)
+  node(
+    "tab-strip",
+    "panel",
+    "",
+    view.layout.centre_x,
+    view.layout.tabstrip_y,
+    view.layout.centre_w,
+    view.layout.tabstrip_h,
+  )
   |> with_class("campy-tab-strip")
   |> with_props([layout_prop("free")])
   |> with_children(tabs)
@@ -861,7 +998,15 @@ fn canvas(view: ShellView) -> ControlDesc {
   }
   let #(sx, sy, sw, sh) = view.canvas_selection
   let #(marquee, mx, my, mw, mh) = view.canvas_marquee
-  node("canvas", "surface", "", canvas_x, canvas_y, canvas_w, canvas_h)
+  node(
+    "canvas",
+    "surface",
+    "",
+    view.layout.canvas_x,
+    view.layout.canvas_y,
+    view.layout.canvas_w,
+    view.layout.canvas_h,
+  )
   |> with_class("campy-canvas")
   |> with_props([layout_prop("free")])
   |> shown(!view.code_view && !view.raw_tab)
@@ -920,7 +1065,16 @@ fn canvas_size(document: List(ControlDesc)) -> #(Int, Int) {
 // --- console ----------------------------------------------------------------
 
 fn console_pane(view: ShellView) -> ControlDesc {
-  node("console-pane", "panel", "", 191, 663, 768, 171)
+  let l = view.layout
+  node(
+    "console-pane",
+    "panel",
+    "",
+    l.centre_x,
+    l.console_y,
+    l.console_w,
+    l.console_h,
+  )
   |> with_class("campy-console-pane")
   |> with_props([layout_prop("free")])
   |> with_children([
@@ -939,10 +1093,10 @@ fn console_pane(view: ShellView) -> ControlDesc {
       24,
     )
       |> with_class("campy-console-state"),
-    node("console-clear", "button", "Clear", 700, 2, 60, 26)
+    node("console-clear", "button", "Clear", l.console_w - 68, 2, 60, 26)
       |> with_class("campy-console-clear")
       |> with_props([hint_prop("Clear console")]),
-    node("console", "console", "", 0, 30, 768, 141)
+    node("console", "console", "", 0, 30, l.console_w, l.console_h - 30)
       |> with_class("campy-console"),
   ])
 }
@@ -950,7 +1104,8 @@ fn console_pane(view: ShellView) -> ControlDesc {
 // --- right pane -------------------------------------------------------------
 
 fn right_pane(view: ShellView) -> ControlDesc {
-  node("right-pane", "panel", "", 960, 47, 320, 787)
+  let l = view.layout
+  node("right-pane", "panel", "", l.right_x, l.body_y, l.right_w, l.right_h)
   |> with_class("campy-inspector-pane")
   |> with_props([layout_prop("free")])
   |> with_children([
@@ -976,7 +1131,15 @@ fn right_pane(view: ShellView) -> ControlDesc {
 }
 
 fn project_panel(view: ShellView) -> ControlDesc {
-  node("project-panel", "panel", "", 0, 88, 320, 699)
+  node(
+    "project-panel",
+    "panel",
+    "",
+    0,
+    88,
+    view.layout.right_w,
+    view.layout.pane_h,
+  )
   |> with_class("campy-project-panel")
   |> with_props([layout_prop("free")])
   |> shown(view.project_selected)
@@ -1022,7 +1185,7 @@ fn inspector(
       let slot = index_of_item(items, key)
       inspector_row(key, item_at(items, slot), slot, is_events)
     })
-  node(name, "panel", "", 0, 88, 320, 699)
+  node(name, "panel", "", 0, 88, view.layout.right_w, view.layout.pane_h)
   |> with_class("campy-inspector")
   |> with_props([layout_prop("free")])
   |> shown(active && !view.project_selected)
@@ -1171,13 +1334,14 @@ fn at(items: List(a), index: Int) -> Option(a) {
 // --- status bar -------------------------------------------------------------
 
 fn status_bar(view: ShellView) -> ControlDesc {
-  node("status-bar", "panel", "", 0, 834, window_width, 26)
+  let l = view.layout
+  node("status-bar", "panel", "", 0, l.status_y, l.width, l.status_h)
   |> with_class("campy-status-bar")
   |> with_props([layout_prop("free")])
   |> with_children([
     node("status", "label", view.status, 10, 3, 700, 20)
       |> with_class("campy-status"),
-    node("status-path", "label", view.path, 720, 3, 550, 20)
+    node("status-path", "label", view.path, l.width - 560, 3, 550, 20)
       |> with_class("campy-status-path"),
   ])
 }
@@ -1185,7 +1349,15 @@ fn status_bar(view: ShellView) -> ControlDesc {
 // --- dialogs and overlays ---------------------------------------------------
 
 fn settings_dialog(view: ShellView) -> ControlDesc {
-  node("settings-panel", "panel", "", 380, 120, 520, 330)
+  node(
+    "settings-panel",
+    "panel",
+    "",
+    centre_x(view, 520),
+    centre_y(view, 330),
+    520,
+    330,
+  )
   |> with_class("campy-dialog")
   |> with_props([layout_prop("free")])
   |> shown(view.settings_open)
@@ -1236,7 +1408,15 @@ fn settings_dialog(view: ShellView) -> ControlDesc {
 }
 
 fn agent_dialog(view: ShellView) -> ControlDesc {
-  node("agent-panel", "panel", "", 360, 140, 560, 300)
+  node(
+    "agent-panel",
+    "panel",
+    "",
+    centre_x(view, 560),
+    centre_y(view, 300),
+    560,
+    300,
+  )
   |> with_class("campy-dialog")
   |> with_props([layout_prop("free")])
   |> shown(view.agent_open)
@@ -1282,7 +1462,15 @@ fn agent_dialog(view: ShellView) -> ControlDesc {
 }
 
 fn project_dialog(view: ShellView) -> ControlDesc {
-  node("project-dialog", "panel", "", 410, 160, 460, 240)
+  node(
+    "project-dialog",
+    "panel",
+    "",
+    centre_x(view, 460),
+    centre_y(view, 240),
+    460,
+    240,
+  )
   |> with_class("campy-dialog")
   |> with_props([layout_prop("free")])
   |> shown(view.project_dialog_open)
@@ -1312,7 +1500,15 @@ fn project_dialog(view: ShellView) -> ControlDesc {
 }
 
 fn browser_dialog(view: ShellView) -> ControlDesc {
-  node("browser-panel", "panel", "", 380, 100, 520, 420)
+  node(
+    "browser-panel",
+    "panel",
+    "",
+    centre_x(view, 520),
+    centre_y(view, 420),
+    520,
+    420,
+  )
   |> with_class("campy-dialog")
   |> with_props([layout_prop("free")])
   |> shown(view.popup_open)
@@ -1442,6 +1638,17 @@ fn node(
     props: [],
     children: [],
   )
+}
+
+/// Where a dialog of `width` sits horizontally: centred on the window.
+fn centre_x(view: ShellView, width: Int) -> Int {
+  { view.layout.width - width } / 2
+}
+
+/// Where a dialog of `height` sits vertically: a third of the way down, which
+/// keeps it clear of the menu bar at every window size.
+fn centre_y(view: ShellView, height: Int) -> Int {
+  { view.layout.height - height } / 3
 }
 
 fn rule(name: String, x: Int, y: Int, w: Int, h: Int) -> ControlDesc {

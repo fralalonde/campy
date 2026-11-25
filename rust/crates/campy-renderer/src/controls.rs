@@ -60,14 +60,17 @@ pub struct Host {
     pub window: RefCell<Option<zgui::runtime::windows::WindowHandle>>,
     /// Whether the debug fullscreen request was made (`CAMPY_UI_FULLSCREEN`).
     pub fullscreen_done: Cell<bool>,
-    /// The menu whose popup is showing, by control id. One at a time: opening
-    /// another replaces it, and a press outside closes it. Plain state rather
-    /// than a signal: a host may be built outside any window scope (a deferred
-    /// load swaps one in from the drain), and a `new_local` signal made there
-    /// is disposed with that scope. `popup_tick` is the signal, and it is made
-    /// during the document build so it belongs to the window.
-    pub menu_open: Cell<Option<u64>>,
-    /// Bumped whenever `menu_open` changes; the popup redraws on it.
+    /// The control whose popup is showing, by id (a `menu`'s items or a
+    /// `combo`'s options). One at a time: opening another replaces it, and a
+    /// press outside closes it. Plain state rather than a signal: a host may be
+    /// built outside any window scope (a deferred load swaps one in from the
+    /// drain), and a `new_local` signal made there is disposed with that scope.
+    /// `popup_tick` is the signal, and it is made during the document build so
+    /// it belongs to the window.
+    pub popup: Cell<Option<u64>>,
+    /// Each control's kind, for the popup to know what its rows are.
+    pub kinds: RefCell<HashMap<u64, String>>,
+    /// Bumped whenever `popup` changes; the popup redraws on it.
     pub popup_tick: RefCell<Option<RwSignal<u64, LocalStorage>>>,
     /// Absolute CSS rectangles of the document's controls, filled by each
     /// build. A popup is drawn at the document root, so it has to know where
@@ -77,6 +80,8 @@ pub struct Host {
     pub popup_rect: Cell<Option<(f64, f64, f64, f64)>>,
     /// Whether `CAMPY_UI_OPEN_MENU` has been honoured (one shot).
     pub popup_debugged: Cell<bool>,
+    /// The window size last reported to the BEAM, in CSS pixels.
+    pub last_size: Cell<(u32, u32)>,
     /// The command-drain interval for this session's window. Re-created
     /// on every document rebuild: the reactive hole cleans the scope a
     /// run's timer lives in, so each run arms its own (the chain is
@@ -102,11 +107,13 @@ impl Host {
             live_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             window: RefCell::new(None),
             fullscreen_done: Cell::new(false),
-            menu_open: Cell::new(None),
+            popup: Cell::new(None),
+            kinds: RefCell::new(HashMap::new()),
             popup_tick: RefCell::new(None),
             rects: RefCell::new(HashMap::new()),
             popup_rect: Cell::new(None),
             popup_debugged: Cell::new(false),
+            last_size: Cell::new((0, 0)),
             drain_timer: RefCell::new(None),
             control: RefCell::new(None),
         })
@@ -173,7 +180,7 @@ impl Host {
         )
     }
 
-    /// Tells the popup that `menu_open` moved.
+    /// Tells the popup that `popup` moved.
     fn bump_popup(&self) {
         if let Some(tick) = self.popup_tick.borrow().as_ref() {
             tick.update(|version| *version += 1);
@@ -189,21 +196,21 @@ impl Host {
             .unwrap_or(0)
     }
 
-    /// Opens or closes `menu`, replacing whatever was showing.
-    fn toggle_menu(&self, menu: u64) {
-        let showing = self.menu_open.get();
-        self.menu_open.set(if showing == Some(menu) {
+    /// Opens or closes the popup of `control`, replacing whatever was showing.
+    fn toggle_popup(&self, control: u64) {
+        let showing = self.popup.get();
+        self.popup.set(if showing == Some(control) {
             None
         } else {
-            Some(menu)
+            Some(control)
         });
         self.bump_popup();
     }
 
     /// Closes the popup, if one is showing.
-    fn close_menu(&self) {
-        if self.menu_open.get().is_some() {
-            self.menu_open.set(None);
+    fn close_popup(&self) {
+        if self.popup.get().is_some() {
+            self.popup.set(None);
             self.bump_popup();
         }
     }
@@ -309,15 +316,21 @@ pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
     host.rects.borrow_mut().clear();
     for desc in &doc.controls {
         collect_rects(desc, 0.0, 0.0, &mut host.rects.borrow_mut());
+        collect_kinds(desc, &mut host.kinds.borrow_mut());
     }
     if !host.popup_debugged.get() {
         host.popup_debugged.set(true);
         // A validation run cannot click yet on every desktop; this opens the
         // first menu so its popup can be screenshotted at startup.
         if std::env::var_os("CAMPY_UI_OPEN_MENU").is_some()
-            && let Some(menu) = first_menu(&doc.controls)
+            && let Some(menu) = first_of_kind(&doc.controls, &["menu"])
         {
-            host.menu_open.set(Some(menu));
+            host.popup.set(Some(menu));
+        }
+        if std::env::var_os("CAMPY_UI_OPEN_CHOICE").is_some()
+            && let Some(choice) = first_of_kind(&doc.controls, &["combo", "menu-list"])
+        {
+            host.popup.set(Some(choice));
         }
     }
     let children: Vec<AnyView> = doc
@@ -354,11 +367,11 @@ pub fn build_document(doc: &UiDocument, host: &Rc<Host>) -> AnyView {
                 px >= x && px <= x + w && py >= y && py <= y + h
             });
             if !inside {
-                close_host.close_menu();
+                close_host.close_popup();
             }
         })
         .children(children)
-        .child(move || menu_popup(&popup_host));
+        .child(move || popup_card(&popup_host));
     AnyView::new(root)
 }
 
@@ -401,35 +414,50 @@ fn split_shortcut(label: &str) -> (String, String) {
 }
 
 /// The id of the first `menu` in the document (the validation knob's target).
-fn first_menu(controls: &[ControlDesc]) -> Option<u64> {
+/// Records each control's kind, so the popup knows whether its model is a menu
+/// (separators and shortcuts) or a choice list (a check on the current value).
+fn collect_kinds(desc: &ControlDesc, into: &mut HashMap<u64, String>) {
+    into.insert(desc.id, desc.kind.clone());
+    for child in &desc.children {
+        collect_kinds(child, into);
+    }
+}
+
+fn first_of_kind(controls: &[ControlDesc], kinds: &[&str]) -> Option<u64> {
     for desc in controls {
-        if desc.kind == "menu" {
+        if kinds.iter().any(|kind| *kind == desc.kind) {
             return Some(desc.id);
         }
-        if let Some(found) = first_menu(&desc.children) {
+        if let Some(found) = first_of_kind(&desc.children, kinds) {
             return Some(found);
         }
     }
     None
 }
 
-/// The open menu's popup, or nothing. One `control()` row per model item so a
-/// click emits the label the loop already routes by.
-fn menu_popup(host: &Rc<Host>) -> AnyView {
+/// The open popup, or nothing: a menu's items or a choice list's options, one
+/// `control()` row each, drawn at the document root above everything.
+fn popup_card(host: &Rc<Host>) -> AnyView {
     let _version = host.popup_version();
-    let Some(menu) = host.menu_open.get() else {
+    let Some(control) = host.popup.get() else {
         host.popup_rect.set(None);
         return AnyView::new(r#box());
     };
-    let Some(&(x, y, _, h)) = host.rects.borrow().get(&menu) else {
+    let Some(&(x, y, trigger_w, h)) = host.rects.borrow().get(&control) else {
         return AnyView::new(r#box());
     };
-    let items = host
-        .controls
+    let is_menu = host
+        .kinds
         .borrow()
-        .get(&menu)
-        .map(|signals| signals.model.get())
-        .unwrap_or_default();
+        .get(&control)
+        .is_some_and(|kind| kind == "menu");
+    let (items, current) = {
+        let controls = host.controls.borrow();
+        let Some(signals) = controls.get(&control) else {
+            return AnyView::new(r#box());
+        };
+        (signals.model.get(), signals.text.get())
+    };
     // Separators are a rule, not a row: counting them at row height leaves a
     // band of empty panel under the last item.
     let height = items
@@ -437,7 +465,7 @@ fn menu_popup(host: &Rc<Host>) -> AnyView {
         .enumerate()
         .map(|(index, _)| {
             let label = item_text(&items, index);
-            if is_separator(&label) {
+            if is_menu && is_separator(&label) {
                 MENU_SEPARATOR
             } else {
                 MENU_ROW
@@ -445,38 +473,79 @@ fn menu_popup(host: &Rc<Host>) -> AnyView {
         })
         .sum::<f64>()
         + MENU_PAD * 2.0;
-    let width = MENU_WIDTH;
-    host.popup_rect.set(Some((x, y + h, width, height)));
+    // A menu is wide enough for its shortcuts; a choice list matches the field
+    // it drops from, so the two edges line up.
+    let width = if is_menu {
+        MENU_WIDTH
+    } else {
+        trigger_w.max(140.0)
+    };
+    // Below the trigger, unless that would run off the bottom of the window.
+    let window_h = f64::from(host.last_size.get().1);
+    let below = y + h + 2.0;
+    let top = if window_h > 0.0 && below + height > window_h {
+        (y - height - 2.0).max(0.0)
+    } else {
+        below
+    };
+    host.popup_rect.set(Some((x, top, width, height)));
     let mut card = r#box()
-        .class("campy-menu-popup")
+        .class(if is_menu {
+            "campy-menu-popup"
+        } else {
+            "campy-choice-popup"
+        })
         .style_property("left", Some(px(x)))
-        .style_property("top", Some(px(y + h + 2.0)))
+        .style_property("top", Some(px(top)))
         .style_property("width", Some(px(width)))
         .style_property("height", Some(px(height)));
     for (index, _) in items.iter().enumerate() {
         let label = item_text(&items, index);
-        if is_separator(&label) {
+        if is_menu && is_separator(&label) {
             card = card.child(r#box().class("campy-menu-separator"));
             continue;
         }
         let row_host = host.clone();
         let click_label = label.clone();
-        let (name, shortcut) = split_shortcut(&label);
-        card = card.child(
-            zgui::elements::control()
-                .class("campy-menu-item")
-                .tabindex(Focus::Sequential)
-                .on(events::CLICK, move |_| {
-                    row_host.close_menu();
-                    row_host.emit(menu, "selected", click_label.clone());
-                })
-                .child(
-                    r#box()
-                        .class("campy-menu-line")
-                        .child(text().child(name))
-                        .child(text().class("campy-menu-shortcut").child(shortcut)),
-                ),
-        );
+        let (name, shortcut) = if is_menu {
+            split_shortcut(&label)
+        } else {
+            (label.clone(), String::new())
+        };
+        let chosen = !is_menu && label == current;
+        let mut row = zgui::elements::control()
+            .class("campy-menu-item")
+            .class(if is_menu {
+                "campy-menu-entry"
+            } else {
+                "campy-choice-entry"
+            })
+            .class_toggle(ClassName::new("campy-choice-on"), move || chosen)
+            .tabindex(Focus::Sequential)
+            .on(events::CLICK, move |_| {
+                row_host.close_popup();
+                row_host.emit(control, "selected", click_label.clone());
+            });
+        row = if is_menu {
+            row.child(
+                r#box()
+                    .class("campy-menu-line")
+                    .child(text().child(name))
+                    .child(text().class("campy-menu-shortcut").child(shortcut)),
+            )
+        } else {
+            row.child(
+                r#box()
+                    .class("campy-choice-row-line")
+                    .child(text().class("campy-choice-tick").child(if chosen {
+                        "✓"
+                    } else {
+                        " "
+                    }))
+                    .child(text().child(name)),
+            )
+        };
+        card = card.child(row);
     }
     AnyView::new(card)
 }
@@ -533,6 +602,21 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>) -> AnyView {
             }
         })
         .class_toggle(ClassName::new("campy-disabled"), move || !enabled.get());
+
+    // A control that carries a hint reports the pointer arriving and leaving, so
+    // the loop can put the hint on the status line (the hover half of the old
+    // shell's tooltips).
+    if let Some(hint) = prop_string(desc, "hint") {
+        let enter_host = host.clone();
+        let leave_host = host.clone();
+        wrapper = wrapper
+            .on(events::POINTER_ENTER, move |_| {
+                enter_host.emit_raw("hover", hint.clone())
+            })
+            .on(events::POINTER_LEAVE, move |_| {
+                leave_host.emit_raw("hover", "")
+            });
+    }
 
     match desc.kind.as_str() {
         "panel" | "group" | "surface" => {
@@ -658,10 +742,10 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
                     .class("campy-menu-trigger")
                     .class_toggle(ClassName::new("campy-menu-on"), move || {
                         let _version = is_open.popup_version();
-                        is_open.menu_open.get() == Some(id)
+                        is_open.popup.get() == Some(id)
                     })
                     .tabindex(Focus::Sequential)
-                    .on(events::CLICK, move |_| open.toggle_menu(id))
+                    .on(events::CLICK, move |_| open.toggle_popup(id))
                     .child(move || text.get()),
             )
         }
@@ -697,39 +781,28 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals) -> AnyV
         }
 
         "combo" | "menu-list" => {
-            // A field that cycles its choices on click. zgui-ui's `Select` is the
-            // richer control, but its popup is one of the live-window input gaps
-            // this migration tracks (ADR 0003), and binding it two-way makes it
-            // write its value back on mount, which feeds the loop a new
-            // generation every tick. A base control is the path verified end to
-            // end through real surface input, and a property row that cannot be
-            // changed is worse than one that takes a second click.
-            let cycle_model = signals.model.clone();
-            let cycle_text = text.clone();
-            let cycle_host = host.clone();
-            let shown = move || {
-                let items = cycle_model.get();
-                let suffix = if items.is_empty() { "" } else { "  ▾" };
-                format!("{}{suffix}", cycle_text.get())
-            };
+            // A field that drops its choices down. zgui-ui's `Select` writes its
+            // value back on mount, which fed the loop a new generation every
+            // tick, so the popup is the same base-element one the menu bar uses:
+            // a row emits `selected` with the option text and a press outside
+            // closes it.
+            let open = host.clone();
+            let value = text.clone();
             AnyView::new(
                 zgui::elements::control()
                     .class("campy-widget-button")
-                    .class("campy-cycle")
+                    .class("campy-choice")
                     .tabindex(Focus::Sequential)
-                    .on(events::CLICK, move |_| {
-                        let items = cycle_model.get();
-                        if items.is_empty() {
-                            return;
-                        }
-                        let current = cycle_text.get();
-                        let index = (0..items.len())
-                            .find(|index| item_text(&items, *index) == current)
-                            .unwrap_or(0);
-                        let next = item_text(&items, (index + 1) % items.len());
-                        cycle_host.emit(id, "selected", next);
-                    })
-                    .child(shown),
+                    .on(events::CLICK, move |_| open.toggle_popup(id))
+                    .child(
+                        r#box()
+                            .class("campy-choice-line")
+                            .child(crate::controls::text_element(move || value.get()))
+                            .child(
+                                crate::controls::text_element(|| "▾".to_owned())
+                                    .class("campy-choice-mark"),
+                            ),
+                    ),
             )
         }
 

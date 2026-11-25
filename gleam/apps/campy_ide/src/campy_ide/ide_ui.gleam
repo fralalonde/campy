@@ -94,7 +94,9 @@ pub fn snapshot(model: State) -> Snapshot {
     None -> ""
   }
   let #(window_x, window_y) = state.window_position(model)
+  let #(window_w, window_h) = model.window_size
   shell.ShellView(
+    layout: shell.layout(window_w, window_h),
     title: model.project.title,
     theme: case is_dark_scheme(model.scheme) {
       True -> "dark"
@@ -837,8 +839,8 @@ pub fn load_commands(generation: Int, model: State) -> List(bridge.Command) {
     bridge.LoadUi(
       generation,
       shell.window_title(view.title),
-      shell.window_width,
-      shell.window_height,
+      view.layout.width,
+      view.layout.height,
       view.theme,
       shell.desc(view),
     ),
@@ -866,8 +868,8 @@ pub fn commands(generation: Int, ops: List(UiOp)) -> List(bridge.Command) {
         bridge.LoadUi(
           generation,
           shell.window_title(view.title),
-          shell.window_width,
-          shell.window_height,
+          view.layout.width,
+          view.layout.height,
           view.theme,
           shell.desc(view),
         )

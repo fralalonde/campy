@@ -3,6 +3,7 @@ import campy_ccl
 import campy_form.{type Control, type Form, type Kind}
 import campy_form/project.{type Module, type Project}
 import campy_form/workspace.{type Workspace}
+import campy_ide/shell
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -174,6 +175,12 @@ pub type State {
     gesture: Gesture,
     last_pointer: #(Int, Int),
     status: String,
+    /// The window's CSS size as the renderer last reported it: the shell
+    /// layout stretches to it and pointer coordinates are mapped with it.
+    window_size: #(Int, Int),
+    /// The status line's text before a hover hint replaced it, so leaving the
+    /// control restores the message rather than clearing it.
+    hover_status: Option(String),
   )
 }
 
@@ -274,6 +281,8 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     gesture: Idle,
     last_pointer: #(0, 0),
     status: "Ready",
+    window_size: #(shell.window_width, shell.window_height),
+    hover_status: None,
   )
 }
 
@@ -1681,6 +1690,36 @@ pub fn set_font_size(state: State, size: Int) -> State {
 
 pub fn set_scheme(state: State, scheme: Scheme) -> State {
   State(..state, scheme: scheme)
+}
+
+/// The window's size, as the renderer reported it. Ignored when unchanged so a
+/// steady window costs nothing.
+pub fn set_window_size(state: State, width: Int, height: Int) -> State {
+  let size = #(int.max(width, 640), int.max(height, 480))
+  case state.window_size == size {
+    True -> state
+    False -> State(..state, window_size: size)
+  }
+}
+
+/// A hover hint (the renderer's `hover` event): the hint takes the status line
+/// while the pointer is on the control, and leaving puts the old message back.
+/// Ignored when the settings dialog's "Show UI hints" is off.
+pub fn hover(state: State, hint: String) -> State {
+  case hint, state.hints {
+    "", _ ->
+      case state.hover_status {
+        Some(previous) -> State(..state, status: previous, hover_status: None)
+        None -> state
+      }
+    text, True ->
+      State(
+        ..state,
+        status: text,
+        hover_status: Some(option.unwrap(state.hover_status, state.status)),
+      )
+    _, False -> state
+  }
 }
 
 pub fn set_settings_open(state: State, open: Bool) -> State {

@@ -107,7 +107,20 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-tab-on .campy-widget-button { color: var(--campy-text);
                                            background: var(--campy-hover);
                                            border-color: var(--campy-border); }",
-    ".campy-cycle { justify-content: space-between; font-size: 12px; }",
+    ".campy-choice { padding: 0 8px; }",
+    ".campy-choice-line { display: flex; align-items: center;
+                          justify-content: space-between; width: 100%; }",
+    ".campy-choice-mark { color: var(--campy-muted); font-size: 11px; margin-left: 6px; }",
+    ".campy-choice-popup { position: absolute; background: var(--campy-panel);
+                           border: 1px solid var(--campy-border); border-radius: 8px;
+                           padding: 4px; }",
+    ".campy-choice-entry { width: 100%; height: 26px; display: flex; align-items: center;
+                           border-radius: 5px; color: var(--campy-text); font-size: 13px; }",
+    ".campy-choice-row-line { display: flex; justify-content: flex-start;
+                              align-items: center; width: 100%; }",
+    ".campy-choice-entry:hover { background: var(--campy-hover); }",
+    ".campy-choice-on { background: var(--campy-accent-soft); }",
+    ".campy-choice-tick { width: 16px; color: var(--campy-accent); }",
     ".campy-dialog-primary .campy-widget-button { background: var(--campy-accent);
                                                   border-color: transparent;
                                                   color: #ffffff; }",

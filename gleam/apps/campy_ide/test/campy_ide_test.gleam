@@ -1845,3 +1845,19 @@ fn no_failure(attempts: Int) -> Nil {
       }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Hover hints
+// ---------------------------------------------------------------------------
+
+pub fn hover_hint_takes_and_restores_the_status_test() {
+  let model = demo_state()
+  let hovering = state.hover(model, "Pet the cat — click")
+  hovering.status |> should.equal("Pet the cat — click")
+  // Leaving puts the message that was there back rather than clearing it.
+  let left = state.hover(hovering, "")
+  left.status |> should.equal(model.status)
+  // The settings dialog's "Show UI hints" gates it.
+  let quiet = state.hover(state.set_hints(model, False), "ignored")
+  quiet.status |> should.equal(model.status)
+}

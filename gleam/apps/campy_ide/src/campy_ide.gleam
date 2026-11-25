@@ -601,6 +601,19 @@ fn loop_ide_event(
         False -> keep(model, submitted, next_accepted, last)
       }
     }
+    // A hover hint from a control with a `hint` prop: status line only.
+    "hover" -> {
+      let next = state.hover(model, payload)
+      advance(native, next, submitted, accepted, last)
+    }
+    // The window's CSS size: the shell layout stretches to it, so this is a
+    // model change like any other and the diff moves the panes with
+    // `SetGeometry` (no reload).
+    "size" -> {
+      let #(width, height) = window_size(payload)
+      let next = state.set_window_size(model, width, height)
+      advance(native, next, submitted, accepted, last)
+    }
     "lsp:completions" -> {
       let next = state.completions_arrived(model, payload)
       advance(native, next, submitted, accepted, last)
@@ -869,12 +882,25 @@ fn form_point(model: State, payload: String) -> Option(#(Int, Int)) {
   case string.split(payload, ";") {
     [x_text, y_text, ..] -> {
       let #(window_x, window_y) = state.window_position(model)
+      let #(width, height) = model.window_size
+      let layout = shell.layout(width, height)
       Some(#(
-        pixel(x_text) - shell.canvas_x - window_x,
-        pixel(y_text) - shell.canvas_y - shell.form_title_height - window_y,
+        pixel(x_text) - layout.canvas_x - window_x,
+        pixel(y_text) - layout.canvas_y - shell.form_title_height - window_y,
       ))
     }
     _ -> None
+  }
+}
+
+/// Parses the renderer's `width;height` size report.
+fn window_size(payload: String) -> #(Int, Int) {
+  case string.split(payload, ";") {
+    [width, height] -> #(
+      result.unwrap(int.parse(string.trim(width)), 0),
+      result.unwrap(int.parse(string.trim(height)), 0),
+    )
+    _ -> #(0, 0)
   }
 }
 
@@ -1541,14 +1567,16 @@ fn context_menu_at_selection(model: State) -> State {
     Some(control), Some(form) -> {
       let #(x, y, _w, h) = campy_form.bounds(form, control)
       let #(window_x, window_y) = state.window_position(model)
+      let #(width, height) = model.window_size
+      let layout = shell.layout(width, height)
       state.open_context_menu(
         model,
         control.id
           <> ";"
-          <> int.to_string(shell.canvas_x + window_x + x)
+          <> int.to_string(layout.canvas_x + window_x + x)
           <> ";"
           <> int.to_string(
-          shell.canvas_y + shell.form_title_height + window_y + y + h,
+          layout.canvas_y + shell.form_title_height + window_y + y + h,
         ),
       )
     }
