@@ -460,6 +460,9 @@ pub type ShellView {
     selection_boxes: List(#(Int, Int, Int, Int)),
     /// Active marquee/placement rectangle, normalized, canvas-local.
     canvas_marquee: #(Bool, Int, Int, Int, Int),
+    /// The container a drag would drop into, canvas-local: the drag answers
+    /// "which parent?" with an outline while the pointer is still down.
+    canvas_drop: #(Bool, Int, Int, Int, Int),
     props: List(PropItem),
     events: List(PropItem),
     completions: List(CompletionItem),
@@ -529,6 +532,7 @@ pub fn empty_view() -> ShellView {
     canvas_selection: #(0, 0, 0, 0),
     selection_boxes: [],
     canvas_marquee: #(False, 0, 0, 0, 0),
+    canvas_drop: #(False, 0, 0, 0, 0),
     props: [],
     events: [],
     completions: [],
@@ -669,7 +673,7 @@ pub fn prop_keys() -> List(String) {
   list.unique(list.append(
     [
       "name", "text", "picture", "transparency", "x", "y", "w", "h", "color",
-      "align", "layout", "border", "enabled", "visible",
+      "align", "layout", "parent", "border", "enabled", "visible",
     ],
     list.append(catalog_property_keys(), ["title", "width", "height"]),
   ))
@@ -1106,6 +1110,7 @@ fn canvas(view: ShellView) -> ControlDesc {
   }
   let #(sx, sy, sw, sh) = view.canvas_selection
   let #(marquee, mx, my, mw, mh) = view.canvas_marquee
+  let #(dropping, dx, dy, dw, dh) = view.canvas_drop
   node(
     "canvas",
     "surface",
@@ -1142,6 +1147,9 @@ fn canvas(view: ShellView) -> ControlDesc {
         |> with_class("campy-canvas-form")
         |> with_props(form_props(view.canvas))
         |> with_children(form_children),
+      node("drop-target", "panel", "", dx, dy, dw, dh)
+        |> with_class("campy-drop")
+        |> shown(dropping),
       node("selection-rect", "panel", "", sx, sy, sw, sh)
         |> with_class("campy-selected")
         |> shown(view.has_selection),

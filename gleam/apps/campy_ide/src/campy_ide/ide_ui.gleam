@@ -161,6 +161,7 @@ pub fn snapshot(model: State) -> Snapshot {
     canvas_selection: canvas_selection(model),
     selection_boxes: selection_boxes(model),
     canvas_marquee: canvas_marquee(model),
+    canvas_drop: canvas_drop(model),
     props: prop_items(model),
     events: event_items(model),
     completions: completions(model),
@@ -358,6 +359,14 @@ fn union_boxes(boxes: List(#(Int, Int, Int, Int))) -> #(Int, Int, Int, Int) {
   }
 }
 
+// Where a drag would drop, in canvas coordinates (form-local + window offset +
+// the module window's title bar).
+fn canvas_drop(model: State) -> #(Bool, Int, Int, Int, Int) {
+  let #(active, x, y, w, h) = state.drop_target_rect(model)
+  let #(window_x, window_y) = state.window_position(model)
+  #(active, window_x + x, window_y + shell.form_title_height + y, w, h)
+}
+
 // The marquee/placement rectangle in canvas coordinates (form-local + window
 // offset + the module window's title bar).
 fn canvas_marquee(model: State) -> #(Bool, Int, Int, Int, Int) {
@@ -391,7 +400,9 @@ pub fn prop_items(model: State) -> List(PropItem) {
   case model.selected_project, model.selection, active_form(model) {
     True, _, _ -> []
     False, [_, ..], Some(form) ->
-      merge_rows(list.map(model.selection, fn(id) { control_rows(form, id) }))
+      merge_rows(
+        list.map(model.selection, fn(id) { control_rows(model, form, id) }),
+      )
     False, _, _ -> window_rows(model)
   }
 }
@@ -446,7 +457,11 @@ fn uniform_row(row: PropItem, others: List(PropItem)) -> PropItem {
   }
 }
 
-fn control_rows(form: campy_form.Form, id: String) -> List(PropItem) {
+fn control_rows(
+  model: State,
+  form: campy_form.Form,
+  id: String,
+) -> List(PropItem) {
   case campy_form.find_control(form, id) {
     None -> []
     Some(control) -> {
@@ -455,6 +470,7 @@ fn control_rows(form: campy_form.Form, id: String) -> List(PropItem) {
         number_row("y", int.to_string(control.y)),
         number_row("w", int.to_string(control.width)),
         number_row("h", int.to_string(control.height)),
+        parent_row(model, form, control),
       ]
       let picture = case control.kind {
         campy_form.Picture -> [
@@ -584,6 +600,53 @@ fn layout_index_of(layout: campy_form.Layout) -> Int {
     campy_form.Free -> 0
     campy_form.Column -> 1
     campy_form.Row -> 2
+  }
+}
+
+/// The container a control lives in, as a chooser: reparenting without a drag,
+/// and the parent hierarchy made visible in the inspector.
+fn parent_row(
+  model: State,
+  form: campy_form.Form,
+  control: campy_form.Control,
+) -> PropItem {
+  let choices = state.parent_choices(model, control.id)
+  let labels = list.map(choices, fn(choice) { choice.1 })
+  let current = campy_form.parent_of(form, control.id)
+  let value = case current {
+    "" -> "(window)"
+    id ->
+      case campy_form.find_control(form, id) {
+        Some(parent) -> parent.name
+        None -> ""
+      }
+  }
+  shell.PropItem(
+    "parent",
+    "Parent",
+    "choice",
+    value,
+    False,
+    index_in(labels, value),
+    labels,
+    "The component this one is inside",
+  )
+}
+
+fn index_in(items: List(String), value: String) -> Int {
+  items
+  |> list.index_map(fn(item: String, index: Int) { #(item, index) })
+  |> list.find_map(fn(pair) {
+    case pair.0 == value {
+      True -> Ok(pair.1)
+      False -> Error(Nil)
+    }
+  })
+  |> fn(found) {
+    case found {
+      Ok(index) -> index
+      Error(_) -> 0
+    }
   }
 }
 

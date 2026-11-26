@@ -103,6 +103,13 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
 - **The marquee shows its contents while it grows.** A transparent band (no
   fill) plus live outlines and handles for the components it would take; the
   real selection is unchanged until release (`State.preview_selection`).
+- **Parents are a first-class notion.** A drag shows where it will land: a
+  dashed outline around the container under the pointer (the window when it is
+  over none). The hierarchy changes on release — the container under the
+  pointer adopts the selection, or the window does — as one undo step, not
+  mid-drag. The inspector's **Parent** row names the current parent and
+  reparents without a drag, offering the window and every container outside
+  the component's own subtree.
 - **Moving the module window** takes its delta in canvas coordinates. Form
   coordinates move with the window being dragged, so a delta taken in them
   chases its own output — the jitter the drag had.

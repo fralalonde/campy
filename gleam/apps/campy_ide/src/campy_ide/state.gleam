@@ -891,6 +891,7 @@ fn commit_control_field(
           }
         None -> state
       }
+    "parent" -> set_selected_parent(state, value)
     "transparency" ->
       case campy_form.find_control(form, id) {
         Some(control) ->
@@ -1102,6 +1103,13 @@ pub fn begin_gesture(state: State) -> State {
 /// Ends a gesture and records it as one undo step: what the document was when
 /// the button went down, and everything the gesture did to it, is one entry.
 pub fn end_gesture(state: State) -> State {
+  // A drag ends by dropping: the container under the pointer adopts it, or the
+  // window when it is over none. Only a drag carries a target (`drag_control`),
+  // so a resize never reparents.
+  let state = case state.drag_control {
+    Some(_) -> reparent_after_drop(state)
+    None -> state
+  }
   let state = case state.gesture_base {
     Some(base) ->
       case base == history(state) {
@@ -1160,6 +1168,73 @@ fn move_selected_raw(state: State, dx: Int, dy: Int) -> State {
   }
 }
 
+/// The container the current drag would drop into and its rectangle, in form
+/// coordinates. `#(active, x, y, w, h)`; an empty container id is the window.
+pub fn drop_target_rect(state: State) -> #(Bool, Int, Int, Int, Int) {
+  case state.drop_active, active_form(state) {
+    True, Some(form) ->
+      case state.drop_candidate {
+        "" -> #(True, 0, 0, form.width, form.height)
+        id ->
+          case campy_form.find_control(form, id) {
+            Some(container) -> {
+              let #(x, y, w, h) = campy_form.bounds(form, container)
+              #(True, x, y, w, h)
+            }
+            None -> #(False, 0, 0, 0, 0)
+          }
+      }
+    _, _ -> #(False, 0, 0, 0, 0)
+  }
+}
+
+/// The containers a control could be moved into: the window, then every
+/// container that is not the control itself or inside it. `#(id, label)`.
+pub fn parent_choices(state: State, id: String) -> List(#(String, String)) {
+  case active_form(state) {
+    None -> [#("", "(window)")]
+    Some(form) ->
+      list.append(
+        [#("", "(window)")],
+        form.controls
+          |> list.filter(fn(control) {
+            control.kind != campy_form.Label
+            && campy_form.accepts_children(control.kind)
+            && control.id != id
+            && !list.contains(campy_form.descendant_ids(form, id), control.id)
+          })
+          |> list.map(fn(control) { #(control.id, control.name) }),
+      )
+  }
+}
+
+/// Reparents the selection from the inspector's Parent row. The label is the
+/// container's name ("(window)" for the root).
+pub fn set_selected_parent(state: State, label: String) -> State {
+  case state.selected, active_form(state) {
+    Some(id), Some(form) -> {
+      let parent = case label {
+        "" | "(window)" -> ""
+        name ->
+          case list.find(form.controls, fn(control) { control.name == name }) {
+            Ok(control) -> control.id
+            Error(_) -> ""
+          }
+      }
+      let next = campy_form.set_parent(form, id, parent)
+      let next = update_active_form(state, fn(_) { next })
+      commit(
+        state,
+        State(..next, status: case parent {
+          "" -> "Moved " <> id <> " to the window"
+          _ -> "Moved " <> id <> " into " <> label
+        }),
+      )
+    }
+    _, _ -> state
+  }
+}
+
 /// The smallest rectangle around `ids`, in form coordinates. It is both the
 /// block's allowed travel and its grab area.
 pub fn union_bounds(
@@ -1200,11 +1275,13 @@ pub fn move_gesture_x(state: State, dx: Int) -> State {
 }
 
 pub fn move_gesture_y(state: State, dy: Int) -> State {
-  reparent_after_drop(gesture_change(state, move_selected_raw(state, 0, dy)))
+  gesture_change(state, move_selected_raw(state, 0, dy))
 }
 
 // Dropping a control over a panel (or group box) adopts it. Dropping outside
-// every container moves it back to the window root.
+// every container moves it back to the window root. This happens on release,
+// not while the pointer moves: mid-drag reparenting changes the document under
+// the gesture and makes the drop impossible to see coming.
 fn reparent_after_drop(state: State) -> State {
   case active_form(state) {
     None -> state
@@ -3065,6 +3142,9 @@ pub fn pointer_down(state: State, x: Int, y: Int) -> State {
       context_open: False,
       context_align: False,
       nav_context_open: False,
+      drop_active: False,
+      drop_candidate: "",
+      drag_control: None,
     )
   case state.pending_kind {
     Some(_) -> State(..state, gesture: Placing(#(x, y)), rect: #(x, y, 0, 0))

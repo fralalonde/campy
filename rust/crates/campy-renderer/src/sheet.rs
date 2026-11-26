@@ -297,6 +297,10 @@ pub const CAMPY_SHEET: &str = css!(
                   border: 1px solid var(--campy-accent); border-radius: 2px; }",
     ".campy-grip-window { background: var(--campy-raised);
                           border-color: var(--campy-border); }",
+    // Where a drag would drop: the prospective parent, outlined while the
+    // pointer is still down.
+    ".campy-drop { border: 2px dashed var(--campy-accent); background: transparent;
+                   pointer-events: none; }",
     // The selection frame is a rubber band, not a veil: the components it
     // would take are outlined behind it, and must stay readable through it.
     ".campy-marquee { border: 1px solid var(--campy-accent);

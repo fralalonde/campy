@@ -625,6 +625,98 @@ pub fn a_resize_is_one_undo_step_test() {
   back.width |> should.equal(140)
 }
 
+// A project whose form has a second container, so a drag can carry a
+// component from one parent into another.
+fn two_panel_state() -> state.State {
+  let project = project.campy()
+  let assert [module, ..] = project.modules
+  let #(form, panel) = campy_form.add_control(module.form, campy_form.Panel, "")
+  let form =
+    campy_form.update_control(
+      form,
+      campy_form.Control(..panel, x: 640, y: 24, width: 220, height: 300),
+    )
+  state.initial(project.update_module(
+    project,
+    project.Module(..module, form: form),
+  ))
+}
+
+fn parent_of_control(model: state.State, id: String) -> String {
+  let assert Some(form) = state.active_form(model)
+  campy_form.parent_of(form, id)
+}
+
+pub fn dragging_a_component_into_another_panel_reparents_it_test() {
+  let model = two_panel_state()
+  // panel-1 spans 24..584; the added panel starts at 640.
+  let assert Some(form) = state.active_form(model)
+  let assert Ok(panel) =
+    list.find(form.controls, fn(control) {
+      control.kind == campy_form.Panel && control.id != "panel-1"
+    })
+  parent_of_control(model, "pet-button") |> should.equal("panel-1")
+  let dragging =
+    model
+    |> state.select("pet-button")
+    |> state.pointer_down(60, 240)
+    |> state.pointer_move(90, 250)
+    |> state.pointer_move(panel.x + 40, panel.y + 40)
+  // The hierarchy does not change under the pointer, but the drag says where
+  // it would land: the outline the shell draws comes from this.
+  parent_of_control(dragging, "pet-button") |> should.equal("panel-1")
+  let #(active, x, y, _, _) = state.drop_target_rect(dragging)
+  active |> should.be_true
+  #(x, y) |> should.equal(#(panel.x, panel.y))
+  let moved = state.pointer_up(dragging, panel.x + 40, panel.y + 40, False)
+  parent_of_control(moved, "pet-button") |> should.equal(panel.id)
+  // The drag is over: no dangling drop feedback, and the drop kept the
+  // component selected.
+  moved.drop_active |> should.be_false
+  moved.drop_candidate |> should.equal("")
+  moved.selected |> should.equal(Some("pet-button"))
+}
+
+pub fn dragging_a_component_out_of_every_panel_reparents_it_to_the_window_test() {
+  let model = demo_state() |> state.select("pet-button")
+  // The form's empty bottom-right corner is outside panel-1.
+  let moved =
+    model
+    |> state.pointer_down(60, 240)
+    |> state.pointer_move(120, 300)
+    |> state.pointer_move(620, 410)
+    |> state.pointer_up(620, 410, False)
+  parent_of_control(moved, "pet-button") |> should.equal("")
+  moved.drop_active |> should.be_false
+  // A click after an interrupted drag must not leave the outline behind.
+  let clicked = state.pointer_down(moved, 620, 410)
+  clicked.drop_active |> should.be_false
+  clicked.drop_candidate |> should.equal("")
+}
+
+pub fn the_parent_row_reparents_without_a_drag_test() {
+  let model = two_panel_state() |> state.select("pet-button")
+  // The inspector offers the window and every container outside the control.
+  let rows = ide_ui.prop_items(model)
+  let assert Ok(row) = list.find(rows, fn(row) { row.key == "parent" })
+  row.value |> should.equal("panel1")
+  row.options |> should.equal(["(window)", "panel1", "panel2"])
+  // Choosing the window moves it out of the panel; choosing another container
+  // moves it in without a drag.
+  let outside = state.commit_field(model, "parent", "(window)")
+  parent_of_control(outside, "pet-button") |> should.equal("")
+  let into_second = state.commit_field(outside, "parent", "panel2")
+  parent_of_control(into_second, "pet-button") |> should.equal("panel-2")
+  let back = state.commit_field(into_second, "parent", "panel1")
+  parent_of_control(back, "pet-button") |> should.equal("panel-1")
+  // A control cannot be moved into itself, and a panel is not offered as a
+  // parent of anything it contains.
+  let on_panel = state.select(model, "panel-1")
+  ide_ui.prop_items(on_panel)
+  |> list.find(fn(row) { row.key == "parent" })
+  |> should.be_ok
+}
+
 pub fn a_block_stops_when_one_member_reaches_the_edge_test() {
   let model =
     demo_state()
@@ -969,22 +1061,25 @@ pub fn corner_resize_is_one_undo_step_test() {
 
 pub fn dragging_onto_a_panel_adopts_it_test() {
   let added = state.add(state.select(demo_state(), ""), campy_form.Button)
+  let assert Some(form) = state.active_form(added)
+  let assert Some(control) = state.selected_control(added)
+  // Added at the window root; dragging it over the panel drops it in.
+  campy_form.parent_of(form, control.id) |> should.equal("")
+  let #(x, y, w, h) = campy_form.bounds(form, control)
   let moved =
     added
-    |> state.begin_gesture
-    |> state.move_gesture_x(50)
-    |> state.move_gesture_y(50)
-    |> state.end_gesture
+    |> state.pointer_down(x + w / 2, y + h / 2)
+    |> state.pointer_move(x + w / 2 + 40, y + h / 2 + 40)
+    |> state.pointer_up(x + w / 2 + 40, y + h / 2 + 40, False)
   let assert Some(form) = state.active_form(moved)
-  let assert Some(control) = state.selected_control(moved)
   campy_form.parent_of(form, control.id) |> should.equal("panel-1")
 
+  // Dropping it on the empty corner takes it back out to the window.
   let outside =
     moved
-    |> state.begin_gesture
-    |> state.move_gesture_x(600)
-    |> state.move_gesture_y(0)
-    |> state.end_gesture
+    |> state.pointer_down(x + w / 2 + 40, y + h / 2 + 40)
+    |> state.pointer_move(620, 410)
+    |> state.pointer_up(620, 410, False)
   let assert Some(form) = state.active_form(outside)
   campy_form.parent_of(form, control.id) |> should.equal("")
 }
