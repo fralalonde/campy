@@ -22,12 +22,15 @@
 //// | `run`, `stop` | button | Run/Stop (`enabled` follows the preview) |
 //// | `menu-rule` | panel | 1px rule under the menu bar |
 //// | `nav` | panel | navigator column |
-//// | `nav-projects-title`, `nav-modules-title` | label | section titles |
+//// | `nav-projects-title`, `nav-modules-title`, `files-title` | label | section titles |
 //// | `project-add`, `project-delete` | button | project dialog / remove project |
-//// | `projects-nav` | list | project rows (`SetModel` of `{text,id,active}`); emits `selected` with the title |
-//// | `nav-rule` | panel | 1px rule between the two navigator lists |
+//// | `projects-nav` | list | project rows (`SetModel` of `{text,id,active}`); emits `selected` with the id |
+//// | `nav-rule` | panel | 1px rule between the navigator sections |
 //// | `module-add` | button | new module |
-//// | `modules-nav` | list | module rows (`SetModel` of `{text,id,active}`); emits `selected` with the name |
+//// | `modules-nav` | list | module rows (`SetModel` of `{text,id,active}`); emits `selected` with the id |
+//// | `files-rule` | panel | 1px rule above the file tree |
+//// | `files-nav` | list | the selected project/module's file tree (`{text,id,active}`); emits `selected` with the path |
+//// | `files-refresh` | button | re-read the tree |
 //// | `tab-strip` | panel | the open module tabs; one `tab:<module id>` button per tab, emitting `clicked` |
 //// | `tab-close` | button | close the active tab |
 //// | `canvas` | surface | designer canvas; `pointer:canvas:down/move/up/wheel` |
@@ -87,8 +90,8 @@
 //// | `ctx-cut`, `ctx-copy`, `ctx-paste`, `ctx-delete`, `ctx-align` | button | actions |
 //// | `align-menu` | panel (hidden) | align submenu |
 //// | `align-left`, `align-right`, `align-center`, `align-top`, `align-bottom`, `align-middle` | button | align actions |
-//// | `nav-context` | panel (hidden) | navigator context menu |
-//// | `nav-ctx-remove`, `nav-ctx-open`, `nav-ctx-delete`, `nav-ctx-close-tab` | button | actions |
+//// | `nav-context` | panel (hidden) | navigator context menu (projects, modules, files) |
+//// | `nav-ctx-open`, `nav-ctx-save`, `nav-ctx-remove`, `nav-ctx-toggle`, `nav-ctx-collapse`, `nav-ctx-refresh`, `nav-ctx-delete`, `nav-ctx-close-tab` | button | actions |
 ////
 //// # Events
 ////
@@ -325,6 +328,13 @@ pub type ModuleItem {
   ModuleItem(id: String, name: String, active: Bool)
 }
 
+/// One row of the navigator's file tree. `text` is already indented (the
+/// renderer's list rows are plain text), `path` is the absolute path and the
+/// key the loop acts on.
+pub type FileItem {
+  FileItem(path: String, text: String, is_dir: Bool, open: Bool, active: Bool)
+}
+
 pub type TabItem {
   TabItem(id: String, name: String, active: Bool)
 }
@@ -443,6 +453,18 @@ pub type ShellView {
     selection_count: Int,
     nav_context_open: Bool,
     nav_context_project: Bool,
+    nav_context_module: Bool,
+    nav_context_file: Bool,
+    nav_context_dir: Bool,
+    nav_context_x: Int,
+    nav_context_y: Int,
+    /// The file pane: the selected project/module's root and rows.
+    files_title: String,
+    files_hint: String,
+    files: List(FileItem),
+    /// A file opened from the tree is shown in the code pane read-only; the
+    /// module editor's buffer is left untouched.
+    code_read_only: Bool,
     popup_open: Bool,
     popup_title: String,
     popup_action: String,
@@ -520,6 +542,15 @@ pub fn empty_view() -> ShellView {
     selection_count: 0,
     nav_context_open: False,
     nav_context_project: False,
+    nav_context_module: False,
+    nav_context_file: False,
+    nav_context_dir: False,
+    nav_context_x: 0,
+    nav_context_y: 0,
+    files_title: "",
+    files_hint: "",
+    files: [],
+    code_read_only: False,
     popup_open: False,
     popup_title: "",
     popup_action: "",
@@ -929,6 +960,61 @@ const projects_row_y = 40
 
 const modules_row_y = 196
 
+/// The file pane below the module list. Modules keep a fixed share of what is
+/// left; files take the rest. The state anchors its context menu with the same
+/// row tops.
+fn modules_list_h(nav_h: Int) -> Int {
+  let available = int.max(nav_h - 200, 0)
+  int.min(int.max(available * 38 / 100, 96), 280)
+}
+
+fn files_rule_y(nav_h: Int) -> Int {
+  modules_row_y + modules_list_h(nav_h) + 8
+}
+
+fn files_title_y(nav_h: Int) -> Int {
+  files_rule_y(nav_h) + 6
+}
+
+fn files_list_y(nav_h: Int) -> Int {
+  files_title_y(nav_h) + 34
+}
+
+/// The top of a navigator list, for the context menu's anchor.
+pub fn nav_list_top(list_name: String, nav_h: Int) -> Int {
+  case list_name {
+    "projects-nav" -> projects_row_y
+    "modules-nav" -> modules_row_y
+    _ -> files_list_y(nav_h)
+  }
+}
+
+pub const nav_context_height = 84
+
+/// Every navigator menu has exactly three rows; the rows themselves are fixed
+/// (the document's shape may not change with the target), so the current
+/// target decides their order and top.
+fn nav_menu_order(view: ShellView) -> List(String) {
+  case view.nav_context_project, view.nav_context_module {
+    True, _ -> ["nav-ctx-open", "nav-ctx-save", "nav-ctx-remove"]
+    False, True -> ["nav-ctx-open", "nav-ctx-delete", "nav-ctx-close-tab"]
+    False, False ->
+      case view.nav_context_dir {
+        True -> ["nav-ctx-toggle", "nav-ctx-collapse", "nav-ctx-refresh"]
+        False -> ["nav-ctx-open", "nav-ctx-collapse", "nav-ctx-refresh"]
+      }
+  }
+}
+
+fn nav_menu_y(view: ShellView, name: String) -> Int {
+  view
+  |> nav_menu_order
+  |> list.index_map(fn(item, index) { #(item, index) })
+  |> list.find(fn(entry) { entry.0 == name })
+  |> result.map(fn(entry) { entry.1 * 26 + 2 })
+  |> result.unwrap(2)
+}
+
 /// How many rows can carry a button, so the document's shape stays fixed.
 const project_run_pool = 8
 
@@ -976,9 +1062,9 @@ fn navigator(view: ShellView) -> ControlDesc {
       list_node(
         "modules-nav",
         8,
-        196,
+        modules_row_y,
         l.nav_w - 16,
-        l.nav_h - 208,
+        modules_list_h(l.nav_h),
         list.map(view.modules, fn(item: ModuleItem) {
           WireStruct([
             #("text", WireText(item.name)),
@@ -989,6 +1075,45 @@ fn navigator(view: ShellView) -> ControlDesc {
       )
         |> with_class("campy-nav-list")
         |> with_props([hint_prop("Modules — click one to open it here")]),
+      rule("files-rule", 8, files_rule_y(l.nav_h), l.nav_w - 16, 1),
+      node(
+        "files-title",
+        "label",
+        view.files_title,
+        8,
+        files_title_y(l.nav_h),
+        l.nav_w - 46,
+        28,
+      )
+        |> with_class("campy-title"),
+      node(
+        "files-refresh",
+        "button",
+        "⟳",
+        l.nav_w - 34,
+        files_title_y(l.nav_h) + 2,
+        26,
+        26,
+      )
+        |> with_class("campy-icon-button")
+        |> with_props([hint_prop("Refresh files")]),
+      list_node(
+        "files-nav",
+        8,
+        files_list_y(l.nav_h),
+        l.nav_w - 16,
+        int.max(l.nav_h - files_list_y(l.nav_h) - 4, 24),
+        list.map(view.files, fn(item: FileItem) {
+          WireStruct([
+            #("text", WireText(item.text)),
+            #("id", WireText(item.path)),
+            #("active", WireBool(item.active)),
+          ])
+        }),
+      )
+        |> with_class("campy-nav-list")
+        |> with_class("campy-files-list")
+        |> with_props([hint_prop(view.files_hint)]),
     ],
     nav_run_buttons(view),
   ))
@@ -1049,7 +1174,7 @@ fn centre(view: ShellView) -> List(ControlDesc) {
       |> with_props([
         #("language", WireText("gleam")),
         #("line-numbers", WireBool(True)),
-        #("read-only", WireBool(False)),
+        #("read-only", WireBool(view.code_read_only)),
       ])
       |> shown(view.code_view),
     list_node(
@@ -1942,40 +2067,83 @@ fn align_menu(view: ShellView) -> ControlDesc {
 }
 
 fn nav_context(view: ShellView) -> ControlDesc {
-  node("nav-context", "panel", "", 0, 0, 150, 112)
+  let file = view.nav_context_file || view.nav_context_dir
+  node(
+    "nav-context",
+    "panel",
+    "",
+    view.nav_context_x,
+    view.nav_context_y,
+    168,
+    nav_context_height,
+  )
   |> with_class("campy-context-menu")
   |> shown(view.nav_context_open)
   |> with_children([
     menu_row(
+      "nav-ctx-open",
+      "Open",
+      2,
+      nav_menu_y(view, "nav-ctx-open"),
+      view.nav_context_project
+        || view.nav_context_module
+        || view.nav_context_file,
+      "Open the selected project, module or file",
+    ),
+    menu_row(
+      "nav-ctx-save",
+      "Save project",
+      2,
+      nav_menu_y(view, "nav-ctx-save"),
+      view.nav_context_project,
+      "Save this project",
+    ),
+    menu_row(
       "nav-ctx-remove",
       "Remove",
       2,
-      2,
+      nav_menu_y(view, "nav-ctx-remove"),
       view.nav_context_project,
       "Remove the project from the workspace (its file stays)",
     ),
     menu_row(
-      "nav-ctx-open",
-      "Open module",
+      "nav-ctx-toggle",
+      "Toggle folder",
       2,
-      28,
-      !view.nav_context_project,
-      "Open this module",
+      nav_menu_y(view, "nav-ctx-toggle"),
+      view.nav_context_dir,
+      "Expand or collapse this folder",
+    ),
+    menu_row(
+      "nav-ctx-collapse",
+      "Collapse all",
+      2,
+      nav_menu_y(view, "nav-ctx-collapse"),
+      file,
+      "Close every folder in the tree",
+    ),
+    menu_row(
+      "nav-ctx-refresh",
+      "Refresh",
+      2,
+      nav_menu_y(view, "nav-ctx-refresh"),
+      file,
+      "Re-read the file tree",
     ),
     menu_row(
       "nav-ctx-delete",
       "Delete",
       2,
-      54,
-      !view.nav_context_project,
+      nav_menu_y(view, "nav-ctx-delete"),
+      view.nav_context_module,
       "Delete this module from the project",
     ),
     menu_row(
       "nav-ctx-close-tab",
       "Close tab",
       2,
-      80,
-      !view.nav_context_project,
+      nav_menu_y(view, "nav-ctx-close-tab"),
+      view.nav_context_module,
       "Close this module’s tab",
     ),
   ])

@@ -407,6 +407,19 @@ pub fn item_text(items: &[PropValue], index: usize) -> String {
         .unwrap_or_default()
 }
 
+/// One model item's key: the `id` field when the model carries one, else its
+/// text. Navigator rows and file rows carry real ids (a path or module id), so
+/// a click acts on identity rather than on a label that can repeat.
+fn item_key(items: &[PropValue], index: usize) -> Option<String> {
+    items.get(index).and_then(|item| match item {
+        PropValue::Struct(fields) => fields
+            .iter()
+            .find(|(name, _)| name == "id")
+            .and_then(|(_, value)| value.text().map(str::to_owned)),
+        _ => None,
+    })
+}
+
 /// One model item's `active` flag (`{text, id, active}` structs). A list that
 /// carries no such field marks nothing, which is the plain list.
 fn item_active(items: &[PropValue], index: usize) -> bool {
@@ -1497,17 +1510,36 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals, passive
                         let active = item_active(&items, index);
                         let row_host = list_host.clone();
                         let click_label = label.clone();
+                        let click_key = item_key(&items, index);
+                        let context_host = list_host.clone();
                         let mut row = zgui::elements::control()
                             .class("campy-list-row")
                             .class_toggle(ClassName::new("campy-list-active"), move || active);
                         if !passive {
-                            row = row.tabindex(Focus::Sequential).on(
-                                events::CLICK,
-                                move |_| {
-                                    let label = click_label.clone();
-                                    row_host.emit(id, "selected", label)
-                                },
-                            );
+                            row = row
+                                .tabindex(Focus::Sequential)
+                                .on(events::CLICK, move |cx| {
+                                    // A right press has its own event below;
+                                    // context menus do not select.
+                                    let event: &zgui::vocab::PointerEvent = cx;
+                                    if event.button
+                                        == Some(zgui::vocab::PointerButton::Secondary)
+                                    {
+                                        return;
+                                    }
+                                    let value = click_key
+                                        .clone()
+                                        .unwrap_or_else(|| click_label.clone());
+                                    row_host.emit(id, "selected", value)
+                                })
+                                .on(events::POINTER_DOWN, move |cx| {
+                                    let event: &zgui::vocab::PointerEvent = cx;
+                                    if event.button
+                                        == Some(zgui::vocab::PointerButton::Secondary)
+                                    {
+                                        context_host.emit(id, "context", index.to_string());
+                                    }
+                                });
                         }
                         row.child(label)
                     },

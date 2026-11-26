@@ -302,6 +302,10 @@ pub const DRAG_ENV: &str = "CAMPY_UI_DRAG";
 /// `+`: `CAMPY_UI_MODS=ctrl`.
 pub const MODS_ENV: &str = "CAMPY_UI_MODS";
 
+/// The mouse button a probe presses: `CAMPY_UI_BUTTON=right` opens a context
+/// menu through the same event path a person's right-click takes.
+pub const BUTTON_ENV: &str = "CAMPY_UI_BUTTON";
+
 /// How many moves a probe's drag crosses (`CAMPY_UI_DRAG_STEPS`, default 3).
 const STEPS_ENV: &str = "CAMPY_UI_DRAG_STEPS";
 
@@ -359,6 +363,15 @@ pub fn drag_at() -> Option<(Point<CssPx, Css>, Point<CssPx, Css>)> {
     }
 }
 
+/// The button [`BUTTON_ENV`] asks for (primary unless it names right/middle).
+fn probe_button() -> PointerButton {
+    match std::env::var(BUTTON_ENV).ok().as_deref() {
+        Some("right") | Some("secondary") => PointerButton::Secondary,
+        Some("middle") => PointerButton::Middle,
+        _ => PointerButton::Primary,
+    }
+}
+
 /// The modifiers [`MODS_ENV`] asks for.
 pub fn mods() -> Modifiers {
     let Ok(raw) = std::env::var(MODS_ENV) else {
@@ -388,6 +401,7 @@ pub struct ClickProbe<A> {
     /// How many moves the drag crosses, and how far apart they are.
     steps: u32,
     interval: Duration,
+    button: PointerButton,
     /// The move the drag has reached (0 has pressed but not moved).
     step: u32,
     due: Option<Instant>,
@@ -424,6 +438,7 @@ impl<A: AppHandler> ClickProbe<A> {
             modifiers: mods(),
             steps,
             interval,
+            button: probe_button(),
             step: 0,
             due: None,
             surface: None,
@@ -470,13 +485,7 @@ impl<A: AppHandler> ClickProbe<A> {
             self.modifiers.shift()
         );
         self.send(cx, surface, PointerAction::Moved, from, None);
-        self.send(
-            cx,
-            surface,
-            PointerAction::Pressed,
-            from,
-            Some(PointerButton::Primary),
-        );
+        self.send(cx, surface, PointerAction::Pressed, from, Some(self.button));
     }
 
     /// The next point on the path from `from` to `to`.
@@ -558,13 +567,7 @@ impl<A: AppHandler> AppHandler for ClickProbe<A> {
             );
         } else {
             trace("probe release");
-            self.send(
-                cx,
-                surface,
-                PointerAction::Released,
-                to,
-                Some(PointerButton::Primary),
-            );
+            self.send(cx, surface, PointerAction::Released, to, Some(self.button));
             self.current += 1;
             if self.current >= self.gestures.len() {
                 self.fired = true;

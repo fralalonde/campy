@@ -250,6 +250,11 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-list-row { display: flex; align-items: center; padding: 0 10px; height: 100%;
                        color: var(--campy-muted); border-radius: 5px; font-size: 13px; }",
     ".campy-list-row:hover { background: var(--campy-hover); color: var(--campy-text); }",
+    // File names are long and the pane is narrow: one line per row, clipped,
+    // rather than a wrap that spills into the next row of the virtual list.
+    ".campy-files-list .campy-list-row { white-space: nowrap; overflow: hidden;
+                                         text-overflow: ellipsis; padding: 0 6px;
+                                         font-family: 'Adwaita Mono', 'Iosevka Nerd Font', monospace; font-size: 12px; }",
     ".campy-list-active { background: var(--campy-accent-soft); color: var(--campy-text);
                           font-weight: 600; }",
     ".campy-option { display: flex; align-items: center; padding: 0 10px; }",

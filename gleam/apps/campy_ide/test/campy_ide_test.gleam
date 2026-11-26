@@ -21,6 +21,13 @@ import gleam/io
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+
+@external(erlang, "campy_fs_ffi", "make_dir")
+fn fs_make_dir(path: String) -> Result(Nil, String)
+
+@external(erlang, "campy_fs_ffi", "write_file")
+fn fs_write_file(path: String, text: String) -> Result(Nil, String)
+
 import gleeunit
 import gleeunit/should
 
@@ -455,6 +462,65 @@ pub fn module_context_delete_removes_inactive_module_test() {
   let last =
     menu |> state.nav_context_menu("module;search-box") |> state.nav_delete
   last.status |> should.equal("Cannot delete the last module")
+}
+
+pub fn the_file_tree_follows_the_selected_project_test() {
+  let fixture = "/tmp/opencode/campy-files-tree"
+  let assert Ok(_) = fs_make_dir(fixture <> "/songs")
+  let assert Ok(_) = fs_write_file(fixture <> "/album.campy", "project")
+  let assert Ok(_) =
+    fs_write_file(fixture <> "/songs/one.gleam", "pub fn one() { Nil }\n")
+  let base = demo_state()
+  let model =
+    state.State(
+      ..base,
+      project: project.Project(..base.project, path: fixture <> "/album.campy"),
+      selected_project: True,
+      files_expanded: [fixture <> "/songs"],
+    )
+  // Folders first; the open folder's child is under it, indented.
+  state.file_items(model)
+  |> list.map(fn(item) { item.text })
+  |> should.equal([
+    "▾ songs",
+    "\u{00A0}\u{00A0}· one.gleam",
+    "· album.campy",
+  ])
+  state.files_title(model) |> should.equal("Files · Campy")
+
+  // A folder row toggles its children.
+  let closed = state.toggle_file_dir(model, fixture <> "/songs")
+  state.file_items(closed)
+  |> list.map(fn(item) { item.text })
+  |> should.equal(["▸ songs", "· album.campy"])
+
+  // A file row opens read-only beside the module source.
+  let opened = state.open_file_preview(model, fixture <> "/songs/one.gleam")
+  let assert Some(preview) = opened.file_preview
+  preview.name |> should.equal("one.gleam")
+  ide_ui.code_source_of(opened) |> should.equal("pub fn one() { Nil }\n")
+  ide_ui.snapshot(opened).code_read_only |> should.be_true
+  // Editing the preview cannot overwrite the handler source.
+  state.code_edit(opened, "0;0;changed").status
+  |> should.equal("Read-only file preview")
+
+  // The tree's rows carry their absolute path and act as their own keys.
+  let menu = state.nav_context_row(opened, "files-nav", 1)
+  menu.nav_context_open |> should.be_true
+  menu.nav_kind |> should.equal("file")
+  let same_id = menu.nav_id == { fixture <> "/songs/one.gleam" }
+  same_id |> should.be_true
+  let below = menu.nav_context_y > 0
+  below |> should.be_true
+  // A folder row opens a folder menu, and the project/module rows do too.
+  let folder_menu = state.nav_context_row(model, "files-nav", 0)
+  folder_menu.nav_kind |> should.equal("dir")
+  state.nav_context_row(model, "projects-nav", 0).nav_kind
+  |> should.equal("project")
+  state.nav_context_row(model, "modules-nav", 1).nav_kind
+  |> should.equal("module")
+  state.nav_context_row(model, "modules-nav", 1).nav_id
+  |> should.equal("widgets")
 }
 
 pub fn models_reflect_the_designer_test() {

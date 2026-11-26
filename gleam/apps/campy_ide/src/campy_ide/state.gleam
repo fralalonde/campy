@@ -31,6 +31,12 @@ pub type BrowserEntry {
   BrowserEntry(name: String, is_dir: Bool)
 }
 
+/// A file shown in the code pane without belonging to a module: read-only, so
+/// a preview can never overwrite the handler source it is sitting beside.
+pub type FilePreview {
+  FilePreview(path: String, name: String, text: String)
+}
+
 // Which editor the centre pane shows for the active module.
 pub type ModuleView {
   FormView
@@ -191,6 +197,13 @@ pub type State {
     nav_context_open: Bool,
     nav_kind: String,
     nav_id: String,
+    nav_context_x: Int,
+    nav_context_y: Int,
+    /// Absolute paths of the file tree's open folders.
+    files_expanded: List(String),
+    files_selected: String,
+    /// A file opened from the tree, shown read-only in the code pane.
+    file_preview: Option(FilePreview),
     gesture: Gesture,
     last_pointer: #(Int, Int),
     /// The previous click: which component and when, for double-click.
@@ -305,6 +318,11 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     nav_context_open: False,
     nav_kind: "",
     nav_id: "",
+    nav_context_x: 0,
+    nav_context_y: 0,
+    files_expanded: [],
+    files_selected: "",
+    file_preview: None,
     gesture: Idle,
     last_pointer: #(0, 0),
     last_click: None,
@@ -440,6 +458,7 @@ pub fn switch_project(state: State, path: String) -> State {
         active_handler: None,
         highlight: None,
         editing: None,
+        file_preview: None,
         status: "Project · " <> target.title,
       )
     Some(target) -> {
@@ -547,6 +566,7 @@ pub fn open_module(state: State, id: String) -> State {
         highlight: None,
         editing: None,
         editor: View,
+        file_preview: None,
         completions: [],
         completion_index: 0,
         status: "Opened " <> module.name,
@@ -571,6 +591,7 @@ pub fn activate_module(state: State, id: String) -> State {
         highlight: None,
         editing: None,
         editor: View,
+        file_preview: None,
         completions: [],
         completion_index: 0,
         status: "Switched to " <> module.name,
@@ -2230,6 +2251,13 @@ fn int_or(text: String, fallback: Int) -> Int {
 // directly (no undo entry, no Apply), so F7/F5 always compile and run
 // whatever is on screen.
 pub fn code_edit(state: State, payload: String) -> State {
+  case state.file_preview {
+    Some(_) -> status(state, "Read-only file preview")
+    None -> code_edit_module(state, payload)
+  }
+}
+
+fn code_edit_module(state: State, payload: String) -> State {
   case string.split_once(payload, ";") {
     Error(_) -> state
     Ok(#(line_text, rest)) ->
@@ -2682,19 +2710,240 @@ fn read_entries(mode: Popup, dir: String) -> List(BrowserEntry) {
 /// person opening or saving a project expects to see, rather than the home
 /// directory with nothing in it they were looking for.
 pub fn project_dir(state: State) -> String {
-  let absolute = fs_abs_path(state.project.path)
-  let #(directory, _name) = case string.split(absolute, "/") {
-    [_] -> #(".", absolute)
+  case dirname(fs_abs_path(state.project.path)) {
+    "" -> "/"
+    directory -> directory
+  }
+}
+
+fn dirname(path: String) -> String {
+  case string.split(path, "/") {
+    [_] -> "."
     parts -> {
       let assert [_, ..] = parts
-      let name = result.unwrap(list.last(parts), "")
-      #(string.join(list.take(parts, list.length(parts) - 1), "/"), name)
+      case string.join(list.take(parts, list.length(parts) - 1), "/") {
+        "" -> "/"
+        directory -> directory
+      }
     }
   }
-  case directory {
-    "" -> "/"
-    _ -> directory
+}
+
+fn basename(path: String) -> String {
+  path
+  |> string.split("/")
+  |> list.last()
+  |> result.unwrap("")
+}
+
+// ---------------------------------------------------------------------------
+// Files (the navigator's third list)
+// ---------------------------------------------------------------------------
+
+const files_limit = 400
+
+/// The selected project/module's tree root: a project shows its directory, a
+/// module its source (embedded modules live in the project file, so their root
+/// is the project's directory).
+pub fn files_root(state: State) -> String {
+  case state.selected_project {
+    True -> project_dir(state)
+    False ->
+      case active_module(state) {
+        Some(module) ->
+          case module.source_origin {
+            project.Embedded(_) -> project_dir(state)
+            project.External(path) -> dirname(fs_abs_path(path))
+          }
+        None -> project_dir(state)
+      }
   }
+}
+
+/// The row a project/module selection points at, so the pane shows where the
+/// code is even when the tree is not open all the way to it.
+fn files_highlight(state: State) -> String {
+  case state.selected_project {
+    True -> fs_abs_path(state.project.path)
+    False ->
+      case active_module(state) {
+        Some(module) ->
+          case module.source_origin {
+            project.Embedded(_) -> fs_abs_path(state.project.path)
+            project.External(path) -> fs_abs_path(path)
+          }
+        None -> ""
+      }
+  }
+}
+
+pub fn files_title(state: State) -> String {
+  case state.selected_project {
+    True -> "Files · " <> state.project.title
+    False ->
+      case active_module(state) {
+        Some(module) -> "Files · " <> module.name
+        None -> "Files"
+      }
+  }
+}
+
+pub fn files_hint(state: State) -> String {
+  "Files — " <> files_root(state) <> " · right-click a row for actions"
+}
+
+/// The flattened tree: open folders recurse, everything else is one row. Rows
+/// are capped so a repository root can never make one document unbounded.
+pub fn file_items(state: State) -> List(shell.FileItem) {
+  let #(items, _budget) =
+    walk_files(
+      files_root(state),
+      0,
+      state.files_expanded,
+      files_highlight(state),
+      state.files_selected,
+      [],
+      files_limit,
+    )
+  items
+}
+
+fn walk_files(
+  dir: String,
+  depth: Int,
+  expanded: List(String),
+  highlight: String,
+  selected: String,
+  acc: List(shell.FileItem),
+  budget: Int,
+) -> #(List(shell.FileItem), Int) {
+  case budget {
+    0 -> #(acc, budget)
+    _ ->
+      case fs_list_dir(dir) {
+        Error(_) -> #(acc, budget)
+        Ok(entries) ->
+          walk_entries(
+            sort_entries(entries),
+            dir,
+            depth,
+            expanded,
+            highlight,
+            selected,
+            acc,
+            budget,
+          )
+      }
+  }
+}
+
+fn walk_entries(
+  entries: List(BrowserEntry),
+  dir: String,
+  depth: Int,
+  expanded: List(String),
+  highlight: String,
+  selected: String,
+  acc: List(shell.FileItem),
+  budget: Int,
+) -> #(List(shell.FileItem), Int) {
+  case entries, budget {
+    [_, ..], _ if budget == 0 -> #(acc, budget)
+    [entry, ..rest], _ -> {
+      let path = join_path(dir, entry.name)
+      let open = entry.is_dir && list.contains(expanded, path)
+      let item =
+        shell.FileItem(
+          path: path,
+          text: file_text(depth, entry, open),
+          is_dir: entry.is_dir,
+          open: open,
+          active: path == highlight || path == selected,
+        )
+      let acc = list.append(acc, [item])
+      let #(acc, budget) = case entry.is_dir && open {
+        True ->
+          walk_files(
+            path,
+            depth + 1,
+            expanded,
+            highlight,
+            selected,
+            acc,
+            budget - 1,
+          )
+        False -> #(acc, budget - 1)
+      }
+      walk_entries(rest, dir, depth, expanded, highlight, selected, acc, budget)
+    }
+    [], _ -> #(acc, budget)
+  }
+}
+
+/// The list row's text: indentation (non-breaking, or the renderer's text
+/// element collapses it), a folder/file glyph, then the name.
+fn file_text(depth: Int, entry: BrowserEntry, open: Bool) -> String {
+  let glyph = case entry.is_dir, open {
+    True, True -> "▾"
+    True, False -> "▸"
+    False, _ -> "·"
+  }
+  string.repeat("\u{00A0}\u{00A0}", depth) <> glyph <> " " <> entry.name
+}
+
+/// A click in the tree: folders toggle, files open read-only beside the module
+/// code (a `.campy` file is opened as a project by the loop, not here).
+pub fn file_pick(state: State, path: String) -> State {
+  case is_directory(path) {
+    True -> toggle_file_dir(state, path)
+    False -> open_file_preview(state, path)
+  }
+}
+
+pub fn toggle_file_dir(state: State, path: String) -> State {
+  let expanded = case list.contains(state.files_expanded, path) {
+    True -> list.filter(state.files_expanded, fn(item) { item != path })
+    False -> list.append(state.files_expanded, [path])
+  }
+  State(
+    ..state,
+    files_expanded: expanded,
+    files_selected: path,
+    status: case list.contains(expanded, path) {
+      True -> "Opened folder " <> basename(path)
+      False -> "Closed folder " <> basename(path)
+    },
+  )
+}
+
+pub fn collapse_files(state: State) -> State {
+  State(
+    ..state,
+    files_expanded: [],
+    files_selected: "",
+    status: "Folders collapsed",
+  )
+}
+
+pub fn open_file_preview(state: State, path: String) -> State {
+  case fs_read_file(path) {
+    Ok(text) ->
+      State(
+        ..state,
+        files_selected: path,
+        file_preview: Some(FilePreview(path, basename(path), text)),
+        view: CodeView,
+        editor: View,
+        editing: None,
+        status: "Reading " <> basename(path),
+      )
+    Error(reason) ->
+      status(state, "Cannot read " <> basename(path) <> ": " <> reason)
+  }
+}
+
+pub fn close_file_preview(state: State) -> State {
+  State(..state, file_preview: None)
 }
 
 pub fn browser_open(
@@ -2840,12 +3089,69 @@ pub fn browser_cancel(state: State) -> State {
 // Navigator context menu (projects / modules)
 // ---------------------------------------------------------------------------
 
-// Payload: "kind;id" where kind is "project" or "module".
+// Payload: "kind;id" where kind is "project", "module", "file" or "dir".
 pub fn nav_context_menu(state: State, payload: String) -> State {
   case string.split_once(payload, ";") {
     Ok(#(kind, id)) ->
       State(..state, nav_context_open: True, nav_kind: kind, nav_id: id)
     Error(_) -> state
+  }
+}
+
+/// Right-clicking a navigator row: the row's identity comes from the list and
+/// index the renderer emitted, so paths with separators need no escaping.
+pub fn nav_context_row(state: State, list_name: String, index: Int) -> State {
+  let target = case list_name {
+    "projects-nav" ->
+      list.drop(state.workspace.projects, index)
+      |> list.first()
+      |> result.map(fn(target) { #("project", target.path) })
+    "modules-nav" ->
+      list.drop(state.project.modules, index)
+      |> list.first()
+      |> result.map(fn(module) { #("module", module.id) })
+    "files-nav" ->
+      list.drop(file_items(state), index)
+      |> list.first()
+      |> result.map(fn(item) {
+        #(
+          case item.is_dir {
+            True -> "dir"
+            False -> "file"
+          },
+          item.path,
+        )
+      })
+    _ -> Error(Nil)
+  }
+  case target {
+    Error(_) -> state
+    Ok(#(kind, id)) -> {
+      let #(width, height) = state.window_size
+      let layout = shell.layout(width, height)
+      let top =
+        layout.body_y + shell.nav_list_top(list_name, layout.nav_h) + index * 24
+      let x = 6
+      let y = int.min(top, int.max(height - 26 - shell.nav_context_height, 0))
+      State(
+        ..state,
+        nav_context_open: True,
+        nav_kind: kind,
+        nav_id: id,
+        nav_context_x: x,
+        nav_context_y: y,
+        files_selected: case list_name {
+          "files-nav" -> id
+          _ -> state.files_selected
+        },
+        status: case kind {
+          "project" -> "Project actions"
+          "module" -> "Module actions"
+          "dir" -> "Folder actions"
+          _ -> "File actions"
+        },
+      )
+    }
   }
 }
 
@@ -2907,6 +3213,41 @@ pub fn set_project(_state: State, project: Project) -> State {
 }
 
 // Keeps the open tabs and selection when the project is only persisted.
+/// Save the project a navigator row points at, whether or not it is the active
+/// one; the workspace copy is updated in place and the active project stays
+/// active.
+pub fn save_project(state: State, path: String) -> State {
+  case workspace.find(state.workspace, path) {
+    None -> status(state, "Project not found")
+    Some(target) ->
+      case project.save_current(target) {
+        Ok(saved) -> {
+          let projects =
+            list.map(state.workspace.projects, fn(item) {
+              case item.path == path {
+                True -> saved
+                False -> item
+              }
+            })
+          let project = case state.project.path == path {
+            True -> saved
+            False -> state.project
+          }
+          State(
+            ..state,
+            project: project,
+            workspace: workspace.Workspace(
+              ..state.workspace,
+              projects: projects,
+            ),
+            status: "Saved " <> path,
+          )
+        }
+        Error(error) -> status(state, "Save failed: " <> error)
+      }
+  }
+}
+
 pub fn set_saved(state: State, saved: Project) -> State {
   let ws = case saved.path == state.project.path {
     True -> workspace.update_active(state.workspace, saved)

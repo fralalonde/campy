@@ -791,29 +791,30 @@ fn section_names() -> List(String) {
     "menu-bar", "menu-rule", "menu-file", "menu-edit", "menu-settings",
     "palette", "nav", "nav-projects-title", "project-delete", "project-add",
     "projects-nav", "nav-rule", "nav-modules-title", "module-add", "modules-nav",
-    "tab-strip", "tab-close", "canvas", "canvas-title", "canvas-form",
-    "selection-rect", "marquee-rect", "canvas-rule", "view-toggle", "code-title",
-    "code-handler", "code-view", "completions", "console-pane", "console-title",
-    "console-state", "console-clear", "console", "right-pane",
-    "insp-tab-properties", "insp-tab-events", "insp-rule", "insp-selection",
-    "insp-delete", "project-panel", "project-icon", "project-icon-glyph",
-    "project-icon-choose", "project-icon-clear", "project-title-label",
-    "project-title", "project-app-label", "project-app", "project-path-label",
-    "project-path", "inspector", "inspector-events", "status-bar", "status",
-    "status-path", "settings-panel", "settings-title", "settings-font-label",
-    "settings-font", "settings-size-label", "settings-size",
-    "settings-scheme-label", "settings-scheme", "settings-hints",
-    "settings-close", "agent-panel", "agent-title", "agent-mcp",
-    "agent-port-label", "agent-port", "agent-status", "agent-endpoint",
-    "agent-note", "agent-close", "project-dialog", "project-dialog-title",
-    "project-dialog-body", "project-new", "project-open",
+    "files-rule", "files-title", "files-refresh", "files-nav", "tab-strip",
+    "tab-close", "canvas", "canvas-title", "canvas-form", "selection-rect",
+    "marquee-rect", "canvas-rule", "view-toggle", "code-title", "code-handler",
+    "code-view", "completions", "console-pane", "console-title", "console-state",
+    "console-clear", "console", "right-pane", "insp-tab-properties",
+    "insp-tab-events", "insp-rule", "insp-selection", "insp-delete",
+    "project-panel", "project-icon", "project-icon-glyph", "project-icon-choose",
+    "project-icon-clear", "project-title-label", "project-title",
+    "project-app-label", "project-app", "project-path-label", "project-path",
+    "inspector", "inspector-events", "status-bar", "status", "status-path",
+    "settings-panel", "settings-title", "settings-font-label", "settings-font",
+    "settings-size-label", "settings-size", "settings-scheme-label",
+    "settings-scheme", "settings-hints", "settings-close", "agent-panel",
+    "agent-title", "agent-mcp", "agent-port-label", "agent-port", "agent-status",
+    "agent-endpoint", "agent-note", "agent-close", "project-dialog",
+    "project-dialog-title", "project-dialog-body", "project-new", "project-open",
     "project-dialog-cancel", "browser-panel", "browser-title", "browser-home",
     "browser-new-dir", "browser-dir", "browser-up", "browser-entries",
     "browser-name-label", "browser-name", "browser-accept", "browser-cancel",
     "context-menu", "ctx-cut", "ctx-copy", "ctx-paste", "ctx-delete",
     "ctx-align", "align-menu", "align-left", "align-right", "align-center",
-    "align-top", "align-bottom", "align-middle", "nav-context", "nav-ctx-remove",
-    "nav-ctx-open", "nav-ctx-delete", "nav-ctx-close-tab",
+    "align-top", "align-bottom", "align-middle", "nav-context", "nav-ctx-open",
+    "nav-ctx-save", "nav-ctx-remove", "nav-ctx-toggle", "nav-ctx-collapse",
+    "nav-ctx-refresh", "nav-ctx-delete", "nav-ctx-close-tab",
   ]
 }
 
@@ -1277,6 +1278,7 @@ fn section_effect(
   case event_key {
     "clicked" -> button_action(name)
     "selected" -> list_action(model, name, payload)
+    "context" -> context_action(name, payload)
     "edited" -> edit_action(name, payload)
     // Enter in a dialog field means the dialog's button: no mouse needed.
     "accepted" ->
@@ -1296,6 +1298,7 @@ fn button_action(name: String) -> ControlEffect {
     "module-add" -> "file-new-module"
     "view-toggle" -> "toggle-view"
     "console-clear" -> "clear-console"
+    "files-refresh" -> "files-refresh"
     "insp-tab-properties" -> "tab-properties"
     "insp-tab-events" -> "tab-events"
     "insp-delete" -> "delete-selected"
@@ -1316,7 +1319,12 @@ fn button_action(name: String) -> ControlEffect {
     "ctx-paste" -> "context-paste"
     "ctx-delete" -> "context-delete"
     "ctx-align" -> "open-align"
+    "nav-ctx-open" -> "nav-open"
+    "nav-ctx-save" -> "nav-save"
     "nav-ctx-remove" -> "nav-delete"
+    "nav-ctx-toggle" -> "nav-toggle-file"
+    "nav-ctx-collapse" -> "nav-collapse-files"
+    "nav-ctx-refresh" -> "files-refresh"
     "nav-ctx-delete" -> "nav-delete"
     "nav-ctx-close-tab" -> "nav-close-tab"
     _ -> ""
@@ -1327,22 +1335,29 @@ fn button_action(name: String) -> ControlEffect {
   }
 }
 
+/// A row's context menu: the renderer sends the list and row index, so a path
+/// can contain any character without escaping.
+fn context_action(name: String, payload: String) -> ControlEffect {
+  case int.parse(payload) {
+    Ok(index) ->
+      ControlRun("nav-context-row", name <> ";" <> int.to_string(index))
+    Error(_) -> ControlKeep
+  }
+}
+
 fn list_action(model: State, name: String, payload: String) -> ControlEffect {
   case name {
     "projects-nav" ->
-      case
-        list.find(model.workspace.projects, fn(item) { item.title == payload })
-      {
-        Ok(item) -> ControlRun("switch-project", item.path)
-        Error(_) -> ControlKeep
+      case workspace.find(model.workspace, payload) {
+        Some(_) -> ControlRun("switch-project", payload)
+        None -> ControlKeep
       }
     "modules-nav" ->
-      case
-        list.find(model.project.modules, fn(module) { module.name == payload })
-      {
-        Ok(module) -> ControlRun("open-module", module.id)
-        Error(_) -> ControlKeep
+      case project.find_module(model.project, payload) {
+        Some(_) -> ControlRun("open-module", payload)
+        None -> ControlKeep
       }
+    "files-nav" -> ControlRun("file-pick", payload)
     "browser-entries" ->
       case model.browser {
         Some(browser) ->
@@ -1871,11 +1886,13 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "editor-edit" -> state.enter_edit(model)
     "view-form" -> state.set_view(model, state.FormView)
     "view-code" -> state.set_view(model, state.CodeView)
-    "open-module" -> state.open_module(model, payload)
+    "open-module" ->
+      state.nav_context_close(model) |> state.open_module(payload)
     "tab-module" -> state.activate_module(model, payload)
     "close-module" -> state.close_module(model, payload)
     "new-module" -> state.new_module(model)
-    "switch-project" -> state.switch_project(model, payload)
+    "switch-project" ->
+      state.nav_context_close(model) |> state.switch_project(payload)
     "delete-project" -> state.delete_active_project(model)
     "file-new" -> state.create_project(model)
     "file-new-module" -> state.new_module(model)
@@ -1892,6 +1909,28 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "browser-new-dir" -> state.browser_new_dir(model)
     "nav-context-menu" -> state.nav_context_menu(model, payload)
     "nav-context-close" -> state.nav_context_close(model)
+    "nav-context-row" ->
+      case string.split_once(payload, ";") {
+        Ok(#(list_name, index_text)) ->
+          case int.parse(index_text) {
+            Ok(index) -> state.nav_context_row(model, list_name, index)
+            Error(_) -> model
+          }
+        Error(_) -> model
+      }
+    "nav-open" -> nav_open(model)
+    "nav-toggle-file" ->
+      state.nav_context_close(model)
+      |> state.toggle_file_dir(model.nav_id)
+    "nav-collapse-files" ->
+      state.nav_context_close(model) |> state.collapse_files
+    "files-refresh" ->
+      state.nav_context_close(model)
+      |> state.set_status("Files refreshed")
+    "nav-save" ->
+      state.nav_context_close(model)
+      |> state.save_project(model.nav_id)
+    "file-pick" -> file_pick(state.nav_context_close(model), payload)
     "nav-delete" -> state.nav_delete(model)
     // Close tab acts on the right-clicked module (nav_id); the shell's
     // `tab-close` button has no nav target and closes the active tab.
@@ -1906,7 +1945,7 @@ fn dispatch(model: State, name: String, payload: String) -> State {
           }
         id -> id
       }
-      state.close_module(model, target)
+      state.close_module(state.nav_context_close(model), target)
     }
     "console-goto-line" ->
       case string.split_once(payload, ";") {
@@ -2038,6 +2077,31 @@ fn base_name(path: String) -> String {
   |> string.split("/")
   |> list.last
   |> result.unwrap("")
+}
+
+/// The navigator menu's Open: it acts on the row that was right-clicked.
+fn nav_open(model: State) -> State {
+  let model = state.nav_context_close(model)
+  case model.nav_kind, model.nav_id {
+    "project", path -> state.switch_project(model, path)
+    "module", id -> state.open_module(model, id)
+    "dir", path -> state.toggle_file_dir(model, path)
+    "file", path -> file_pick(model, path)
+    _, _ -> model
+  }
+}
+
+/// A file-tree row: a folder toggles; a project file joins the workspace; any
+/// other file is read into the code pane (read-only). State does the reading.
+fn file_pick(model: State, path: String) -> State {
+  case state.is_directory(path) {
+    True -> state.file_pick(model, path)
+    False ->
+      case string.lowercase(path) |> string.ends_with(".campy") {
+        True -> open_path(model, path)
+        False -> state.file_pick(model, path)
+      }
+  }
 }
 
 fn open_path(model: State, path: String) -> State {

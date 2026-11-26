@@ -146,6 +146,15 @@ pub fn snapshot(model: State) -> Snapshot {
     selection_count: list.length(model.selection),
     nav_context_open: model.nav_context_open,
     nav_context_project: model.nav_kind == "project",
+    nav_context_module: model.nav_kind == "module",
+    nav_context_file: model.nav_kind == "file",
+    nav_context_dir: model.nav_kind == "dir",
+    nav_context_x: model.nav_context_x,
+    nav_context_y: model.nav_context_y,
+    files_title: state.files_title(model),
+    files_hint: state.files_hint(model),
+    files: state.file_items(model),
+    code_read_only: model.file_preview != None,
     popup_open: popup_open(model.popup),
     popup_title: popup_title(model.popup),
     popup_action: popup_action(model.popup),
@@ -860,9 +869,13 @@ pub fn diagnostics_wire(items: List(DiagItem)) -> List(bridge.WireValue) {
 }
 
 fn code_source(model: State) -> String {
-  case active_module(model) {
-    Some(module) -> module_text(module)
-    None -> ""
+  case model.file_preview {
+    Some(preview) -> preview.text
+    None ->
+      case active_module(model) {
+        Some(module) -> module_text(module)
+        None -> ""
+      }
   }
 }
 
@@ -885,9 +898,22 @@ fn module_text(module: project.Module) -> String {
 }
 
 fn code(model: State) -> List(LineItem) {
-  case active_module(model) {
-    None -> []
-    Some(module) ->
+  case model.file_preview, active_module(model) {
+    Some(preview), _ ->
+      preview.text
+      |> string.split("\n")
+      |> list.map(fn(line) {
+        shell.LineItem(
+          list.map(syntax.tokenize(line), fn(token) {
+            case token {
+              syntax.Token(kind, text) ->
+                shell.TokenItem(text, token_kind(kind))
+            }
+          }),
+        )
+      })
+    None, None -> []
+    None, Some(module) ->
       module_text(module)
       |> string.split("\n")
       |> list.map(fn(line) {
@@ -1416,9 +1442,13 @@ fn is_code_view(model: State) -> Bool {
 }
 
 fn code_handler_label(model: State) -> String {
-  case model.active_handler {
-    Some(handler) -> handler
-    None -> state.active_name(model)
+  case model.file_preview {
+    Some(preview) -> preview.path
+    None ->
+      case model.active_handler {
+        Some(handler) -> handler
+        None -> state.active_name(model)
+      }
   }
 }
 

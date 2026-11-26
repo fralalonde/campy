@@ -199,6 +199,28 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   goes through `open_project`: up-sert into the workspace, become active, and
   open its first module's tab.
 
+### The navigator's files pane and its context menus
+
+- **Files below Modules.** A third navigator section shows the selected
+  target's tree: a project row shows the project file's directory, a module row
+  shows that module's source directory (an embedded module points at the
+  project file itself). Folders expand in place (`▸`/`▾`); the tree is capped
+  so a repository root cannot make the document unbounded. Rows are real paths,
+  not labels, and file names never wrap into the next virtual-list row.
+- **Files open read-only.** Clicking a file reads it into the code pane with the
+  editor's `read-only` prop set, so a preview can never overwrite the handler
+  source beside it; the file name replaces the handler label. A `.campy` row
+  opens the project itself, and opening a module or switching project clears
+  the preview.
+- **Right-click is wired through the renderer.** List rows carry their model
+  `id` (project path, module id, file path) on a click, and a right press emits
+  `context` with the row index. The IDE turns that into a small menu anchored
+  on the row: projects offer Open / Save project / Remove; modules Open /
+  Delete / Close tab; files Open / Collapse all / Refresh; folders Toggle
+  folder / Collapse all / Refresh. The menu is three fixed rows whose order
+  (not the document's shape) follows the target, so opening it is a granular
+  update, never a reload.
+
 ### Reachability (as built)
 
 - **Hints everywhere.** Every control that answers a click carries a `hint`
