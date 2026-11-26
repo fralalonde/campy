@@ -1027,6 +1027,23 @@ pub fn the_canora_demo_project_roundtrips_test() {
   library.form.controls
   |> list.any(fn(control) { control.name == "profile" })
   |> should.be_true
+  // The handler sources are real Gleam, not stubs: they import modules, carry
+  // types, and keep state across events.
+  let assert project.Embedded(library_source) = library.source_origin
+  string.contains(library_source, "import gleam/list") |> should.be_true
+  string.contains(library_source, "persistent_term") |> should.be_true
+  string.contains(library_source, "TODO") |> should.be_false
+  let assert Some(player_module) = project.find_module(loaded, "player")
+  let assert project.Embedded(player_source) = player_module.source_origin
+  string.contains(player_source, "pub fn shuffle_clicked") |> should.be_true
+  string.contains(player_source, "TODO") |> should.be_false
+  let assert project.Embedded(connect_source) = services.source_origin
+  string.contains(connect_source, "accounts.spotify.com/api/token")
+  |> should.be_true
+  string.contains(connect_source, "auth.tidal.com/v1/oauth2/token")
+  |> should.be_true
+  string.contains(connect_source, "countryCode") |> should.be_true
+  string.contains(connect_source, "TODO") |> should.be_false
 }
 
 pub fn checked_in_campy_project_is_the_current_demo_test() {

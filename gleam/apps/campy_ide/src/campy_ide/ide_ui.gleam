@@ -433,10 +433,14 @@ pub fn prop_items(model: State) -> List(PropItem) {
 pub fn event_items(model: State) -> List(PropItem) {
   case model.selected_project, model.selection, active_form(model) {
     True, _, _ -> []
-    False, [_, ..], Some(form) ->
+    False, [_, ..], Some(form) -> {
+      let source = module_source_of(model)
       merge_rows(
-        list.map(model.selection, fn(id) { control_event_rows(form, id) }),
+        list.map(model.selection, fn(id) {
+          control_event_rows(form, id, source)
+        }),
       )
+    }
     False, _, _ -> []
   }
 }
@@ -582,23 +586,42 @@ fn dedupe_rows(rows: List(PropItem)) -> List(PropItem) {
   }
 }
 
-fn control_event_rows(form: campy_form.Form, id: String) -> List(PropItem) {
+fn control_event_rows(
+  form: campy_form.Form,
+  id: String,
+  source: String,
+) -> List(PropItem) {
   case campy_form.find_control(form, id) {
     None -> []
     Some(control) ->
       campy_ccl.events(campy_form.kind_key(control.kind))
       |> list.map(fn(event: campy_ccl.Event) {
+        let handler = campy_form.handler_name(control, event.key)
+        // A row is bound only when the handler is really in the source:
+        // deleting it puts the row back to "(none)", and clicking creates it.
+        let value = case campy_form.has_handler(source, handler) {
+          True -> handler
+          False -> "(none)"
+        }
         shell.PropItem(
           event.key,
           shell.row_label(event.key),
           "event",
-          campy_form.handler_name(control, event.key),
+          value,
           False,
           0,
           [],
           "Opens handler code",
         )
       })
+  }
+}
+
+/// The active module's handler source, for the Events tab's bound/unbound test.
+fn module_source_of(model: State) -> String {
+  case state.active_module(model) {
+    Some(module) -> state.module_source(module)
+    None -> ""
   }
 }
 

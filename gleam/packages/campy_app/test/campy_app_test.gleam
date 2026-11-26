@@ -80,13 +80,14 @@ pub fn apply_handler_raising_test() {
 }
 
 pub fn apply_handler_missing_test() {
+  // An event nobody bound is not an error: nothing happens.
   handler.apply_handler("campy_app_fixture_handlers", "no_such_handler")
-  |> should.equal(Error("no handler"))
+  |> should.equal(Ok(Nil))
 }
 
 pub fn apply_handler_unknown_module_test() {
   handler.apply_handler("campy_app_no_such_fixture", "anything")
-  |> should.equal(Error("no handler"))
+  |> should.equal(Ok(Nil))
 }
 
 pub fn handler_name_mapping_test() {
@@ -129,7 +130,7 @@ pub fn handler_run_missing_test() {
     "missing-button",
     "clicked",
   )
-  |> should.equal(Error("no handler"))
+  |> should.equal(Ok(Nil))
 }
 
 pub fn handler_run_unknown_control_test() {
@@ -257,14 +258,8 @@ fn session_lifecycle() -> Nil {
   string.starts_with(reason, "error:") |> should.be_true
   string.contains(reason, "\n") |> should.be_false
 
+  // An unbound event does nothing at all: no report, no error.
   campy_app.deliver(ref, click_event("missing-button"))
-  let assert campy_app.HandlerError("missing_button_clicked", "no handler") =
-    await_report(reports, fn(report) {
-      case report {
-        campy_app.HandlerError(_, _) -> True
-        _ -> False
-      }
-    })
 
   // The app still works after the handler errors: a new snapshot applies.
   campy_app.apply_snapshot(ref, form_with_title("Handler fixture v2"))

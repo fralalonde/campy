@@ -1,0 +1,14 @@
+name = "canora_handlers"
+version = "0.1.0"
+target = "erlang"
+gleam = ">= 1.16.0 and < 2.0.0"
+
+# The demo's handlers are ordinary Gleam and are built and tested with the rest
+# of the tree. They reach the BEAM (persistent_term, uri_string) through
+# `@external`, and the one network call through the generated app's runtime, so
+# the standard library is the only dependency.
+[dependencies]
+gleam_stdlib = ">= 0.70.0 and < 1.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"

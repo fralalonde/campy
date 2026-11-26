@@ -1120,6 +1120,16 @@ pub fn default_source() -> String {
 }
 
 // Returns the source plus the 0-based line where the handler starts.
+/// Whether the module source declares `handler`. The Events tab shows a row as
+/// bound only when it does: deleting a handler's body makes its row unbound
+/// again, and clicking it re-creates the stub.
+pub fn has_handler(source: String, handler: String) -> Bool {
+  case find_handler_line(source, handler) {
+    Some(_) -> True
+    None -> False
+  }
+}
+
 pub fn ensure_handler(source: String, handler: String) -> #(String, Int) {
   case find_handler_line(source, handler) {
     Some(index) -> #(source, index)

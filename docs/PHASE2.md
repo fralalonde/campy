@@ -122,6 +122,12 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
 - **The inspector keeps its tab** when the selection changes; **double-clicking**
   a component opens its default handler (`clicked`/`toggled`/`edited`/… by
   kind) in the code pane without switching the inspector to Events.
+- **An event row is bound only while its function exists.** The Events tab asks
+  `campy_form.has_handler` on the module source: a handler that was never
+  written, or one the user deleted, shows `(none)` and clicking the row creates
+  the stub (and opens it). The generated app agrees: `campy_app_ffi` answers
+  `{ok, nil}` for a function the module does not export, so an unbound event is
+  a no-op that the app survives.
 - **The Form/Raw tabs are gone**: there is no generated form source to show,
   only the form and the handler code (`Ctrl+Tab` still toggles those).
 - **Apps run from the navigator rows.** Each module row carries a run button
@@ -199,16 +205,23 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   prop — menu rows, palette tiles, navigator lists, the canvas, run buttons,
   inspector rows (a sentence derived from the row's key, so it does not change
   with the selection and cannot force a reload), settings combos. Hovering one
-  puts its sentence on the status line. A test walks the shell document and
-  fails on a clickable control without one.
+  puts its sentence on the status line and in a tooltip beside the pointer. A
+  test walks the shell document and fails on a clickable control without one.
 - **Palette pictograms** are 44×34 at 22px, so the component glyphs read at a
   glance.
 - **alClient / cursors** are documented above and in the tests.
-- **Canora speaks to two services.** Its Services module picks Spotify or Tidal,
-  carries the token field, and points a datasource at the chosen catalogue (the
-  demo's `assets/canora/tidal.json`); the handler source documents both APIs'
-  endpoints. The palette's non-visual kinds are what make that a component
-  rather than prose.
+- **Canora speaks to two services.** Its Services module picks Spotify or Tidal
+  and carries each service's own credential fields: Spotify is OAuth 2.0
+  authorization code with PKCE (`accounts.spotify.com/authorize` /
+  `api/token`, `api.spotify.com/v1`), Tidal is client credentials
+  (`auth.tidal.com/v1/oauth2/token`, `openapi.tidal.com/v2` with a
+  `countryCode`). Its handler sources are **real, checked Gleam**: the modules
+  live in `demo/canora/src`, form a workspace package with tests, and are read
+  into the project at build time (`campy_form_ffi:read_demo/1`), so the checked
+  `.campy` file embeds actual code — a persistent_term-backed session, queue
+  rotation, favourites, token exchange through the app runtime's `post_form` —
+  rather than string stubs. The demo still fills its catalogue from
+  `assets/canora/tidal.json`, so it runs without credentials.
 
 ### Presentation is a first-class part of drag feel
 

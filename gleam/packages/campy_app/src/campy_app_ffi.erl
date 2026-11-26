@@ -1,5 +1,5 @@
 -module(campy_app_ffi).
--export([apply_handler/2, terminate_supervisor/1, has_display/0]).
+-export([apply_handler/2, terminate_supervisor/1, has_display/0, post_form/2]).
 
 %% Handler ABI v1: zero-argument functions, nil return. The module is loaded
 %% first because erlang:function_exported/3 answers false for unloaded modules;
@@ -22,11 +22,15 @@ apply_handler(ModBin, FunBin) ->
                                 {error, unicode:characters_to_binary(
                                     io_lib:format("~p:~p", [Class, Reason]))}
                         end;
+                    %% An event nobody bound is an event nothing happens on:
+                    %% it is not an error, and the app keeps running.
                     false ->
-                        {error, <<"no handler">>}
+                        {ok, nil}
                 end;
+            %% The module is loaded but has no such function (the same
+            %% unbound case), or it failed to load at all.
             _ ->
-                {error, <<"no handler">>}
+                {ok, nil}
         end
     catch
         Class0:Reason0 ->
@@ -52,4 +56,24 @@ env_set(Name) ->
         false -> false;
         "" -> false;
         _ -> true
+    end.
+
+%% A handler's one network primitive: POST a form body and give back the
+%% response body. inets and ssl ship with OTP, so a generated app can reach a
+%% token endpoint without an HTTP package. Non-2xx answers are errors, with the
+%% status for the handler to log.
+post_form(Url, Body) ->
+    _ = application:ensure_all_started(inets),
+    _ = application:ensure_all_started(ssl),
+    Request = {binary_to_list(Url), [], "application/x-www-form-urlencoded", Body},
+    HttpOptions = [{timeout, 15000}, {connect_timeout, 5000}],
+    Options = [{body_format, binary}],
+    case httpc:request(post, Request, HttpOptions, Options) of
+        {ok, {{_, Status, _}, _, Response}} when Status >= 200, Status < 300 ->
+            {ok, Response};
+        {ok, {{_, Status, Reason}, _, Response}} ->
+            {error, unicode:characters_to_binary(
+                io_lib:format("HTTP ~p ~s: ~s", [Status, Reason, Response]))};
+        {error, Reason} ->
+            {error, unicode:characters_to_binary(io_lib:format("~p", [Reason]))}
     end.

@@ -560,160 +560,33 @@ fn int_to_string_positive(value: Int, acc: String) -> String {
 }
 
 // --- handlers ---------------------------------------------------------------
+//
+// The demo's handler code is real Gleam, kept in demo/canora/*.gleam and read
+// when the project is built: the .campy file embeds the bytes, so the IDE can
+// edit them, and the readable modules stay the source of truth for the demo.
+
+@external(erlang, "campy_form_ffi", "read_demo")
+fn read_demo(name: String) -> Result(String, String)
+
+fn handler_source(name: String) -> String {
+  case read_demo(name) {
+    Ok(source) -> source
+    Error(reason) -> panic as "Canora's handler source is missing: " <> reason
+  }
+}
 
 fn library_source() -> String {
-  "// Canora · library
-//
-// Every function here is a handler: the component with this name answers the
-// event. The two non-visual components are hosted for you — playback_timer
-// ticks into `progress`, tracks_api fills `tracks` — and their own events
-// arrive as playback_timer_tick / tracks_api_loaded.
-//
-// A real deployment would read the Web API with a token it keeps out of the
-// form; the demo datasource reads assets/canora/tracks.json, so the list fills
-// without a login.
-
-pub fn play_clicked() -> Nil {
-  // Start or resume: the transport speaks to the player, not to the UI.
-  Nil
-}
-
-pub fn next_clicked() -> Nil {
-  Nil
-}
-
-pub fn prev_clicked() -> Nil {
-  Nil
-}
-
-pub fn new_playlist_clicked() -> Nil {
-  Nil
-}
-
-pub fn hamburger_selected(which: String) -> Nil {
-  // Settings, About Canora, Quit: the app's own menu.
-  let _ = which
-  Nil
-}
-
-pub fn profile_clicked() -> Nil {
-  // Opens the Profile module: the per-service credentials editor.
-  Nil
-}
-
-pub fn tracks_api_loaded(count: Int) -> Nil {
-  let _ = count
-  Nil
-}
-
-pub fn playback_timer_tick() -> Nil {
-  Nil
-}
-"
+  handler_source("library.gleam")
 }
 
 fn search_source() -> String {
-  "// Canora · search
-
-pub fn go_clicked() -> Nil {
-  // `query` holds the term; results_api fills the list.
-  Nil
-}
-
-pub fn clear_clicked() -> Nil {
-  Nil
-}
-
-pub fn results_api_loaded(count: Int) -> Nil {
-  let _ = count
-  Nil
-}
-"
+  handler_source("search.gleam")
 }
 
 fn connect_source() -> String {
-  "// Canora · profile
-//
-// One client, two services, and they are not the same API:
-//
-// Spotify — OAuth 2.0 authorization code with PKCE (the desktop flow):
-//   authorize  https://accounts.spotify.com/authorize  (code_challenge)
-//   token      https://accounts.spotify.com/api/token    (code + code_verifier)
-//   refresh    https://accounts.spotify.com/api/token    (grant_type=refresh_token)
-//   api        https://api.spotify.com/v1/...            Authorization: Bearer <token>
-//
-// Tidal — OAuth 2.0 client credentials for an application, and every request
-// needs a country:
-//   token      https://auth.tidal.com/v1/oauth2/token    (client_id + client_secret)
-//   api        https://openapi.tidal.com/v2/...?countryCode=US
-//              Authorization: Bearer <token>
-//
-// The demo reads assets/canora/tidal.json so it runs without credentials; these
-// fields are what a real deployment would keep in a secret store and use to
-// fill the catalogue datasource.
-
-pub type Provider {
-  Spotify
-  Tidal
-}
-
-pub fn hamburger_selected(which: String) -> Nil {
-  let _ = which
-  Nil
-}
-
-pub fn provider_selected(which: String) -> Nil {
-  let provider = case which {
-    \"Spotify\" -> Spotify
-    _ -> Tidal
-  }
-  let _ = provider
-  Nil
-}
-
-pub fn save_clicked() -> Nil {
-  // Store the provider's client id and token outside the form.
-  Nil
-}
-
-pub fn connect_clicked() -> Nil {
-  // Exchange the stored credentials for a token and point the datasource at
-  // the catalogue it unlocks.
-  Nil
-}
-
-pub fn tidal_api_loaded(count: Int) -> Nil {
-  let _ = count
-  Nil
-}
-"
+  handler_source("connect.gleam")
 }
 
 fn player_source() -> String {
-  "// Canora · now playing
-
-pub fn play_clicked() -> Nil {
-  Nil
-}
-
-pub fn next_clicked() -> Nil {
-  Nil
-}
-
-pub fn prev_clicked() -> Nil {
-  Nil
-}
-
-pub fn shuffle_clicked() -> Nil {
-  Nil
-}
-
-pub fn repeat_clicked() -> Nil {
-  Nil
-}
-
-pub fn heart_clicked() -> Nil {
-  Nil
-}
-"
+  handler_source("player.gleam")
 }

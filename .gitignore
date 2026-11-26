@@ -2,6 +2,7 @@
 /bench/target/
 /bench/results/
 /gleam/**/build/
+/demo/**/build/
 /gleam/**/priv/native/*
 !/gleam/**/priv/native/.gitkeep
 /generated/*

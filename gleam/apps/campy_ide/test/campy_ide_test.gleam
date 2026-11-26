@@ -1398,6 +1398,53 @@ fn canora_project() -> project.Project {
   canora.project()
 }
 
+pub fn an_event_is_bound_only_while_its_handler_exists_test() {
+  // The demo's cat-cafe source declares pet_button_clicked, not a feed one.
+  let model = demo_state() |> state.select("pet-button")
+  let rows = ide_ui.event_items(model)
+  let assert Ok(clicked) = list.find(rows, fn(row) { row.key == "clicked" })
+  clicked.value |> should.equal("pet_button_clicked")
+  // Opening it keeps the name; deleting the function reverts the row.
+  let opened = state.open_event(model, "clicked")
+  let assert Some(module) = state.active_module(opened)
+  let without =
+    string.replace(
+      state.module_source(module),
+      "pet_button_clicked",
+      "pet_clicked",
+    )
+  let module = state.set_module_source(module, without)
+  let edited =
+    state.State(
+      ..opened,
+      project: project.update_module(opened.project, module),
+    )
+  ide_ui.event_items(edited)
+  |> list.find(fn(row) { row.key == "clicked" })
+  |> fn(found) {
+    case found {
+      Ok(row) -> row.value |> should.equal("(none)")
+      Error(_) -> should.fail()
+    }
+  }
+  // A kind without that event has no row at all; a stub created on click is a
+  // real function afterwards.
+  campy_form.has_handler(
+    "pub fn play_clicked() {
+  Nil
+}",
+    "play_clicked",
+  )
+  |> should.be_true
+  campy_form.has_handler(
+    "pub fn play_clicked() {
+  Nil
+}",
+    "stop_clicked",
+  )
+  |> should.be_false
+}
+
 pub fn console_logs_and_clears_test() {
   let logged =
     demo_state()
