@@ -113,7 +113,10 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
 - **Moving the module window** takes its delta in canvas coordinates. Form
   coordinates move with the window being dragged, so a delta taken in them
   chases its own output — the jitter the drag had.
-- **Popups** read the live geometry signals when they open (a resize or a move
+- **Popups** state their `display` on every build: the closed layer sets
+  `display: none` on the element the next popup reuses, and a property a new
+  view leaves unset is one the element keeps — so every popup after the first
+  was invisible. They read the live geometry signals when they open (a resize or a move
   changes those, not the loaded document), and closing keeps the card mounted
   but hidden so its area is repainted instead of left as an empty box.
 - **The inspector keeps its tab** when the selection changes; **double-clicking**
@@ -132,11 +135,15 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   `gleam/packages/campy_form/test/fixtures/project-v12.campy`) is read as v13
   with no default module, so a user's workspace survives the upgrade; older
   versions are still rejected.
-- The in-app file browser filters by what the dialog is for (project files,
-  images), so the Open dialog cannot offer files the codec will refuse, starts
-  in the project's own directory rather than the home directory, and its list
-  is clipped to the dialog (a list's scroll port otherwise grows to its content
-  and paints the entries across the window).
+- The in-app file browser is the fallback when no native dialog is installed
+  (this machine has neither zenity nor kdialog; the portal exists, but driving
+  it needs a DBus client with a main loop, which the BEAM side does not have).
+  It filters by what the dialog is for (project files, images), starts in the
+  project's own directory, clips its list to the dialog (a scroll port
+  otherwise grows to its content and paints the entries across the window),
+  dims the window behind it with a backdrop that swallows presses, names the
+  filter in its title, takes an absolute path in the Name field (Open navigates
+  into a typed directory), and accepts with Enter.
 
 ### Presentation is a first-class part of drag feel
 

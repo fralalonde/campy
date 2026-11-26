@@ -290,6 +290,10 @@ fn write_png(path: &Path, pixels: &Pixels) -> Result<(), String> {
 /// events, the BEAM's selection — is the path a human's click takes.
 pub const CLICK_ENV: &str = "CAMPY_UI_CLICK";
 
+/// Several gestures in one run, each a `x,y` click, separated by `;`:
+/// `CAMPY_UI_CLICKS=1170,423;1170,300` opens a popup and picks an item.
+pub const CLICKS_ENV: &str = "CAMPY_UI_CLICKS";
+
 /// The environment variable naming a press, a move and a release:
 /// `CAMPY_UI_DRAG=x1,y1,x2,y2`. The modifiers come from [`MODS_ENV`].
 pub const DRAG_ENV: &str = "CAMPY_UI_DRAG";
@@ -327,6 +331,23 @@ pub fn click_at() -> Option<Point<CssPx, Css>> {
     point(&std::env::var(CLICK_ENV).ok()?)
 }
 
+/// The clicks [`CLICKS_ENV`] asks for, in order.
+pub fn clicks_at() -> Vec<(Point<CssPx, Css>, Point<CssPx, Css>)> {
+    let Ok(raw) = std::env::var(CLICKS_ENV) else {
+        return Vec::new();
+    };
+    raw.split(';')
+        .filter_map(point_with_flags)
+        .map(|at| (at, at))
+        .collect()
+}
+
+/// A point written `x,y`, ignoring a `+modifiers` suffix.
+fn point_with_flags(raw: &str) -> Option<Point<CssPx, Css>> {
+    let raw = raw.split('+').next().unwrap_or(raw);
+    point(raw)
+}
+
 /// The gesture [`DRAG_ENV`] asks for, if any: press at the first point, move
 /// to the second and release there.
 pub fn drag_at() -> Option<(Point<CssPx, Css>, Point<CssPx, Css>)> {
@@ -359,8 +380,10 @@ pub fn mods() -> Modifiers {
 /// frame, at [`click_at`].
 pub struct ClickProbe<A> {
     inner: A,
-    /// Press-then-release points: the same point twice is a click.
-    gesture: Option<(Point<CssPx, Css>, Point<CssPx, Css>)>,
+    /// Press-then-release points, in order: the same point twice is a click.
+    gestures: Vec<(Point<CssPx, Css>, Point<CssPx, Css>)>,
+    /// Which one is in flight.
+    current: usize,
     modifiers: Modifiers,
     /// How many moves the drag crosses, and how far apart they are.
     steps: u32,
@@ -375,10 +398,14 @@ pub struct ClickProbe<A> {
 impl<A: AppHandler> ClickProbe<A> {
     /// Wraps `inner`; does nothing unless [`CLICK_ENV`] is set.
     pub fn new(inner: A) -> Self {
-        let gesture = match (click_at(), drag_at()) {
-            (Some(at), _) => Some((at, at)),
-            (None, drag) => drag,
-        };
+        let mut gestures = clicks_at();
+        if gestures.is_empty() {
+            match (click_at(), drag_at()) {
+                (Some(at), _) => gestures.push((at, at)),
+                (None, Some(drag)) => gestures.push(drag),
+                (None, None) => (),
+            }
+        }
         let steps = std::env::var(STEPS_ENV)
             .ok()
             .and_then(|raw| raw.trim().parse().ok())
@@ -392,7 +419,8 @@ impl<A: AppHandler> ClickProbe<A> {
         );
         Self {
             inner,
-            gesture,
+            gestures,
+            current: 0,
             modifiers: mods(),
             steps,
             interval,
@@ -477,7 +505,7 @@ impl<A: AppHandler> AppHandler for ClickProbe<A> {
         surface: zgui::platform::SurfaceId,
         event: zgui::platform::SurfaceEvent,
     ) {
-        if self.gesture.is_some() && !self.fired {
+        if !self.gestures.is_empty() && !self.fired {
             self.surface = Some(surface);
             // The first frame is the window's own sign that it exists; the
             // press waits a little longer so layout and the initial load have
@@ -506,7 +534,8 @@ impl<A: AppHandler> AppHandler for ClickProbe<A> {
         if self.fired {
             return;
         }
-        let (Some((from, to)), Some(surface), Some(due)) = (self.gesture, self.surface, self.due)
+        let (Some(&(from, to)), Some(surface), Some(due)) =
+            (self.gestures.get(self.current), self.surface, self.due)
         else {
             return;
         };
@@ -536,8 +565,15 @@ impl<A: AppHandler> AppHandler for ClickProbe<A> {
                 to,
                 Some(PointerButton::Primary),
             );
-            self.fired = true;
-            self.due = None;
+            self.current += 1;
+            if self.current >= self.gestures.len() {
+                self.fired = true;
+                self.due = None;
+                return;
+            }
+            // The next gesture waits a moment, as a second click does.
+            self.step = 0;
+            self.due = Some(Instant::now() + self.interval * 20);
             return;
         }
         self.step += 1;

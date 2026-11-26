@@ -1259,6 +1259,20 @@ pub fn file_dialogs_start_in_the_project_directory_test() {
   opened.dir |> should.equal(dir)
 }
 
+pub fn a_typed_absolute_path_is_used_as_it_is_test() {
+  let model = demo_state()
+  // The Name field doubles as a path field.
+  let typed =
+    state.browser_open(model, state.OpenFile, "/tmp", "/tmp/other/campy.campy")
+  state.browser_path(typed) |> should.equal("/tmp/other/campy.campy")
+  // A bare name still resolves against the directory.
+  let named = state.browser_open(model, state.OpenFile, "/tmp/x", "a.campy")
+  state.browser_path(named) |> should.equal("/tmp/x/a.campy")
+  // Directories are recognised, which is what makes Open look inside one.
+  state.is_directory("/tmp") |> should.be_true
+  state.is_directory("/tmp/campy-no-such-file.campy") |> should.be_false
+}
+
 pub fn console_logs_and_clears_test() {
   let logged =
     demo_state()

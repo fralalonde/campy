@@ -1402,10 +1402,10 @@ fn popup_open(popup: Popup) -> Bool {
 fn popup_title(popup: Popup) -> String {
   case popup {
     NoPopup -> ""
-    OpenFile -> "Open project"
-    SaveAs -> "Save project as"
-    PickPicture -> "Choose picture"
-    PickProjectIcon -> "Choose project icon"
+    OpenFile -> "Open project (.campy)"
+    SaveAs -> "Save project as (.campy)"
+    PickPicture -> "Choose picture (image)"
+    PickProjectIcon -> "Choose project icon (image)"
   }
 }
 

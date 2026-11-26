@@ -1244,6 +1244,12 @@ fn section_effect(
     "clicked" -> button_action(name)
     "selected" -> list_action(model, name, payload)
     "edited" -> edit_action(name, payload)
+    // Enter in a dialog field means the dialog's button: no mouse needed.
+    "accepted" ->
+      case name {
+        "browser-name" -> ControlRun("browser-accept", "")
+        _ -> edit_action(name, payload)
+      }
     "toggled" -> toggle_action(name, payload)
     _ -> ControlKeep
   }
@@ -1695,8 +1701,7 @@ fn dispatch(model: State, name: String, payload: String) -> State {
           })
         Error(_) -> model
       }
-    "browser-accept" ->
-      popup_accept(state.browser_close(model), state.browser_path(model))
+    "browser-accept" -> browser_accept(model)
     "run-app" -> run_form(model)
     "update-app" -> update_app(model)
     "stop-app" -> stop_form(model)
@@ -1832,6 +1837,21 @@ fn save_path(model: State, path: String) -> State {
       state.set_saved(model, saved)
       |> state.set_status("Saved " <> path)
     Error(error) -> state.set_status(model, "Save failed: " <> error)
+  }
+}
+
+/// The dialog's Open/Save/Use button, and Enter in its name field: a typed
+/// directory is something to look inside, not something to open.
+fn browser_accept(model: State) -> State {
+  let path = state.browser_path(model)
+  case string.trim(path) {
+    "" -> state.set_status(model, "Type a file name first")
+    path ->
+      case state.is_directory(path) {
+        True -> state.browser_navigate(state.browser_close(model), path)
+        False ->
+          popup_accept(state.browser_close(model), state.browser_path(model))
+      }
   }
 }
 

@@ -289,6 +289,9 @@ impl Host {
 
     /// Opens or closes the popup of `control`, replacing whatever was showing.
     fn toggle_popup(&self, control: u64) {
+        if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
+            eprintln!("campy popup toggle {control} (was {:?})", self.popup.get());
+        }
         let showing = self.popup.get();
         self.popup.set(if showing == Some(control) {
             None
@@ -300,6 +303,9 @@ impl Host {
 
     /// Closes the popup, if one is showing.
     fn close_popup(&self) {
+        if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
+            eprintln!("campy popup close (was {:?})", self.popup.get());
+        }
         if self.popup.get().is_some() {
             self.popup.set(None);
             self.bump_popup();
@@ -815,6 +821,9 @@ fn first_of_kind(controls: &[ControlDesc], kinds: &[&str]) -> Option<u64> {
 /// `control()` row each, drawn at the document root above everything.
 fn popup_card(host: &Rc<Host>) -> AnyView {
     let _version = host.popup_version();
+    if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
+        eprintln!("campy popup build (open {:?})", host.popup.get());
+    }
     // Closing keeps the last card's rectangle: the layer below hides in place
     // instead of being unmounted, so the area it covered is repainted. An
     // unmounted popup left its pixels behind (the "empty box" on close).
@@ -833,6 +842,9 @@ fn popup_card(host: &Rc<Host>) -> AnyView {
         );
     };
     let Some(&(x, y, trigger_w, h)) = live_rects(host).get(&control) else {
+        if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
+            eprintln!("campy popup: no rect for {control}");
+        }
         return AnyView::new(r#box());
     };
     let is_menu = host
@@ -885,6 +897,10 @@ fn popup_card(host: &Rc<Host>) -> AnyView {
         } else {
             "campy-choice-popup"
         })
+        // Stated on every build: the closed layer sets `display: none` on the
+        // same element, and a property the new view leaves unset is one the
+        // element keeps — which made every popup after the first invisible.
+        .style_property("display", Some("block".to_owned()))
         .style_property("left", Some(px(x)))
         .style_property("top", Some(px(top)))
         .style_property("width", Some(px(width)))
@@ -1277,6 +1293,38 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals, passive
             // editor owns the caret. A read-only field never edits, so the
             // change handler can stay attached either way.
             let placeholder = prop_string(desc, "placeholder").unwrap_or_default();
+            // A dialog field with `accept-on-enter` reports Enter as
+            // `accepted`, so a name can be confirmed without reaching for the
+            // mouse. The Input itself leaves Enter to the form.
+            if prop_bool(desc, "accept-on-enter").unwrap_or(false) {
+                let accept_host = host.clone();
+                let change_host = host.clone();
+                let accepted = text;
+                let mut input = AnyView::new(
+                    zgui::elements::r#box()
+                        .on(events::KEY_DOWN, move |cx| {
+                            let event: &zgui::vocab::KeyEvent = cx;
+                            if matches!(
+                                &event.key_without_modifiers,
+                                zgui::vocab::Key::Named(zgui::vocab::NamedKey::Enter)
+                            ) {
+                                accept_host.emit(id, "accepted", accepted.get());
+                            }
+                        })
+                        .child(
+                            view! {
+                                Input(
+                                    value = text,
+                                    placeholder = prop_string(desc, "placeholder").unwrap_or_default(),
+                                    read_only = passive || prop_bool(desc, "read-only").unwrap_or(false),
+                                    on_change = UnsyncCallback::new(move |value: String| change_host.emit(id, "edited", value)),
+                                ) {}
+                            },
+                        ),
+                );
+                input = AnyView::new(input);
+                return input;
+            }
             let read_only = passive || prop_bool(desc, "read-only").unwrap_or(false);
             AnyView::new(view! {
                 Input(

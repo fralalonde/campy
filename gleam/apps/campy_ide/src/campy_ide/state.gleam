@@ -2729,8 +2729,24 @@ pub fn browser_set_name(state: State, name: String) -> State {
 
 pub fn browser_path(state: State) -> String {
   case state.browser {
-    Some(browser) -> join_path(browser.dir, browser.name)
+    Some(browser) ->
+      // A typed absolute path is used as it is: the Name field doubles as a
+      // path field, so a project can be opened without clicking through the
+      // tree first.
+      case string.starts_with(browser.name, "/") {
+        True -> browser.name
+        False -> join_path(browser.dir, browser.name)
+      }
     None -> ""
+  }
+}
+
+/// Whether `path` names a directory (which the dialog navigates into, rather
+/// than opening as a file).
+pub fn is_directory(path: String) -> Bool {
+  case fs_list_dir(path) {
+    Ok(_) -> True
+    Error(_) -> False
   }
 }
 

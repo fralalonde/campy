@@ -347,6 +347,9 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-check-row { align-items: center; gap: 8px; }",
     ".campy-picture { width: 100%; height: 100%; }",
     // --- dialogs ------------------------------------------------------------
+    // The file dialog's backdrop: dims the window and swallows presses so a
+    // click behind the dialog cannot reach the canvas.
+    ".campy-backdrop { background: rgba(0, 0, 0, 0.45); }",
     ".campy-dialog { background: var(--campy-panel); border: 1px solid var(--campy-border);
                      border-radius: 10px; }",
     ".campy-dialog-title { font-size: 16px; font-weight: 600; }",

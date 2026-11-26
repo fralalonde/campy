@@ -705,6 +705,7 @@ pub fn desc(view: ShellView) -> List(ControlDesc) {
           settings_dialog(view),
           agent_dialog(view),
           project_dialog(view),
+          browser_backdrop(view),
           browser_dialog(view),
           context_menu(view),
           align_menu(view),
@@ -1689,6 +1690,17 @@ fn project_dialog(view: ShellView) -> ControlDesc {
   ])
 }
 
+/// Behind the file dialog: a panel over the whole window so a click meant for
+/// the dialog cannot reach the canvas and move a component. It takes the press
+/// and does nothing with it.
+fn browser_backdrop(view: ShellView) -> ControlDesc {
+  let l = view.layout
+  node("browser-backdrop", "panel", "", 0, 0, l.width, l.height)
+  |> with_class("campy-backdrop")
+  |> with_props([layout_prop("free")])
+  |> shown(view.popup_open)
+}
+
 fn browser_dialog(view: ShellView) -> ControlDesc {
   node(
     "browser-panel",
@@ -1733,7 +1745,8 @@ fn browser_dialog(view: ShellView) -> ControlDesc {
     node("browser-name-label", "label", "Name", 16, 328, 60, 28)
       |> with_class("campy-dialog-label"),
     node("browser-name", "edit", view.browser_name, 82, 328, 422, 28)
-      |> with_class("campy-dialog-edit"),
+      |> with_class("campy-dialog-edit")
+      |> with_props([#("accept-on-enter", WireBool(True))]),
     node("browser-accept", "button", view.popup_action, 16, 370, 120, 32)
       |> with_class("campy-dialog-primary")
       |> with_props([hint_prop("Confirm")]),
