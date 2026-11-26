@@ -1005,10 +1005,16 @@ pub fn the_canora_demo_project_roundtrips_test() {
   |> list.any(fn(control) { control.name == "provider" })
   |> should.be_true
   // Each service has its own credentials; they are not the same API.
-  let names =
-    list.map(services.form.controls, fn(control) { control.name })
+  let names = list.map(services.form.controls, fn(control) { control.name })
   list.each(
-    ["spotify_id", "spotify_token", "tidal_id", "tidal_secret", "tidal_token", "tidal_country"],
+    [
+      "spotify_id",
+      "spotify_token",
+      "tidal_id",
+      "tidal_secret",
+      "tidal_token",
+      "tidal_country",
+    ],
     fn(name) { list.contains(names, name) |> should.be_true },
   )
   // The hamburger menu is on the app's own forms, with its three items.

@@ -1330,14 +1330,9 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals, passive
             AnyView::new(
                 r#box()
                     .class("campy-nonvisual")
-                    .child(
-                        r#box()
-                            .class("campy-nonvisual-glyph-box")
-                            .child(
-                                text_element(move || glyph.to_owned())
-                                    .class("campy-nonvisual-glyph"),
-                            ),
-                    )
+                    .child(r#box().class("campy-nonvisual-glyph-box").child(
+                        text_element(move || glyph.to_owned()).class("campy-nonvisual-glyph"),
+                    ))
                     .child(text_element(move || text.get()).class("campy-nonvisual-name")),
             )
         }
