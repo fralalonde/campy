@@ -4,7 +4,11 @@
 
 **Idea:** A native, Gleam-first RAD studio. Design forms, edit properties and handlers, and run the result in a live window. The IDE uses the same component model and runtime as the apps it builds.
 
-**Why:** Keep application state and behavior on the BEAM; use zgui for native rendering. A Rust NIF owns the UI thread and passes events to Gleam. Forms update through control descriptions and granular commands without rebuilding the bridge.
+**Inspiration** Delphi, VB and other WYSIWIG IDEs of lore. Component-based distributed applications enabling rapid iteration and immediate feedback without going through the madness of a modern web stack.
+Distributed by default trough BEAM VM, kept fast and safe with Rust NIFs.
+
+**How:** Keep application state and behavior on the BEAM; use zgui for native rendering. A Rust NIF owns the UI thread and passes events to Gleam. Forms update through control descriptions and granular commands without rebuilding the bridge.
+
 
 ## Requirements
 
