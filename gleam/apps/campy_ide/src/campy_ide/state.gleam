@@ -122,6 +122,9 @@ pub type State {
     view: ModuleView,
     selected: Option(String),
     selection: List(String),
+    /// Whether the module window itself is selected: clicking its title bar
+    /// shows the eight handles, so the form is resized like a component.
+    window_selected: Bool,
     /// The components a marquee currently *would* select, while the button is
     /// still down. Drawn as outlines and handles so the frame shows its
     /// contents as it grows, without touching the real selection.
@@ -247,6 +250,7 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     view: FormView,
     selected: None,
     selection: [],
+    window_selected: False,
     preview_selection: [],
     tab: Properties,
     editor: View,
@@ -3282,7 +3286,11 @@ pub fn pointer_down(state: State, x: Int, y: Int) -> State {
                   }
                 id -> id
               }
-              State(..state, gesture: Pressing(#(x, y), target))
+              State(
+                ..state,
+                window_selected: False,
+                gesture: Pressing(#(x, y), target),
+              )
             }
           }
       }
@@ -3298,20 +3306,31 @@ fn grip_at(
   x: Int,
   y: Int,
 ) -> Option(#(String, Bool)) {
-  case state.selected, state.selection {
-    Some(_), [_, ..] ->
-      case selected_control(state) {
-        Some(control) ->
-          case
-            campy_form.layout_of(form, campy_form.parent_of(form, control.id))
-          {
-            campy_form.Free ->
-              control_grip(campy_form.bounds(form, control), x, y)
-            _ -> None
-          }
+  case state.window_selected {
+    True ->
+      case control_grip(#(0, 0, form.width, form.height), x, y) {
+        Some(#(mode, _)) -> Some(#(mode, True))
         None -> None
       }
-    _, _ -> window_grip_hit(form, x, y)
+    False ->
+      case state.selected, state.selection {
+        Some(_), [_, ..] ->
+          case selected_control(state) {
+            Some(control) ->
+              case
+                campy_form.layout_of(
+                  form,
+                  campy_form.parent_of(form, control.id),
+                )
+              {
+                campy_form.Free ->
+                  control_grip(campy_form.bounds(form, control), x, y)
+                _ -> None
+              }
+            None -> None
+          }
+        _, _ -> window_grip_hit(form, x, y)
+      }
   }
 }
 
@@ -3573,8 +3592,33 @@ pub fn pointer_up(state: State, x: Int, y: Int, additive: Bool) -> State {
           }
       }
     }
-    MovingWindow(_) ->
-      State(..select(state, ""), gesture: Idle, last_click: None)
+    MovingWindow(last) -> {
+      // A press on the title bar that does not travel is a click: it selects
+      // the window, which is what puts the eight handles around the form.
+      let #(canvas_x, canvas_y) = canvas_point(state, x, y)
+      let clicked =
+        absolute(canvas_x - last.0) <= 3 && absolute(canvas_y - last.1) <= 3
+      let next = case clicked {
+        True ->
+          State(
+            ..state,
+            window_selected: True,
+            selected: None,
+            selection: [],
+            selected_project: False,
+            active_handler: None,
+            highlight: None,
+            editing: None,
+            status: "Window · "
+              <> case active_form(state) {
+                Some(form) -> form.title
+                None -> ""
+              },
+          )
+        False -> state
+      }
+      State(..next, gesture: Idle, last_click: None)
+    }
     Resizing(_, _, _) ->
       State(..end_gesture(state), gesture: Idle, last_click: None)
   }

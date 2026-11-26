@@ -360,7 +360,12 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
             });
             *host.window.borrow_mut() = Some(window);
             let close_host = host.clone();
-            let _guard = on_close_request(move || {
+            // The guard is what keeps the callback registered; dropping it at
+            // the end of this block unregistered it, so a window the user
+            // closed was never marked closed — no `closed` event, a preview
+            // that stayed "running" and a stop button that never went back to
+            // run.
+            *host.close_guard.borrow_mut() = Some(on_close_request(move || {
                 // A window this thread closed to swap in a replacement is not
                 // the user closing the session: the control is shared with the
                 // replacement, and marking it closed would reap that instead.
@@ -369,7 +374,7 @@ fn session_view(host: Rc<Host>) -> impl FnMut() -> AnyView + 'static {
                     close_host.shared.nudge();
                 }
                 zgui::prelude::CloseResponse::Close
-            });
+            }));
         }
         // The queue wakes the window instead of a polling timer: a `work`
         // counter written from the BEAM thread (or by a close) runs the drain,

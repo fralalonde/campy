@@ -762,6 +762,35 @@ pub fn a_marquee_outlines_its_candidates_before_release_test() {
   list.length(released.selection) |> should.equal(2)
 }
 
+pub fn clicking_the_title_bar_selects_the_window_test() {
+  // A press on the title bar that does not travel selects the window; the
+  // eight handles are then around the form itself.
+  let model = demo_state() |> state.select("pet-button")
+  let clicked =
+    model
+    |> state.pointer_down(100, -14)
+    |> state.pointer_up(100, -14, False)
+  clicked.window_selected |> should.be_true
+  clicked.selected |> should.equal(None)
+  clicked.selection |> should.equal([])
+  // The empty canvas click drops it again.
+  let cleared =
+    clicked
+    |> state.pointer_down(630, 410)
+    |> state.pointer_up(630, 410, False)
+  cleared.window_selected |> should.be_false
+  // Its corner grips resize the form, from any of the eight.
+  let assert Some(form) = state.active_form(clicked)
+  let resized =
+    clicked
+    |> state.pointer_down(form.width, form.height / 2)
+    |> state.pointer_move(form.width + 40, form.height / 2)
+    |> state.pointer_up(form.width + 40, form.height / 2, False)
+  let assert Some(after) = state.active_form(resized)
+  after.width |> should.equal(form.width + 40)
+  after.height |> should.equal(form.height)
+}
+
 pub fn the_pointer_says_what_it_would_do_test() {
   let model = demo_state() |> state.select("pet-button")
   // Over a component that is in the block: grab. The block's grip: a resize

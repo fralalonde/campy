@@ -101,6 +101,11 @@ pub struct Host {
     pub live_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// This window's handle once the view is running (`use_window`).
     pub window: RefCell<Option<zgui::runtime::windows::WindowHandle>>,
+    /// Keeps this window's close-request callback registered. A guard that is
+    /// dropped unregisters it, and a window the user then closes looks like a
+    /// session that never ended: no `closed` event, a preview that stays
+    /// "running", a stop button that never goes back to run.
+    pub close_guard: RefCell<Option<zgui::runtime::windows::CloseGuard>>,
     /// Whether the debug fullscreen request was made (`CAMPY_UI_FULLSCREEN`).
     pub fullscreen_done: Cell<bool>,
     /// The control whose popup is showing, by id (a `menu`'s items or a
@@ -188,6 +193,7 @@ impl Host {
             deferred_window: Cell::new(false),
             live_generation: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             window: RefCell::new(None),
+            close_guard: RefCell::new(None),
             fullscreen_done: Cell::new(false),
             popup: Cell::new(None),
             kinds: RefCell::new(HashMap::new()),

@@ -145,6 +145,20 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   filter in its title, takes an absolute path in the Name field (Open navigates
   into a typed directory), and accepts with Enter.
 
+### Window close, window selection (as built)
+
+- **A closed window is a stopped app.** The close-request callback's guard was
+  dropped at the end of the block that registered it, which unregisters the
+  callback: a preview the user closed never marked its session closed, so no
+  `closed` event reached the loop, the preview stayed in the model, and its run
+  button stayed a stop button. The guard is now owned by the window's `Host`, so
+  it lives as long as the window. The button flips back to ▶ on a normal close.
+- **The module window is selectable.** A *click* on its title bar (a press that
+  does not travel) selects the window: eight handles appear around the whole
+  form, and any of them resizes it (one undo step, as with components). A drag
+  from the title bar still moves the window; a press on a component or the empty
+  canvas drops the window selection.
+
 ### Tabs and opening projects (as built)
 
 - **Tabs close one at a time.** Every editor tab carries its own × (and

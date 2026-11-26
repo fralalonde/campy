@@ -423,6 +423,9 @@ pub type ShellView {
     project_title: String,
     project_path: String,
     project_selected: Bool,
+    /// The module window itself is selected: its title bar was clicked, and
+    /// the eight handles around the form resize it.
+    window_selected: Bool,
     /// The module this project runs, and the modules it could run. Empty means
     /// the project is not runnable and the top bar offers no project button.
     project_app: String,
@@ -501,6 +504,7 @@ pub fn empty_view() -> ShellView {
     project_title: "",
     project_path: "",
     project_selected: False,
+    window_selected: False,
     project_app: "",
     project_app_options: [],
     settings_open: False,
@@ -1175,7 +1179,7 @@ fn canvas(view: ShellView) -> ControlDesc {
         |> shown(dropping),
       node("selection-rect", "panel", "", sx, sy, sw, sh)
         |> with_class("campy-selected")
-        |> shown(view.has_selection),
+        |> shown(view.has_selection || view.window_selected),
     ],
     list.append(
       selection_members(view),
@@ -1208,26 +1212,47 @@ fn selection_members(view: ShellView) -> List(ControlDesc) {
 /// a fresh `LoadUi` instead of a handful of geometry ops.
 fn grips(view: ShellView) -> List(ControlDesc) {
   let #(sx, sy, sw, sh) = view.canvas_selection
-  let mx = sx + sw / 2
-  let my = sy + sh / 2
-  let selected = view.has_selection && view.selection_free
   let #(form_w, form_h) = canvas_size(view.canvas)
-  [
-    grip("nw", sx, sy) |> shown(selected),
-    grip("n", mx, sy) |> shown(selected),
-    grip("ne", sx + sw, sy) |> shown(selected),
-    grip("w", sx, my) |> shown(selected),
-    grip("e", sx + sw, my) |> shown(selected),
-    grip("sw", sx, sy + sh) |> shown(selected),
-    grip("s", mx, sy + sh) |> shown(selected),
-    grip("se", sx + sw, sy + sh) |> shown(selected),
-    grip(
-      "window",
-      view.window_x + form_w,
-      view.window_y + form_title_height + form_h,
-    )
-      |> shown(!view.has_selection),
-  ]
+  // A selected window takes the eight handles itself, around the whole form.
+  case view.window_selected {
+    True -> {
+      let wx = view.window_x
+      let wy = view.window_y + form_title_height
+      let mx = wx + form_w / 2
+      let my = wy + form_h / 2
+      [
+        grip("nw", wx, wy),
+        grip("n", mx, wy),
+        grip("ne", wx + form_w, wy),
+        grip("w", wx, my),
+        grip("e", wx + form_w, my),
+        grip("sw", wx, wy + form_h),
+        grip("s", mx, wy + form_h),
+        grip("se", wx + form_w, wy + form_h),
+      ]
+    }
+    False -> {
+      let mx = sx + sw / 2
+      let my = sy + sh / 2
+      let selected = view.has_selection && view.selection_free
+      [
+        grip("nw", sx, sy) |> shown(selected),
+        grip("n", mx, sy) |> shown(selected),
+        grip("ne", sx + sw, sy) |> shown(selected),
+        grip("w", sx, my) |> shown(selected),
+        grip("e", sx + sw, my) |> shown(selected),
+        grip("sw", sx, sy + sh) |> shown(selected),
+        grip("s", mx, sy + sh) |> shown(selected),
+        grip("se", sx + sw, sy + sh) |> shown(selected),
+        grip(
+          "window",
+          view.window_x + form_w,
+          view.window_y + form_title_height + form_h,
+        )
+          |> shown(!view.has_selection),
+      ]
+    }
+  }
 }
 
 fn indices(count: Int) -> List(Int) {

@@ -124,6 +124,7 @@ pub fn snapshot(model: State) -> Snapshot {
     project_title: model.project.title,
     project_path: model.project.path,
     project_selected: model.selected_project,
+    window_selected: model.window_selected,
     project_app: case project.default_module(model.project) {
       Some(module) -> module.name
       None -> "None"
@@ -315,23 +316,30 @@ fn selection_free(model: State) -> Bool {
 
 // The selection outline in canvas coordinates (form window offset + borders).
 fn canvas_selection(model: State) -> #(Int, Int, Int, Int) {
-  case active_form(model) {
-    None -> #(0, 0, 0, 0)
-    Some(form) -> {
+  case model.window_selected, active_form(model) {
+    True, Some(form) -> {
       let #(window_x, window_y) = state.window_position(model)
-      let boxes =
-        shown_selection(model)
-        |> list.filter_map(fn(id) {
-          case campy_form.find_control(form, id) {
-            Some(control) -> {
-              let #(x, y, w, h) = campy_form.bounds(form, control)
-              Ok(#(window_x + x, window_y + 28 + y, w, h))
-            }
-            None -> Error(Nil)
-          }
-        })
-      union_boxes(boxes)
+      #(window_x, window_y + shell.form_title_height, form.width, form.height)
     }
+    _, _ ->
+      case active_form(model) {
+        None -> #(0, 0, 0, 0)
+        Some(form) -> {
+          let #(window_x, window_y) = state.window_position(model)
+          let boxes =
+            shown_selection(model)
+            |> list.filter_map(fn(id) {
+              case campy_form.find_control(form, id) {
+                Some(control) -> {
+                  let #(x, y, w, h) = campy_form.bounds(form, control)
+                  Ok(#(window_x + x, window_y + 28 + y, w, h))
+                }
+                None -> Error(Nil)
+              }
+            })
+          union_boxes(boxes)
+        }
+      }
   }
 }
 
