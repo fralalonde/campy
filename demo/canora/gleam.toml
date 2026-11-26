@@ -9,6 +9,7 @@ gleam = ">= 1.16.0 and < 2.0.0"
 # the standard library is the only dependency.
 [dependencies]
 gleam_stdlib = ">= 0.70.0 and < 1.0.0"
+campy_form = { path = "../../gleam/packages/campy_form" }
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"

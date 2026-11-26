@@ -1,3 +1,6 @@
+import campy_form
+import campy_form/project
+import canora_project
 import connect
 import gleam/list
 import gleam/option.{None, Some}
@@ -76,4 +79,86 @@ pub fn the_spotify_authorize_url_is_a_pkce_request_test() {
     "redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback",
   ]
   |> list.each(fn(part) { string.contains(url, part) |> should.be_true })
+}
+
+fn module_of(loaded: project.Project, id: String) -> project.Module {
+  let assert Some(module) = project.find_module(loaded, id)
+  module
+}
+
+pub fn the_sample_project_roundtrips_with_real_handler_sources_test() {
+  let path = "/tmp/canora-sample-roundtrip.campy"
+  let demo = canora_project.project()
+  demo.default_module |> should.equal("library")
+  let assert Ok(_saved) = project.save(demo, path)
+  let assert Ok(loaded) = project.load(path)
+  loaded.modules
+  |> list.map(fn(module) { module.name })
+  |> should.equal(["Library", "Search", "Player", "Services"])
+  // The non-visual components are part of the forms, with their properties.
+  let library = module_of(loaded, "library")
+  let timers =
+    list.filter(library.form.controls, fn(control) {
+      control.kind == campy_form.Timer
+    })
+  let datasources =
+    list.filter(library.form.controls, fn(control) {
+      control.kind == campy_form.Datasource
+    })
+  list.length(timers) |> should.equal(1)
+  list.length(datasources) |> should.equal(1)
+  let assert [timer, ..] = timers
+  campy_form.control_prop(timer, "target", "") |> should.equal("progress")
+  // The page is free-layout: the panels are backgrounds and every child sits
+  // where it belongs on the page.
+  library.form.aligns |> should.equal([])
+  // The Services module points a datasource at the Tidal catalogue and carries
+  // both services' credentials.
+  let services = module_of(loaded, "connect")
+  let urls =
+    list.filter(services.form.controls, fn(control) {
+      control.kind == campy_form.Datasource
+    })
+    |> list.map(fn(control) { campy_form.control_prop(control, "url", "") })
+  urls |> should.equal(["assets/canora/tidal.json"])
+  services.form.controls
+  |> list.any(fn(control) { control.name == "provider" })
+  |> should.be_true
+  let names = list.map(services.form.controls, fn(control) { control.name })
+  list.each(
+    [
+      "spotify_id",
+      "spotify_token",
+      "tidal_id",
+      "tidal_secret",
+      "tidal_token",
+      "tidal_country",
+    ],
+    fn(name) { list.contains(names, name) |> should.be_true },
+  )
+  // The hamburger menu is on the app's own forms, with its three items.
+  let assert Ok(hamburger) =
+    list.find(library.form.controls, fn(control) { control.name == "hamburger" })
+  hamburger.kind |> should.equal(campy_form.Menu)
+  campy_form.control_prop(hamburger, "model", "")
+  |> should.equal("Settings\nAbout Canora\nQuit")
+  library.form.controls
+  |> list.any(fn(control) { control.name == "profile" })
+  |> should.be_true
+  // The handler sources are real Gleam, not stubs.
+  let assert project.Embedded(library_source) = library.source_origin
+  string.contains(library_source, "import gleam/list") |> should.be_true
+  string.contains(library_source, "persistent_term") |> should.be_true
+  string.contains(library_source, "TODO") |> should.be_false
+  let player_module = module_of(loaded, "player")
+  let assert project.Embedded(player_source) = player_module.source_origin
+  string.contains(player_source, "pub fn shuffle_clicked") |> should.be_true
+  string.contains(player_source, "TODO") |> should.be_false
+  let assert project.Embedded(connect_source) = services.source_origin
+  string.contains(connect_source, "accounts.spotify.com/api/token")
+  |> should.be_true
+  string.contains(connect_source, "auth.tidal.com/v1/oauth2/token")
+  |> should.be_true
+  string.contains(connect_source, "countryCode") |> should.be_true
+  string.contains(connect_source, "TODO") |> should.be_false
 }

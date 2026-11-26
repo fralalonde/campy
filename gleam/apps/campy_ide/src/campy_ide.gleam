@@ -131,7 +131,7 @@ fn debug_view(model: State) -> State {
     // dialog: the Open dialog as its users see it.
     // The Canora demo project, for a validation run that cannot click a
     // dialog.
-    "canora" -> open_path(model, "projects/canora.campy")
+    "canora" -> open_path(model, "examples/canora.campy")
     "browser" -> state.browser_open(model, state.OpenFile, "", "campy.campy")
 
     "code" -> state.set_view(model, state.CodeView)

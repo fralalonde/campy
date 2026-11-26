@@ -20,7 +20,7 @@ APP = ROOT / "gleam/apps/campy_ide"
 PACKAGES = [
     ROOT / "gleam/packages" / name
     for name in ("campy_ui", "campy_bridge", "campy_runtime", "campy_search_box", "campy_form", "campy_ccl", "campy_manifest", "campy_app", "campy_appgen", "campy_broker", "campy_runner")
-] + [APP, ROOT / "demo/canora"]
+] + [APP]
 NATIVE = ROOT / "gleam/packages/campy_bridge/priv/native"
 RELOAD = ROOT / "generated/reload.signal"
 DIST = ROOT / "generated/dist"

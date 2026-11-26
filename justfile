@@ -58,6 +58,12 @@ dev: build
 build-app module="widgets": build-gleam
     python scripts/workspace.py build-app {{module}}
 
+# Check the Canora sample's handlers and regenerate the project the IDE loads
+# at runtime. Samples are not part of `check`: Campy never depends on them.
+demo:
+    cd demo/canora && gleam format --check && gleam test
+    cd demo/canora && CAMPY_ROOT="$(cd ../.. && pwd)" gleam run -m canora_project
+
 # Write projects/campy-dev.campy: campy's own sources as external modules.
 dogfood:
     python scripts/make_dogfood.py

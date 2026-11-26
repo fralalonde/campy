@@ -3,15 +3,18 @@
 //// client needs — a timer that advances the transport and a datasource that
 //// fills the lists.
 ////
-//// This is the project `projects/canora.campy` is written from, so the demo can
-//// be regenerated and is checked like any other form. Handlers are ordinary
-//// Gleam module sources, embedded so the whole project is editable in the IDE.
+//// This builder belongs to the demo, not to Campy: the IDE reads
+//// `examples/canora.campy` at runtime, and nothing in the editor or the core
+//// packages imports this module. `just demo` regenerates the file from here;
+//// the handler sources in `src/` are embedded, so the sample is editable in
+//// the IDE without depending on them at runtime either.
 
 import campy_form
 import campy_form/project
+import gleam/io
 import gleam/list
 
-pub const path = "projects/canora.campy"
+pub const path = "examples/canora.campy"
 
 pub fn project() -> project.Project {
   project.Project(
@@ -565,13 +568,14 @@ fn int_to_string_positive(value: Int, acc: String) -> String {
 // when the project is built: the .campy file embeds the bytes, so the IDE can
 // edit them, and the readable modules stay the source of truth for the demo.
 
-@external(erlang, "campy_form_ffi", "read_demo")
-fn read_demo(name: String) -> Result(String, String)
+@external(erlang, "canora_project_ffi", "read_source")
+fn read_source(name: String) -> Result(String, String)
 
 fn handler_source(name: String) -> String {
-  case read_demo(name) {
+  case read_source(name) {
     Ok(source) -> source
-    Error(reason) -> panic as "Canora's handler source is missing: " <> reason
+    Error(reason) ->
+      panic as { "Canora's handler source is missing: " <> reason }
   }
 }
 
@@ -589,4 +593,14 @@ fn connect_source() -> String {
 
 fn player_source() -> String {
   handler_source("player.gleam")
+}
+
+/// `just demo` runs this: write the checked sample from the forms and the
+/// handler sources beside it. The sample is data to Campy, not a dependency of
+/// it.
+pub fn main() {
+  case project.save(project(), path) {
+    Ok(_) -> io.println("Wrote " <> path)
+    Error(reason) -> io.println("Cannot write " <> path <> ": " <> reason)
+  }
 }

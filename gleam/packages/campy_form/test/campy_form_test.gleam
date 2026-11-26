@@ -1,5 +1,4 @@
 import campy_form
-import campy_form/canora
 import campy_form/project
 import campy_form/syntax
 import campy_form/workspace
@@ -964,86 +963,6 @@ pub fn client_fills_what_the_border_siblings_leave_test() {
 fn assert_control(form: campy_form.Form, id: String) -> campy_form.Control {
   let assert Some(control) = campy_form.find_control(form, id)
   control
-}
-
-pub fn the_canora_demo_project_roundtrips_test() {
-  let path = "/tmp/canora-roundtrip.campy"
-  let demo = canora.project()
-  demo.default_module |> should.equal("library")
-  let assert Ok(_saved) = project.save(demo, path)
-  let assert Ok(loaded) = project.load(path)
-  loaded.modules
-  |> list.map(fn(module) { module.name })
-  |> should.equal(["Library", "Search", "Player", "Services"])
-  // The non-visual components are part of the forms, with their properties.
-  let assert Some(library) = project.find_module(loaded, "library")
-  let timers =
-    list.filter(library.form.controls, fn(control) {
-      control.kind == campy_form.Timer
-    })
-  let datasources =
-    list.filter(library.form.controls, fn(control) {
-      control.kind == campy_form.Datasource
-    })
-  list.length(timers) |> should.equal(1)
-  list.length(datasources) |> should.equal(1)
-  let assert [timer, ..] = timers
-  campy_form.control_prop(timer, "target", "") |> should.equal("progress")
-  // The page is free-layout: the panels are backgrounds and every child sits
-  // where it belongs on the page (the client/border model has its own tests).
-  library.form.aligns |> should.equal([])
-  // Tidal is a provider like Spotify: the Services module points a datasource
-  // at the Tidal catalogue and carries the token field that would unlock it.
-  let assert Some(services) = project.find_module(loaded, "connect")
-  let urls =
-    list.filter(services.form.controls, fn(control) {
-      control.kind == campy_form.Datasource
-    })
-    |> list.map(fn(control) { campy_form.control_prop(control, "url", "") })
-  urls |> should.equal(["assets/canora/tidal.json"])
-  services.form.controls
-  |> list.any(fn(control) { control.name == "provider" })
-  |> should.be_true
-  // Each service has its own credentials; they are not the same API.
-  let names = list.map(services.form.controls, fn(control) { control.name })
-  list.each(
-    [
-      "spotify_id",
-      "spotify_token",
-      "tidal_id",
-      "tidal_secret",
-      "tidal_token",
-      "tidal_country",
-    ],
-    fn(name) { list.contains(names, name) |> should.be_true },
-  )
-  // The hamburger menu is on the app's own forms, with its three items.
-  let assert Some(library) = project.find_module(loaded, "library")
-  let assert Ok(hamburger) =
-    list.find(library.form.controls, fn(control) { control.name == "hamburger" })
-  hamburger.kind |> should.equal(campy_form.Menu)
-  campy_form.control_prop(hamburger, "model", "")
-  |> should.equal("Settings\nAbout Canora\nQuit")
-  library.form.controls
-  |> list.any(fn(control) { control.name == "profile" })
-  |> should.be_true
-  // The handler sources are real Gleam, not stubs: they import modules, carry
-  // types, and keep state across events.
-  let assert project.Embedded(library_source) = library.source_origin
-  string.contains(library_source, "import gleam/list") |> should.be_true
-  string.contains(library_source, "persistent_term") |> should.be_true
-  string.contains(library_source, "TODO") |> should.be_false
-  let assert Some(player_module) = project.find_module(loaded, "player")
-  let assert project.Embedded(player_source) = player_module.source_origin
-  string.contains(player_source, "pub fn shuffle_clicked") |> should.be_true
-  string.contains(player_source, "TODO") |> should.be_false
-  let assert project.Embedded(connect_source) = services.source_origin
-  string.contains(connect_source, "accounts.spotify.com/api/token")
-  |> should.be_true
-  string.contains(connect_source, "auth.tidal.com/v1/oauth2/token")
-  |> should.be_true
-  string.contains(connect_source, "countryCode") |> should.be_true
-  string.contains(connect_source, "TODO") |> should.be_false
 }
 
 pub fn checked_in_campy_project_is_the_current_demo_test() {

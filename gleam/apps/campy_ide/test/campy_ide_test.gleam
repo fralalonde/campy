@@ -7,7 +7,6 @@
 import campy_bridge as bridge
 import campy_ccl
 import campy_form
-import campy_form/canora
 import campy_form/live_preview
 import campy_form/project
 import campy_form/workspace
@@ -772,7 +771,7 @@ pub fn the_editor_mode_survives_module_and_project_switches_test() {
   |> should.equal(state.CodeView)
   state.switch_project(on_code, project.default_path).view
   |> should.equal(state.CodeView)
-  state.open_project(on_code, canora.project()).view
+  state.open_project(on_code, project.campy()).view
   |> should.equal(state.CodeView)
 }
 
@@ -1383,19 +1382,18 @@ pub fn opening_a_project_joins_the_workspace_test() {
   // to it, so the project vanished from the list and its modules were not the
   // ones the editor showed.
   let model = demo_state()
-  let canora = canora_project()
-  let opened = state.open_project(model, canora)
+  // A project at a path the workspace does not hold yet, so opening it is an
+  // add rather than a switch.
+  let joined =
+    project.Project(..project.campy(), path: "/tmp/joined-project.campy")
+  let opened = state.open_project(model, joined)
   opened.workspace.projects
   |> list.map(fn(target) { target.path })
-  |> list.contains(canora.path)
+  |> list.contains(joined.path)
   |> should.be_true
-  opened.project.path |> should.equal(canora.path)
-  opened.opened |> should.equal(["library"])
-  opened.active |> should.equal("library")
-}
-
-fn canora_project() -> project.Project {
-  canora.project()
+  opened.project.path |> should.equal(joined.path)
+  opened.opened |> should.equal(["cat-cafe"])
+  opened.active |> should.equal("cat-cafe")
 }
 
 pub fn an_event_is_bound_only_while_its_handler_exists_test() {

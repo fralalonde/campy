@@ -215,13 +215,14 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   authorization code with PKCE (`accounts.spotify.com/authorize` /
   `api/token`, `api.spotify.com/v1`), Tidal is client credentials
   (`auth.tidal.com/v1/oauth2/token`, `openapi.tidal.com/v2` with a
-  `countryCode`). Its handler sources are **real, checked Gleam**: the modules
-  live in `demo/canora/src`, form a workspace package with tests, and are read
-  into the project at build time (`campy_form_ffi:read_demo/1`), so the checked
-  `.campy` file embeds actual code — a persistent_term-backed session, queue
-  rotation, favourites, token exchange through the app runtime's `post_form` —
-  rather than string stubs. The demo still fills its catalogue from
-  `assets/canora/tidal.json`, so it runs without credentials.
+  `countryCode`). Its handler sources are **real, checked Gleam** in
+  `demo/canora/src`; `just demo` embeds them into `examples/canora.campy`, the
+  sample the IDE opens as data. The sample is not compiled into Campy: no core
+  package imports it, and `just check` neither builds nor reads it. Its code is
+  a persistent_term-backed session, queue rotation, favourites, token exchange
+  through the app runtime's `post_form` — not string stubs. The demo still
+  fills its catalogue from `assets/canora/tidal.json`, so it runs without
+  credentials.
 
 ### Presentation is a first-class part of drag feel
 

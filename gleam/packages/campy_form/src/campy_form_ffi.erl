@@ -1,6 +1,5 @@
 -module(campy_form_ffi).
--export([save_project/2, load_project/1, save_workspace/2, load_workspace/1,
-         read_demo/1]).
+-export([save_project/2, load_project/1, save_workspace/2, load_workspace/1]).
 
 %% Projects are stored as versioned Erlang terms. Project file paths are
 %% relative to CAMPY_ROOT (set by scripts/workspace.py) unless absolute.
@@ -148,18 +147,6 @@ resolve(Path) ->
                 Value -> Value
             end,
             filename:join([Root, Path])
-    end.
-
-%% A demo app's handler module, read from demo/canora/src/<Name> under
-%% CAMPY_ROOT. The demo projects embed real Gleam sources; reading them at build
-%% time keeps the .campy file and the readable modules in demo/ in step.
-read_demo(Name) ->
-    Path = resolve(filename:join(["demo", "canora", "src", Name])),
-    case file:read_file(Path) of
-        {ok, Source} -> {ok, Source};
-        {error, Reason} ->
-            {error, unicode:characters_to_binary(
-                io_lib:format("cannot read ~s: ~p", [Path, Reason]))}
     end.
 
 error_text(Reason) ->
