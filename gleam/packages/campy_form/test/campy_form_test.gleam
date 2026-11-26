@@ -1,4 +1,5 @@
 import campy_form
+import campy_form/canora
 import campy_form/project
 import campy_form/syntax
 import campy_form/workspace
@@ -963,6 +964,34 @@ pub fn client_fills_what_the_border_siblings_leave_test() {
 fn assert_control(form: campy_form.Form, id: String) -> campy_form.Control {
   let assert Some(control) = campy_form.find_control(form, id)
   control
+}
+
+pub fn the_canora_demo_project_roundtrips_test() {
+  let path = "/tmp/canora-roundtrip.campy"
+  let demo = canora.project()
+  demo.default_module |> should.equal("library")
+  let assert Ok(_saved) = project.save(demo, path)
+  let assert Ok(loaded) = project.load(path)
+  loaded.modules
+  |> list.map(fn(module) { module.name })
+  |> should.equal(["Library", "Search", "Player"])
+  // The non-visual components are part of the forms, with their properties.
+  let assert Some(library) = project.find_module(loaded, "library")
+  let timers =
+    list.filter(library.form.controls, fn(control) {
+      control.kind == campy_form.Timer
+    })
+  let datasources =
+    list.filter(library.form.controls, fn(control) {
+      control.kind == campy_form.Datasource
+    })
+  list.length(timers) |> should.equal(1)
+  list.length(datasources) |> should.equal(1)
+  let assert [timer, ..] = timers
+  campy_form.control_prop(timer, "target", "") |> should.equal("progress")
+  // The page is free-layout: the panels are backgrounds and every child sits
+  // where it belongs on the page (the client/border model has its own tests).
+  library.form.aligns |> should.equal([])
 }
 
 pub fn checked_in_campy_project_is_the_current_demo_test() {

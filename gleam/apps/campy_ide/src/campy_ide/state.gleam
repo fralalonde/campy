@@ -131,6 +131,11 @@ pub type State {
     active_handler: Option(String),
     highlight: Option(#(Int, Int)),
     editing: Option(Editing),
+    /// Non-visual components the host runs: the last tick of each timer, its
+    /// current value, and the datasources already read (key: `module:wire`).
+    effect_ticks: List(#(String, Int)),
+    effect_values: List(#(String, Int)),
+    effect_loaded: List(String),
     /// Every running app window, one per module. A project's app and any of
     /// its modules can run at the same time; each preview owns its session.
     previews: List(Preview),
@@ -248,6 +253,9 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     active_handler: None,
     highlight: None,
     editing: None,
+    effect_ticks: [],
+    effect_values: [],
+    effect_loaded: [],
     previews: [],
     popup: NoPopup,
     undo: [],

@@ -298,6 +298,14 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-selected { outline: 2px solid var(--campy-accent); outline-offset: 1px; }",
     ".campy-member { outline: 1px solid var(--campy-accent); outline-offset: 0px;
                      background: transparent; }",
+    // Non-visual components in the designer: a pictogram tile with the
+    // component's name under it, so a timer reads as a thing, not a blank.
+    ".campy-nonvisual { display: flex; flex-direction: column; align-items: center;
+                        justify-content: center; gap: 2px;
+                        border: 1px dashed var(--campy-border);
+                        border-radius: 8px; background: var(--campy-raised); }",
+    ".campy-nonvisual-glyph { font-size: 22px; color: var(--campy-accent); }",
+    ".campy-nonvisual-name { font-size: 11px; color: var(--campy-muted); }",
     ".campy-grip { background: var(--campy-panel);
                   border: 1px solid var(--campy-accent); border-radius: 2px; }",
     ".campy-grip-window { background: var(--campy-raised);

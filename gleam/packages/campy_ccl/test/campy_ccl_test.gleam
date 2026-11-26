@@ -11,6 +11,8 @@ pub fn main() {
 // The wire kind table from `docs/PHASE2.md` §1.4, in catalog order. `surface`
 // is IDE-internal and never in the palette.
 const kind_keys = [
+  "timer",
+  "datasource",
   "label",
   "edit",
   "memo",
@@ -44,7 +46,7 @@ fn prop_keys(key: String) -> List(String) {
 pub fn catalog_has_unique_keys_test() {
   let keys = keys()
   keys |> should.equal(kind_keys)
-  list.length(keys) |> should.equal(16)
+  list.length(keys) |> should.equal(18)
   list.length(keys) |> should.equal(list.length(list.unique(keys)))
 
   // A key addresses exactly one entry, and palette labels are unique too.

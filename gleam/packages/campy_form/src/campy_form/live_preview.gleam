@@ -106,7 +106,12 @@ fn describe(
   ControlDesc(
     id: campy_form.control_wire_id(control),
     kind: campy_form.kind_key(control.kind),
-    text: control.text,
+    // A non-visual component has no content of its own: its *name* is what the
+    // designer tile has to show, and what a reader would call it.
+    text: case campy_form.non_visual(control.kind) {
+      True -> control.name
+      False -> control.text
+    },
     x: ax - px,
     y: ay - py,
     w:,

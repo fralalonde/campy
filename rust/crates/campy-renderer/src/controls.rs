@@ -1247,6 +1247,23 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals, passive
     match desc.kind.as_str() {
         "label" => AnyView::new(text_element(move || text.get())),
 
+        // A non-visual component: nothing at all in the running app, and a
+        // pictogram tile with its name underneath in the designer. It still
+        // has a box, so it can be selected, moved and dropped like anything
+        // else.
+        "timer" | "datasource" => {
+            if !passive {
+                return AnyView::new(r#box());
+            }
+            let glyph = if desc.kind == "timer" { "⏱" } else { "⇄" };
+            AnyView::new(
+                r#box()
+                    .class("campy-nonvisual")
+                    .child(text_element(move || glyph.to_owned()).class("campy-nonvisual-glyph"))
+                    .child(text_element(move || text.get()).class("campy-nonvisual-name")),
+            )
+        }
+
         // A campy-styled base control rather than zgui-ui's Button: the
         // base element is the path verified end to end through real
         // surface input; zgui-ui components get their own live-window A/B

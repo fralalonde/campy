@@ -23,6 +23,10 @@ pub type Kind {
   Menu
   CodeEditor
   Console
+  /// A non-visual component: it has no pixels in the running app, and the
+  /// designer draws it as a pictogram tile with its name underneath.
+  Timer
+  Datasource
 }
 
 // How the form arranges its controls. Free is absolute (the classic designer);
@@ -162,6 +166,17 @@ pub fn kind_key(kind: Kind) -> String {
     Menu -> "menu"
     CodeEditor -> "code_editor"
     Console -> "console"
+    Timer -> "timer"
+    Datasource -> "datasource"
+  }
+}
+
+/// Whether a kind has no pixels in a running app (it does work instead of
+/// showing something).
+pub fn non_visual(kind: Kind) -> Bool {
+  case kind {
+    Timer | Datasource -> True
+    _ -> False
   }
 }
 
@@ -183,6 +198,8 @@ pub fn kind_from_key(key: String) -> Option(Kind) {
     "menu" -> Some(Menu)
     "code_editor" -> Some(CodeEditor)
     "console" -> Some(Console)
+    "timer" -> Some(Timer)
+    "datasource" -> Some(Datasource)
     _ -> None
   }
 }

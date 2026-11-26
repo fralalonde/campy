@@ -7,6 +7,7 @@ import campy_form/workspace
 import campy_ide/ide_ui
 import campy_ide/live_preview_ui
 import campy_ide/mcp
+import campy_ide/preview_effects
 import campy_ide/shell
 import campy_ide/state.{
   type Popup, type Preview, type State, Events, NoPopup, OpenFile, PickPicture,
@@ -31,6 +32,9 @@ fn debug_after_env() -> String
 
 @external(erlang, "campy_host_ffi", "now_ms")
 fn now_ms() -> Int
+
+@external(erlang, "campy_http_ffi", "read")
+fn http_read(url: String) -> Result(String, String)
 
 @external(erlang, "campy_ide_dialog_ffi", "open_dialog")
 fn native_dialog(
@@ -125,6 +129,9 @@ fn debug_view(model: State) -> State {
     "settings" -> state.set_settings_open(model, True)
     // The in-app file browser, for a validation run that cannot drive a native
     // dialog: the Open dialog as its users see it.
+    // The Canora demo project, for a validation run that cannot click a
+    // dialog.
+    "canora" -> open_path(model, "projects/canora.campy")
     "browser" -> state.browser_open(model, state.OpenFile, "", "campy.campy")
 
     "code" -> state.set_view(model, state.CodeView)
@@ -238,6 +245,7 @@ pub fn loop(
     None -> {
       let event = bridge.poll(100)
       let now = now_ms()
+      let model = run_effects(model, now)
       let heartbeat = case now - heartbeat >= 1000 {
         True -> {
           io.println(
@@ -1489,6 +1497,181 @@ fn persist_workspace(before: State, after: State) -> Nil {
     }
     True -> Nil
   }
+}
+
+// --- non-visual components ------------------------------------------------
+
+/// Runs the non-visual components of every running app: timers tick at their
+/// interval into the control they name, and datasources are read once when
+/// the app starts, filling the list they name. The module's own handler
+/// (`<name>_tick`, `<name>_loaded`) is what a generated app would call; the
+/// preview reports what the host did on the console.
+fn run_effects(model: State, now: Int) -> State {
+  list.fold(model.previews, model, fn(acc, preview) {
+    case project.find_module(acc.project, preview.module) {
+      None -> acc
+      Some(module) -> {
+        let acc = run_timers(acc, preview, module, now)
+        run_datasources(acc, preview, module)
+      }
+    }
+  })
+}
+
+fn run_timers(
+  state: State,
+  preview: Preview,
+  module: project.Module,
+  now: Int,
+) -> State {
+  list.fold(preview_effects.timers(module.form), state, fn(acc, timer) {
+    let key = preview.module <> ":" <> int.to_string(timer.wire)
+    let last = assoc_get(acc.effect_ticks, key)
+    case now - last < timer.interval {
+      True -> acc
+      False -> {
+        let value =
+          preview_effects.next_value(
+            case assoc_peek(acc.effect_values, key) {
+              Some(value) -> Some(value)
+              None -> None
+            },
+            timer.step,
+            timer.maximum,
+          )
+        let acc =
+          state.State(
+            ..acc,
+            effect_ticks: assoc_put(acc.effect_ticks, key, now),
+            effect_values: assoc_put(acc.effect_values, key, value),
+          )
+        tick_target(acc, preview, module, timer, value)
+      }
+    }
+  })
+}
+
+fn tick_target(
+  state: State,
+  preview: Preview,
+  module: project.Module,
+  timer: preview_effects.Timer,
+  value: Int,
+) -> State {
+  case target_control(module.form, timer.target) {
+    None -> state
+    Some(control) -> {
+      let wire = campy_form.control_wire_id(control)
+      let command = case control.kind {
+        campy_form.Progress ->
+          bridge.SetFloat(
+            preview.generation,
+            wire,
+            "progress",
+            int.to_float(value),
+          )
+        campy_form.Slider ->
+          bridge.SetInt(preview.generation, wire, "value", value)
+        _ -> bridge.SetText(preview.generation, wire, int.to_string(value))
+      }
+      let _ = bridge.submit(preview.session, command)
+      state
+    }
+  }
+}
+
+fn run_datasources(
+  state: State,
+  preview: Preview,
+  module: project.Module,
+) -> State {
+  list.fold(preview_effects.datasources(module.form), state, fn(acc, source) {
+    let key = preview.module <> ":" <> int.to_string(source.wire)
+    case list.contains(acc.effect_loaded, key) {
+      True -> acc
+      False -> {
+        let acc = state.State(..acc, effect_loaded: [key, ..acc.effect_loaded])
+        case http_read(source.url) {
+          Error(error) ->
+            state.log_console(
+              acc,
+              "✗ " <> source.name <> ": " <> short_error(error),
+            )
+          Ok(body) -> {
+            let entries = preview_effects.entries(body)
+            case target_control(module.form, source.target) {
+              None ->
+                state.log_console(
+                  acc,
+                  "⇄ "
+                    <> source.name
+                    <> ": "
+                    <> int.to_string(list.length(entries))
+                    <> " entries (no target)",
+                )
+              Some(control) -> {
+                let wire = campy_form.control_wire_id(control)
+                let _ =
+                  bridge.submit(
+                    preview.session,
+                    bridge.SetModel(
+                      preview.generation,
+                      wire,
+                      list.map(entries, bridge.WireText),
+                    ),
+                  )
+                state.log_console(
+                  acc,
+                  "⇄ "
+                    <> source.name
+                    <> ": "
+                    <> int.to_string(list.length(entries))
+                    <> " entries into "
+                    <> control.name,
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+  })
+}
+
+fn target_control(
+  form: campy_form.Form,
+  name: String,
+) -> Option(campy_form.Control) {
+  case string.trim(name) {
+    "" -> None
+    name ->
+      case list.find(form.controls, fn(control) { control.name == name }) {
+        Ok(control) -> Some(control)
+        Error(_) -> None
+      }
+  }
+}
+
+fn assoc_get(items: List(#(String, Int)), key: String) -> Int {
+  case assoc_peek(items, key) {
+    Some(value) -> value
+    None -> 0
+  }
+}
+
+fn assoc_peek(items: List(#(String, Int)), key: String) -> Option(Int) {
+  case list.find(items, fn(item) { item.0 == key }) {
+    Ok(item) -> Some(item.1)
+    Error(_) -> None
+  }
+}
+
+fn assoc_put(
+  items: List(#(String, Int)),
+  key: String,
+  value: Int,
+) -> List(#(String, Int)) {
+  [#(key, value), ..list.filter(items, fn(item) { item.0 != key })]
 }
 
 fn preview_event_label(

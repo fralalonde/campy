@@ -431,5 +431,9 @@ fn kind_name(kind: campy_form.Kind) -> String {
     campy_form.Menu -> "Menu"
     campy_form.CodeEditor -> "CodeEditor"
     campy_form.Console -> "Console"
+    // Non-visual components are declared to the app so a host can run them;
+    // they draw nothing.
+    campy_form.Timer -> "Timer"
+    campy_form.Datasource -> "Datasource"
   }
 }

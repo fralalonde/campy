@@ -133,6 +133,47 @@ fn bool_string(value: Bool) -> String {
 
 pub fn all() -> List(Component) {
   [
+    // Non-visual: a timer ticks while its module runs. `target` names the
+    // control the tick writes to (a progress bar advances, a label shows the
+    // elapsed seconds), and `step` is what it adds.
+    Component(
+      "timer",
+      "Timer",
+      "⏱",
+      non_visual_category,
+      120,
+      72,
+      "Timer",
+      False,
+      [
+        text_prop("Timer"),
+        Property("interval", "Interval (ms)", Number, "1000"),
+        Property("target", "Target control", Text, ""),
+        Property("step", "Step", Number, "1"),
+        Property("maximum", "Maximum", Number, "100"),
+      ],
+      [Event("tick", "OnTick")],
+    ),
+    // Non-visual: a datasource reads a JSON array of strings from `url` (an
+    // http(s) endpoint, or a file path when it has no scheme) and fills the
+    // list named by `target` when the app starts.
+    Component(
+      "datasource",
+      "Datasource",
+      "⇄",
+      non_visual_category,
+      140,
+      80,
+      "Datasource",
+      False,
+      [
+        text_prop("Datasource"),
+        Property("url", "URL or file", Text, ""),
+        Property("target", "Target list", Text, ""),
+        Property("interval", "Refresh (ms, 0 = once)", Number, "0"),
+      ],
+      [Event("loaded", "OnLoaded"), Event("failed", "OnFailed")],
+    ),
     // zgui `text`: a plain caption.
     Component(
       "label",
@@ -436,8 +477,11 @@ pub fn palette_label(component: Component) -> String {
 }
 
 pub fn categories() -> List(String) {
-  ["Common", "Containers", "Values"]
+  ["Common", "Containers", "Values", non_visual_category]
 }
+
+/// The category of components that do work instead of showing something.
+pub const non_visual_category = "Non-visual"
 
 pub fn components_in(category: String) -> List(Component) {
   list.filter(all(), fn(component) { component.category == category })
