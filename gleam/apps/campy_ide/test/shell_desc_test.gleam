@@ -453,6 +453,50 @@ pub fn navigator_rows_carry_run_buttons_test() {
   |> should.equal(Some("run-m:2"))
 }
 
+pub fn every_clickable_control_explains_itself_test() {
+  // A hint is the status-line sentence for whatever the pointer is over, so
+  // every control that answers a click must carry one.
+  let document = shell.desc(demo_view())
+  // The canvas holds the designed form: its controls are the user's, not the
+  // IDE's chrome.
+  let canvas = case
+    list.find(flatten(document), fn(control) {
+      control.id == shell.section_id("canvas")
+    })
+  {
+    Ok(canvas) ->
+      flatten(canvas.children) |> list.map(fn(control) { control.id })
+    Error(_) -> []
+  }
+  let missing =
+    flatten(document)
+    |> list.filter(fn(control) {
+      list.contains(["button", "menu", "combo"], control.kind)
+      && !list.contains(canvas, control.id)
+    })
+    |> list.filter_map(fn(control) {
+      let hint =
+        control.props
+        |> list.find_map(fn(prop) {
+          case prop {
+            #("hint", bridge.WireText(text)) -> Ok(text)
+            _ -> Error(Nil)
+          }
+        })
+        |> fn(found) {
+          case found {
+            Ok(text) -> text
+            Error(_) -> ""
+          }
+        }
+      case hint {
+        "" -> Ok(#(control.kind, control.text))
+        _ -> Error(Nil)
+      }
+    })
+  missing |> should.equal([])
+}
+
 pub fn commands_tag_ops_with_the_generation_test() {
   // One op is one command.
   ide_ui.commands(4, [ide_ui.SetText(7, "hi")])

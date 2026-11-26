@@ -36,6 +36,12 @@ pub fn project() -> project.Project {
         player(),
         project.Embedded(player_source()),
       ),
+      project.Module(
+        "connect",
+        "Services",
+        connect(),
+        project.Embedded(connect_source()),
+      ),
     ],
     path,
     "",
@@ -178,6 +184,67 @@ fn player() -> campy_form.Form {
     ]),
   ]
   form("Canora · Now playing", 520, 720, controls, [])
+}
+
+// --- connect ----------------------------------------------------------------
+
+/// Which service the client talks to. Tidal and Spotify are both ordinary
+/// datasources behind a token, so the choice is one combo and one field.
+fn connect() -> campy_form.Form {
+  let controls = [
+    label("heading", "heading", 24, 20, 500, 36, "Services"),
+    label(
+      "blurb",
+      "blurb",
+      24,
+      62,
+      640,
+      40,
+      "Canora speaks to Spotify and Tidal: pick one, paste a token, and the catalogue loads.",
+    ),
+    label("provider_label", "provider_label", 24, 116, 140, 28, "Service"),
+    control(
+      "provider",
+      "provider",
+      campy_form.ComboBox,
+      168,
+      116,
+      240,
+      32,
+      "Tidal",
+      [
+        #("model", "Spotify\nTidal"),
+      ],
+    ),
+    label("token_label", "token_label", 24, 156, 140, 28, "Token"),
+    control("token", "token", campy_form.EditBox, 168, 156, 500, 32, "", [
+      #("placeholder", "paste an access token"),
+    ]),
+    button("connect", "connect", 168, 196, 140, 34, "Connect"),
+    label(
+      "status",
+      "status",
+      24,
+      246,
+      640,
+      24,
+      "Not connected — the demo reads a local export",
+    ),
+    list(
+      "tidal_catalog",
+      "tidal_catalog",
+      24,
+      280,
+      640,
+      280,
+      "The Tidal catalogue appears here",
+    ),
+    datasource("tidal_api", "tidal_api", 692, 280, 150, 84, [
+      #("url", "assets/canora/tidal.json"),
+      #("target", "tidal_catalog"),
+    ]),
+  ]
+  form("Canora · Services", 880, 600, controls, [])
 }
 
 // --- builders ---------------------------------------------------------------
@@ -401,6 +468,46 @@ pub fn clear_clicked() -> Nil {
 }
 
 pub fn results_api_loaded(count: Int) -> Nil {
+  let _ = count
+  Nil
+}
+"
+}
+
+fn connect_source() -> String {
+  "// Canora · services
+//
+// One client, two services. `provider` picks Spotify or Tidal, `token` holds
+// the access token, and the catalogue datasource reads what the service
+// answers. The demo reads assets/canora/tidal.json, so there is no login; a
+// real deployment trades a refresh token for an access token here.
+//
+// Tidal:   https://openapi.tidal.com/v2/searchResults/{query}?countryCode=…
+//          Authorization: Bearer <token>
+// Spotify: https://api.spotify.com/v1/search?q=…&type=track
+//          Authorization: Bearer <token>
+
+pub type Provider {
+  Spotify
+  Tidal
+}
+
+pub fn provider_selected(which: String) -> Nil {
+  let provider = case which {
+    \"Spotify\" -> Spotify
+    _ -> Tidal
+  }
+  let _ = provider
+  Nil
+}
+
+pub fn connect_clicked() -> Nil {
+  // `token` holds the service's access token; the datasource then reads the
+  // catalogue it is pointed at.
+  Nil
+}
+
+pub fn tidal_api_loaded(count: Int) -> Nil {
   let _ = count
   Nil
 }

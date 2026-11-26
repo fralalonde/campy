@@ -796,14 +796,11 @@ fn run_row_button(
     False -> "campy-run"
   })
   |> with_props([
-    hint_prop(case target {
-      "" -> ""
-      _ ->
-        case running {
-          True -> "Stop this app"
-          False -> "Run this app"
-        }
+    hint_prop(case running {
+      True -> "Stop this app"
+      False -> "Run this app"
     }),
+    #("run-target", WireText(target)),
   ])
 }
 
@@ -893,10 +890,10 @@ fn palette(view: ShellView) -> ControlDesc {
         "tile:" <> component.key,
         "button",
         component.icon,
-        4 + index * 44,
-        3,
-        40,
-        32,
+        3 + index * 48,
+        2,
+        44,
+        34,
       )
       |> with_class("campy-palette-tile")
       |> with_props([
@@ -910,7 +907,7 @@ fn palette(view: ShellView) -> ControlDesc {
         hint_prop(component.label),
       ])
     })
-  node("palette", "panel", "", 228, 4, view.layout.width - 320, 38)
+  node("palette", "panel", "", 228, 2, view.layout.width - 320, 42)
   |> with_class("campy-palette")
   |> with_props([layout_prop("free")])
   |> with_children(tiles)
@@ -964,7 +961,8 @@ fn navigator(view: ShellView) -> ControlDesc {
           ])
         }),
       )
-        |> with_class("campy-nav-list"),
+        |> with_class("campy-nav-list")
+        |> with_props([hint_prop("Projects — click one to switch to it")]),
       rule("nav-rule", 8, 156, l.nav_w - 16, 1),
       node("nav-modules-title", "label", "Modules", 8, 162, 90, 28)
         |> with_class("campy-title"),
@@ -985,7 +983,8 @@ fn navigator(view: ShellView) -> ControlDesc {
           ])
         }),
       )
-        |> with_class("campy-nav-list"),
+        |> with_class("campy-nav-list")
+        |> with_props([hint_prop("Modules — click one to open it here")]),
     ],
     nav_run_buttons(view),
   ))
@@ -1125,7 +1124,12 @@ fn canvas(view: ShellView) -> ControlDesc {
     view.layout.canvas_h,
   )
   |> with_class("campy-canvas")
-  |> with_props([layout_prop("free")])
+  |> with_props([
+    layout_prop("free"),
+    hint_prop(
+      "Click to select · drag to move · Ctrl-drag to marquee · right-click for the menu",
+    ),
+  ])
   |> shown(!view.code_view)
   |> with_children(list.append(
     [
@@ -1138,7 +1142,8 @@ fn canvas(view: ShellView) -> ControlDesc {
         form_w,
         form_title_height,
       )
-        |> with_class("campy-canvas-title"),
+        |> with_class("campy-canvas-title")
+        |> with_props([hint_prop("Drag to move the component window")]),
       node(
         "canvas-form",
         "panel",
@@ -1358,7 +1363,10 @@ fn project_panel(view: ShellView) -> ControlDesc {
       |> with_class("campy-field-label"),
     node("project-app", "combo", view.project_app, 76, 134, 236, 28)
       |> with_class("campy-field-edit")
-      |> with_props([model_prop(list.map(view.project_app_options, WireText))]),
+      |> with_props([
+        model_prop(list.map(view.project_app_options, WireText)),
+        hint_prop("The module this project runs as an app"),
+      ]),
   ])
 }
 
@@ -1421,10 +1429,21 @@ fn inspector_row(
         False -> "campy-insp-open"
       })
   }
+  let hint = case list.contains(event_keys(), key) {
+    True -> "Open the " <> row_label(key) <> " handler"
+    False ->
+      case row_kind(key) {
+        BoolRow -> "Toggle " <> row_label(key)
+        ChoiceRow -> "Choose " <> row_label(key)
+        NumberRow -> "Set " <> row_label(key)
+        _ -> "Edit " <> row_label(key)
+      }
+  }
   [
     label,
     ControlDesc(
       ..editor,
+      props: list.append(editor.props, [hint_prop(hint)]),
       visible: visible,
       x: case visible {
         True -> 108
@@ -1562,7 +1581,10 @@ fn settings_dialog(view: ShellView) -> ControlDesc {
       |> with_class("campy-dialog-label"),
     node("settings-font", "combo", view.font, 136, 56, 366, 32)
       |> with_class("campy-dialog-choice")
-      |> with_props([model_prop(list.map(fonts, WireText))]),
+      |> with_props([
+        model_prop(list.map(fonts, WireText)),
+        hint_prop("The editor and console typeface"),
+      ]),
     node("settings-size-label", "label", "Font size", 18, 96, 110, 32)
       |> with_class("campy-dialog-label"),
     node(
@@ -1575,7 +1597,10 @@ fn settings_dialog(view: ShellView) -> ControlDesc {
       32,
     )
       |> with_class("campy-dialog-choice")
-      |> with_props([model_prop(list.map(sizes, WireText))]),
+      |> with_props([
+        model_prop(list.map(sizes, WireText)),
+        hint_prop("The editor's type size"),
+      ]),
     node("settings-scheme-label", "label", "Color scheme", 18, 136, 110, 32)
       |> with_class("campy-dialog-label"),
     node(
@@ -1588,7 +1613,10 @@ fn settings_dialog(view: ShellView) -> ControlDesc {
       32,
     )
       |> with_class("campy-dialog-choice")
-      |> with_props([model_prop(list.map(schemes, WireText))]),
+      |> with_props([
+        model_prop(list.map(schemes, WireText)),
+        hint_prop("Dark, light or solarized"),
+      ]),
     node("settings-hints", "checkbox", "Show UI hints", 136, 176, 366, 32)
       |> with_class("campy-dialog-check")
       |> with_props([
@@ -1744,7 +1772,10 @@ fn browser_dialog(view: ShellView) -> ControlDesc {
         ])
       }),
     )
-      |> with_class("campy-dialog-list"),
+      |> with_class("campy-dialog-list")
+      |> with_props([
+        hint_prop("A folder opens; a project file is what Open takes"),
+      ]),
     node("browser-name-label", "label", "Name", 16, 328, 60, 28)
       |> with_class("campy-dialog-label"),
     node("browser-name", "edit", view.browser_name, 82, 328, 422, 28)
@@ -1764,11 +1795,46 @@ fn context_menu(view: ShellView) -> ControlDesc {
   |> with_class("campy-context-menu")
   |> shown(view.context_open)
   |> with_children([
-    menu_row("ctx-cut", "Cut", 2, 2, view.has_selection),
-    menu_row("ctx-copy", "Copy", 2, 28, view.has_selection),
-    menu_row("ctx-paste", "Paste", 2, 54, True),
-    menu_row("ctx-delete", "Delete", 2, 80, view.has_selection),
-    menu_row("ctx-align", "Align ▸", 2, 106, view.selection_count > 1),
+    menu_row(
+      "ctx-cut",
+      "Cut",
+      2,
+      2,
+      view.has_selection,
+      "Cut the selected components to the clipboard",
+    ),
+    menu_row(
+      "ctx-copy",
+      "Copy",
+      2,
+      28,
+      view.has_selection,
+      "Copy the selected components",
+    ),
+    menu_row(
+      "ctx-paste",
+      "Paste",
+      2,
+      54,
+      True,
+      "Paste the clipboard into the form",
+    ),
+    menu_row(
+      "ctx-delete",
+      "Delete",
+      2,
+      80,
+      view.has_selection,
+      "Delete the selected components (Del)",
+    ),
+    menu_row(
+      "ctx-align",
+      "Align ▸",
+      2,
+      106,
+      view.selection_count > 1,
+      "Align the selected components",
+    ),
   ])
 }
 
@@ -1785,12 +1851,54 @@ fn align_menu(view: ShellView) -> ControlDesc {
   |> with_class("campy-context-menu")
   |> shown(view.context_open && view.context_align && view.selection_count > 1)
   |> with_children([
-    menu_row("align-left", "Left", 2, 2, True),
-    menu_row("align-right", "Right", 2, 28, True),
-    menu_row("align-center", "Center", 2, 54, True),
-    menu_row("align-top", "Top", 2, 80, True),
-    menu_row("align-bottom", "Down", 2, 106, True),
-    menu_row("align-middle", "Middle", 2, 132, True),
+    menu_row(
+      "align-left",
+      "Left",
+      2,
+      2,
+      True,
+      "Line the left edges up with the parent",
+    ),
+    menu_row(
+      "align-right",
+      "Right",
+      2,
+      28,
+      True,
+      "Line the right edges up with the parent",
+    ),
+    menu_row(
+      "align-center",
+      "Center",
+      2,
+      54,
+      True,
+      "Centre the components horizontally in the parent",
+    ),
+    menu_row(
+      "align-top",
+      "Top",
+      2,
+      80,
+      True,
+      "Line the top edges up with the parent",
+    ),
+    menu_row(
+      "align-bottom",
+      "Down",
+      2,
+      106,
+      True,
+      "Line the bottom edges up with the parent",
+    ),
+    menu_row(
+      "align-middle",
+      "Middle",
+      2,
+      132,
+      True,
+      "Centre the components vertically in the parent",
+    ),
   ])
 }
 
@@ -1799,10 +1907,38 @@ fn nav_context(view: ShellView) -> ControlDesc {
   |> with_class("campy-context-menu")
   |> shown(view.nav_context_open)
   |> with_children([
-    menu_row("nav-ctx-remove", "Remove", 2, 2, view.nav_context_project),
-    menu_row("nav-ctx-open", "Open module", 2, 28, !view.nav_context_project),
-    menu_row("nav-ctx-delete", "Delete", 2, 54, !view.nav_context_project),
-    menu_row("nav-ctx-close-tab", "Close tab", 2, 80, !view.nav_context_project),
+    menu_row(
+      "nav-ctx-remove",
+      "Remove",
+      2,
+      2,
+      view.nav_context_project,
+      "Remove the project from the workspace (its file stays)",
+    ),
+    menu_row(
+      "nav-ctx-open",
+      "Open module",
+      2,
+      28,
+      !view.nav_context_project,
+      "Open this module",
+    ),
+    menu_row(
+      "nav-ctx-delete",
+      "Delete",
+      2,
+      54,
+      !view.nav_context_project,
+      "Delete this module from the project",
+    ),
+    menu_row(
+      "nav-ctx-close-tab",
+      "Close tab",
+      2,
+      80,
+      !view.nav_context_project,
+      "Close this module’s tab",
+    ),
   ])
 }
 
@@ -1812,9 +1948,11 @@ fn menu_row(
   x: Int,
   y: Int,
   active: Bool,
+  hint: String,
 ) -> ControlDesc {
   node(name, "button", label, x, y, 146, 26)
   |> with_class("campy-menu-row")
+  |> with_props([hint_prop(hint)])
   |> shown(active)
 }
 

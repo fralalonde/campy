@@ -145,6 +145,23 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   filter in its title, takes an absolute path in the Name field (Open navigates
   into a typed directory), and accepts with Enter.
 
+### Reachability (as built)
+
+- **Hints everywhere.** Every control that answers a click carries a `hint`
+  prop — menu rows, palette tiles, navigator lists, the canvas, run buttons,
+  inspector rows (a sentence derived from the row's key, so it does not change
+  with the selection and cannot force a reload), settings combos. Hovering one
+  puts its sentence on the status line. A test walks the shell document and
+  fails on a clickable control without one.
+- **Palette pictograms** are 44×34 at 22px, so the component glyphs read at a
+  glance.
+- **alClient / cursors** are documented above and in the tests.
+- **Canora speaks to two services.** Its Services module picks Spotify or Tidal,
+  carries the token field, and points a datasource at the chosen catalogue (the
+  demo's `assets/canora/tidal.json`); the handler source documents both APIs'
+  endpoints. The palette's non-visual kinds are what make that a component
+  rather than prose.
+
 ### Presentation is a first-class part of drag feel
 
 A drag must show a new position on the frame after the move, so what a present

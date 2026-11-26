@@ -974,7 +974,7 @@ pub fn the_canora_demo_project_roundtrips_test() {
   let assert Ok(loaded) = project.load(path)
   loaded.modules
   |> list.map(fn(module) { module.name })
-  |> should.equal(["Library", "Search", "Player"])
+  |> should.equal(["Library", "Search", "Player", "Services"])
   // The non-visual components are part of the forms, with their properties.
   let assert Some(library) = project.find_module(loaded, "library")
   let timers =
@@ -992,6 +992,18 @@ pub fn the_canora_demo_project_roundtrips_test() {
   // The page is free-layout: the panels are backgrounds and every child sits
   // where it belongs on the page (the client/border model has its own tests).
   library.form.aligns |> should.equal([])
+  // Tidal is a provider like Spotify: the Services module points a datasource
+  // at the Tidal catalogue and carries the token field that would unlock it.
+  let assert Some(services) = project.find_module(loaded, "connect")
+  let urls =
+    list.filter(services.form.controls, fn(control) {
+      control.kind == campy_form.Datasource
+    })
+    |> list.map(fn(control) { campy_form.control_prop(control, "url", "") })
+  urls |> should.equal(["assets/canora/tidal.json"])
+  services.form.controls
+  |> list.any(fn(control) { control.name == "provider" })
+  |> should.be_true
 }
 
 pub fn checked_in_campy_project_is_the_current_demo_test() {

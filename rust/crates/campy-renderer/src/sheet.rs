@@ -186,7 +186,7 @@ pub const CAMPY_SHEET: &str = css!(
     // Palette tiles: quiet squares that light up under the pointer.
     ".campy-palette { background: transparent; }",
     ".campy-palette-tile .campy-widget-button { background: transparent;
-                                                border-color: transparent; font-size: 16px;
+                                                border-color: transparent; font-size: 22px;
                                                 color: var(--campy-muted); }",
     ".campy-palette-tile .campy-widget-button:hover { background: var(--campy-hover);
                                                       color: var(--campy-text); }",
