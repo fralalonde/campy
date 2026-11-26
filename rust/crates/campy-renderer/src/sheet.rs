@@ -306,15 +306,23 @@ pub const CAMPY_SHEET: &str = css!(
     // Non-visual components in the designer: a pictogram tile with the
     // component's name under it, so a timer reads as a thing, not a blank.
     ".campy-nonvisual { display: flex; flex-direction: column; align-items: center;
-                        justify-content: center; gap: 2px;
-                        border: 1px dashed var(--campy-border);
-                        border-radius: 8px; background: var(--campy-raised); }",
-    ".campy-nonvisual-glyph { font-size: 22px; color: var(--campy-accent); }",
-    ".campy-nonvisual-name { font-size: 11px; color: var(--campy-muted); }",
+                        justify-content: center; gap: 4px; padding: 6px;
+                        border: 1px dashed var(--campy-accent);
+                        border-radius: 8px; background: var(--campy-accent-soft); }",
+    ".campy-nonvisual-glyph-box { display: flex; align-items: center; justify-content: center;
+                                  width: 46px; height: 46px; border-radius: 8px;
+                                  background: var(--campy-panel);
+                                  border: 1px solid var(--campy-accent); }",
+    ".campy-nonvisual-glyph { font-size: 26px; color: var(--campy-accent); }",
+    ".campy-nonvisual-name { font-size: 11px; color: var(--campy-text); }",
     ".campy-grip { background: var(--campy-panel);
                   border: 1px solid var(--campy-accent); border-radius: 2px; }",
     ".campy-grip-window { background: var(--campy-raised);
                           border-color: var(--campy-border); }",
+    ".campy-tooltip { position: absolute; background: var(--campy-raised);
+                      border: 1px solid var(--campy-border); border-radius: 6px;
+                      padding: 4px 8px; font-size: 12px; color: var(--campy-text);
+                      pointer-events: none; }",
     // Where a drag would drop: the prospective parent, outlined while the
     // pointer is still down.
     ".campy-drop { border: 2px dashed var(--campy-accent); background: transparent;

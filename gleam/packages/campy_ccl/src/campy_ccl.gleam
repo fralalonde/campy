@@ -141,8 +141,8 @@ pub fn all() -> List(Component) {
       "Timer",
       "⏱",
       non_visual_category,
-      120,
-      72,
+      68,
+      84,
       "Timer",
       False,
       [
@@ -162,8 +162,8 @@ pub fn all() -> List(Component) {
       "Datasource",
       "⇄",
       non_visual_category,
-      140,
-      80,
+      68,
+      84,
       "Datasource",
       False,
       [

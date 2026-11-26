@@ -416,6 +416,9 @@ fn with_project(state: State, workspace: Workspace, project: Project) -> State {
     font: state.font,
     font_size: state.font_size,
     scheme: state.scheme,
+    // The editor mode is the user's, not the document's: switching modules or
+    // projects leaves the Form/Code view where it was.
+    view: state.view,
     clipboard: state.clipboard,
     previews: state.previews,
     selected_project: True,
@@ -535,7 +538,8 @@ pub fn open_module(state: State, id: String) -> State {
         ..state,
         active: id,
         opened: opened,
-        view: FormView,
+        // The Form/Code mode is the user's, not the module's.
+        view: state.view,
         selected: None,
         selection: [],
         selected_project: False,
@@ -3317,15 +3321,21 @@ fn grip_at(
         Some(_), [_, ..] ->
           case selected_control(state) {
             Some(control) ->
-              case
-                campy_form.layout_of(
-                  form,
-                  campy_form.parent_of(form, control.id),
-                )
-              {
-                campy_form.Free ->
-                  control_grip(campy_form.bounds(form, control), x, y)
-                _ -> None
+              // A non-visual component is a fixed-size tile: it moves and is
+              // selected like anything else, but has no resize handles.
+              case campy_form.non_visual(control.kind) {
+                True -> None
+                False ->
+                  case
+                    campy_form.layout_of(
+                      form,
+                      campy_form.parent_of(form, control.id),
+                    )
+                  {
+                    campy_form.Free ->
+                      control_grip(campy_form.bounds(form, control), x, y)
+                    _ -> None
+                  }
               }
             None -> None
           }

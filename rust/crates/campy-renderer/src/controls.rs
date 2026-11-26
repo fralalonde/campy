@@ -124,6 +124,12 @@ pub struct Host {
     /// build. A popup is drawn at the document root, so it has to know where
     /// its trigger is on screen.
     pub rects: RefCell<HashMap<u64, (f64, f64, f64, f64)>>,
+    /// The hint the pointer is over, and where it is: a tooltip at the pointer
+    /// (the status line is the same sentence, but it lives at the bottom of the
+    /// window, too far from where the eye is working).
+    pub tooltip: RefCell<Option<(String, f64, f64)>>,
+    /// Bumped whenever the tooltip changes; its card redraws on it.
+    pub tooltip_tick: RefCell<Option<RwSignal<u64, zgui::reactive::LocalStorage>>>,
     /// The open popup's absolute rectangle, for the press-outside test.
     pub popup_rect: Cell<Option<(f64, f64, f64, f64)>>,
     /// Whether `CAMPY_UI_OPEN_MENU` has been honoured (one shot).
@@ -199,6 +205,8 @@ impl Host {
             kinds: RefCell::new(HashMap::new()),
             popup_tick: RefCell::new(None),
             rects: RefCell::new(HashMap::new()),
+            tooltip: RefCell::new(None),
+            tooltip_tick: RefCell::new(None),
             popup_rect: Cell::new(None),
             popup_debugged: Cell::new(false),
             last_size: Cell::new((0, 0)),
@@ -290,6 +298,22 @@ impl Host {
             .borrow()
             .as_ref()
             .map(|tick| tick.get())
+            .unwrap_or(0)
+    }
+
+    /// Shows the hint at `x, y`, or hides it with `None`.
+    fn set_tooltip(&self, tooltip: Option<(String, f64, f64)>) {
+        *self.tooltip.borrow_mut() = tooltip;
+        if let Some(tick) = self.tooltip_tick.borrow().as_ref() {
+            let _ = tick.try_update(|version| *version = version.wrapping_add(1));
+        }
+    }
+
+    fn tooltip_version(&self) -> u64 {
+        self.tooltip_tick
+            .borrow()
+            .as_ref()
+            .and_then(|tick| tick.try_get())
             .unwrap_or(0)
     }
 
@@ -416,10 +440,13 @@ pub fn build_document(host: &Rc<Host>) -> AnyView {
     // old one.
     host.field_focused.set(false);
     host.editor_focused.set(false);
-    // The popup's signal belongs to this build (and so to the window).
+    // The popup's and the tooltip's signals belong to this build (and so to the
+    // window).
     *host.popup_tick.borrow_mut() = Some(RwSignal::new_local(0_u64));
+    *host.tooltip_tick.borrow_mut() = Some(RwSignal::new_local(0_u64));
     host.controls.borrow_mut().clear();
     let popup_host = host.clone();
+    let tooltip_host = host.clone();
     let key_host = host.clone();
     let close_host = host.clone();
     let theme_host = host.clone();
@@ -489,6 +516,7 @@ pub fn build_document(host: &Rc<Host>) -> AnyView {
             }
         })
         .child(keyed_children(host, DOCUMENT_ROOT))
+        .child(move || tooltip_card(&tooltip_host))
         .child(move || popup_card(&popup_host));
     let _ = theme_host;
     AnyView::new(root)
@@ -825,6 +853,33 @@ fn first_of_kind(controls: &[ControlDesc], kinds: &[&str]) -> Option<u64> {
 
 /// The open popup, or nothing: a menu's items or a choice list's options, one
 /// `control()` row each, drawn at the document root above everything.
+/// The hint the pointer is over, drawn beside the pointer. A card, so a long
+/// sentence stays readable where the eye already is.
+fn tooltip_card(host: &Rc<Host>) -> AnyView {
+    let _version = host.tooltip_version();
+    match host.tooltip.borrow().clone() {
+        Some((text, x, y)) => {
+            let width = ((text.chars().count() as f64) * 7.0 + 20.0).clamp(90.0, 360.0);
+            AnyView::new(
+                r#box()
+                    .class("campy-tooltip")
+                    .style_property("display", Some("block".to_owned()))
+                    .style_property("left", Some(px(x)))
+                    .style_property("top", Some(px(y)))
+                    .style_property("width", Some(px(width)))
+                    .child(text_element(move || text.clone())),
+            )
+        }
+        // Stated on every build, as the popup card is: the hidden layer sets
+        // `display: none`, and an unset property is one the element keeps.
+        None => AnyView::new(
+            r#box()
+                .class("campy-tooltip")
+                .style_property("display", Some("none".to_owned())),
+        ),
+    }
+}
+
 fn popup_card(host: &Rc<Host>) -> AnyView {
     let _version = host.popup_version();
     if std::env::var_os("CAMPY_UI_FRAME_LOG").is_some() {
@@ -1027,11 +1082,19 @@ pub fn build_control(desc: &ControlDesc, host: &Rc<Host>, passive: bool) -> AnyV
     if let Some(hint) = prop_string(desc, "hint") {
         let enter_host = host.clone();
         let leave_host = host.clone();
+        let tip_text = hint.clone();
         wrapper = wrapper
-            .on(events::POINTER_ENTER, move |_| {
+            .on(events::POINTER_ENTER, move |cx| {
+                let position: Point<CssPx, Css> = cx.position;
+                enter_host.set_tooltip(Some((
+                    tip_text.clone(),
+                    position.x.0 as f64 + 14.0,
+                    position.y.0 as f64 + 20.0,
+                )));
                 enter_host.emit_raw("hover", hint.clone())
             })
             .on(events::POINTER_LEAVE, move |_| {
+                leave_host.set_tooltip(None);
                 leave_host.emit_raw("hover", "")
             });
     }
@@ -1262,10 +1325,19 @@ fn widget(desc: &ControlDesc, host: &Rc<Host>, signals: &ControlSignals, passive
                 return AnyView::new(r#box());
             }
             let glyph = if desc.kind == "timer" { "⏱" } else { "⇄" };
+            // A square pictogram over the component's name, in a box that reads
+            // as "not part of the UI" (accent tint, dashed edge).
             AnyView::new(
                 r#box()
                     .class("campy-nonvisual")
-                    .child(text_element(move || glyph.to_owned()).class("campy-nonvisual-glyph"))
+                    .child(
+                        r#box()
+                            .class("campy-nonvisual-glyph-box")
+                            .child(
+                                text_element(move || glyph.to_owned())
+                                    .class("campy-nonvisual-glyph"),
+                            ),
+                    )
                     .child(text_element(move || text.get()).class("campy-nonvisual-name")),
             )
         }

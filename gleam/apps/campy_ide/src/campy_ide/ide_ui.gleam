@@ -307,9 +307,18 @@ fn shown_primary(model: State) -> Option(campy_form.Control) {
 /// to lay its children out itself, the same test `state.grip_at` makes.
 fn selection_free(model: State) -> Bool {
   case shown_primary(model), active_form(model) {
-    Some(control), Some(form) ->
-      campy_form.layout_of(form, campy_form.parent_of(form, control.id))
-      == campy_form.Free
+    // A non-visual component is a fixed-size tile: no resize handles.
+    Some(control), _ ->
+      case campy_form.non_visual(control.kind) {
+        True -> False
+        False ->
+          case active_form(model) {
+            Some(form) ->
+              campy_form.layout_of(form, campy_form.parent_of(form, control.id))
+              == campy_form.Free
+            None -> False
+          }
+      }
     _, _ -> False
   }
 }

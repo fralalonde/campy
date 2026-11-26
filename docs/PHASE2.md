@@ -145,6 +145,27 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   filter in its title, takes an absolute path in the Name field (Open navigates
   into a typed directory), and accepts with Enter.
 
+### Non-visual tiles, tooltips, the editor mode (as built)
+
+- **Non-visual components are fixed-size tiles.** 68×84: a square pictogram box
+  (accent outline on the panel) over the component's name, inside an
+  accent-tinted dashed box, so it reads as something bolted onto the UI rather
+  than part of it. They are not resizable: `grip_at` and `selection_free`
+  ignore them, while moving and selecting work as for any control.
+- **Tooltips at the pointer.** A control's `hint` is drawn in a small card
+  beside the pointer (`Host.tooltip` + its own tick, a root-level layer that
+  states its `display` every build), so the palette and every button explain
+  themselves where the eye is. The status line still carries the same sentence.
+- **The Form/Code mode is the user's.** `open_module` used to reset `view` to
+  Form; it and `with_project` now carry it, so the mode survives module and
+  project switches.
+- **Canora** has a ☰ menu (Settings / About Canora / Quit) and a ◉ profile
+  button; its Profile module holds both services' credentials — Spotify
+  (PKCE, `accounts.spotify.com/api/token`, `api.spotify.com/v1`) and Tidal
+  (client credentials, `auth.tidal.com/v1/oauth2/token`,
+  `openapi.tidal.com/v2` with `countryCode`) — with the token fields a real
+  deployment would keep in a secret store.
+
 ### Window close, window selection (as built)
 
 - **A closed window is a stopped app.** The close-request callback's guard was

@@ -762,6 +762,51 @@ pub fn a_marquee_outlines_its_candidates_before_release_test() {
   list.length(released.selection) |> should.equal(2)
 }
 
+pub fn the_editor_mode_survives_module_and_project_switches_test() {
+  let on_code =
+    demo_state()
+    |> state.open_module("cat-cafe")
+    |> state.set_view(state.CodeView)
+  // Switching modules and projects leaves the Form/Code choice alone.
+  state.open_module(on_code, "widgets").view
+  |> should.equal(state.CodeView)
+  state.switch_project(on_code, project.default_path).view
+  |> should.equal(state.CodeView)
+  state.open_project(on_code, canora.project()).view
+  |> should.equal(state.CodeView)
+}
+
+pub fn a_non_visual_component_has_no_grips_test() {
+  // The tile moves and is selected like anything else, but has no resize
+  // handles: its size is the pictogram's.
+  let model = demo_state()
+  let assert Some(form) = state.active_form(model)
+  let #(form, placed) = campy_form.add_control(form, campy_form.Timer, "")
+  let model =
+    state.State(
+      ..model,
+      project: project.update_module(
+        model.project,
+        project.Module(..assert_module(model, "cat-cafe"), form: form),
+      ),
+      active: "cat-cafe",
+    )
+    |> state.select(placed.id)
+  let #(x, y, w, h) = campy_form.bounds(form, placed)
+  w |> should.equal(68)
+  h |> should.equal(84)
+  // A press on the tile's edge starts a drag, not a resize.
+  state.pointer_down(model, x + w, y + h / 2).gesture
+  |> should.equal(state.Pressing(#(x + w, y + h / 2), placed.id))
+  // And the selection shows no grips.
+  ide_ui.snapshot(model).selection_free |> should.be_false
+}
+
+fn assert_module(model: state.State, id: String) -> project.Module {
+  let assert Some(module) = project.find_module(model.project, id)
+  module
+}
+
 pub fn clicking_the_title_bar_selects_the_window_test() {
   // A press on the title bar that does not travel selects the window; the
   // eight handles are then around the form itself.

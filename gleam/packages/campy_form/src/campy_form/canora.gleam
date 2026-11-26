@@ -54,7 +54,11 @@ pub fn project() -> project.Project {
 fn library() -> campy_form.Form {
   let controls = [
     panel("rail", "rail", 0, 0, 240, 640, ""),
-    label("rail_title", "rail_title", 20, 20, 200, 28, "Your Library"),
+    menu("hamburger", "hamburger", 16, 14, 34, 30, "☰", [
+      #("model", "Settings\nAbout Canora\nQuit"),
+    ]),
+    button("profile", "profile", 192, 14, 34, 30, "◉"),
+    label("rail_title", "rail_title", 58, 20, 120, 28, "Your Library"),
     list(
       "playlist_list",
       "playlist_list",
@@ -123,7 +127,10 @@ fn library() -> campy_form.Form {
 
 fn search() -> campy_form.Form {
   let controls = [
-    label("heading", "heading", 24, 20, 500, 36, "Search"),
+    menu("hamburger", "hamburger", 24, 18, 34, 30, "☰", [
+      #("model", "Settings\nAbout Canora\nQuit"),
+    ]),
+    label("heading", "heading", 70, 20, 500, 36, "Search"),
     edit("query", "query", 24, 68, 640, 36, "mochi", [
       #("placeholder", "Tracks, artists, albums, playlists"),
     ]),
@@ -192,59 +199,85 @@ fn player() -> campy_form.Form {
 /// datasources behind a token, so the choice is one combo and one field.
 fn connect() -> campy_form.Form {
   let controls = [
-    label("heading", "heading", 24, 20, 500, 36, "Services"),
-    label(
-      "blurb",
-      "blurb",
-      24,
-      62,
-      640,
-      40,
-      "Canora speaks to Spotify and Tidal: pick one, paste a token, and the catalogue loads.",
-    ),
-    label("provider_label", "provider_label", 24, 116, 140, 28, "Service"),
-    control(
-      "provider",
-      "provider",
-      campy_form.ComboBox,
-      168,
-      116,
-      240,
-      32,
-      "Tidal",
-      [
-        #("model", "Spotify\nTidal"),
-      ],
-    ),
-    label("token_label", "token_label", 24, 156, 140, 28, "Token"),
-    control("token", "token", campy_form.EditBox, 168, 156, 500, 32, "", [
-      #("placeholder", "paste an access token"),
+    menu("hamburger", "hamburger", 24, 18, 34, 30, "☰", [
+      #("model", "Settings\nAbout Canora\nQuit"),
     ]),
-    button("connect", "connect", 168, 196, 140, 34, "Connect"),
+    label("heading", "heading", 70, 20, 400, 36, "Profile"),
     label(
-      "status",
-      "status",
+      "blurb",
+      "blurb",
       24,
-      246,
-      640,
-      24,
-      "Not connected — the demo reads a local export",
+      66,
+      760,
+      40,
+      "Canora speaks to Spotify and Tidal. Each service has its own app registration and token flow.",
     ),
+    label("provider_label", "provider_label", 24, 120, 140, 28, "Active service"),
+    control("provider", "provider", campy_form.ComboBox, 168, 120, 240, 32, "Tidal", [
+      #("model", "Spotify\nTidal"),
+    ]),
+    label("spotify_heading", "spotify_heading", 24, 176, 400, 28, "Spotify"),
+    label(
+      "spotify_note",
+      "spotify_note",
+      24,
+      204,
+      760,
+      22,
+      "accounts.spotify.com/api/token · api.spotify.com/v1 · PKCE, refresh tokens",
+    ),
+    label("spotify_id_label", "spotify_id_label", 24, 234, 140, 28, "Client ID"),
+    control("spotify_id", "spotify_id", campy_form.EditBox, 168, 234, 540, 30, "", [
+      #("placeholder", "Spotify application client id"),
+    ]),
+    label("spotify_token_label", "spotify_token_label", 24, 272, 140, 28, "Token"),
+    control("spotify_token", "spotify_token", campy_form.EditBox, 168, 272, 540, 30, "", [
+      #("placeholder", "bearer token (refreshed from the refresh token)"),
+    ]),
+    label("tidal_heading", "tidal_heading", 24, 322, 400, 28, "Tidal"),
+    label(
+      "tidal_note",
+      "tidal_note",
+      24,
+      350,
+      760,
+      22,
+      "auth.tidal.com/v1/oauth2/token · openapi.tidal.com/v2 · countryCode required",
+    ),
+    label("tidal_id_label", "tidal_id_label", 24, 380, 140, 28, "Client ID"),
+    control("tidal_id", "tidal_id", campy_form.EditBox, 168, 380, 540, 30, "", [
+      #("placeholder", "Tidal application client id"),
+    ]),
+    label("tidal_secret_label", "tidal_secret_label", 24, 418, 140, 28, "Client secret"),
+    control("tidal_secret", "tidal_secret", campy_form.EditBox, 168, 418, 540, 30, "", [
+      #("placeholder", "kept out of the form by a real deployment"),
+    ]),
+    label("tidal_token_label", "tidal_token_label", 24, 456, 140, 28, "Token"),
+    control("tidal_token", "tidal_token", campy_form.EditBox, 168, 456, 540, 30, "", [
+      #("placeholder", "bearer token from the token endpoint"),
+    ]),
+    label("tidal_country_label", "tidal_country_label", 24, 494, 140, 28, "Country"),
+    control("tidal_country", "tidal_country", campy_form.EditBox, 168, 494, 120, 30, "US", [
+      #("placeholder", "ISO 3166-1 alpha-2"),
+    ]),
+    button("save", "save", 168, 540, 200, 34, "Save credentials"),
+    button("connect", "connect", 380, 540, 160, 34, "Connect"),
+    label("status", "status", 24, 588, 760, 24, "Demo: reads assets/canora/tidal.json"),
     list(
       "tidal_catalog",
       "tidal_catalog",
       24,
-      280,
-      640,
-      280,
+      620,
+      700,
+      180,
       "The Tidal catalogue appears here",
     ),
-    datasource("tidal_api", "tidal_api", 692, 280, 150, 84, [
+    datasource("tidal_api", "tidal_api", 752, 620, 68, 84, [
       #("url", "assets/canora/tidal.json"),
       #("target", "tidal_catalog"),
     ]),
   ]
-  form("Canora · Services", 880, 600, controls, [])
+  form("Canora · Profile", 880, 840, controls, [])
 }
 
 // --- builders ---------------------------------------------------------------
@@ -282,6 +315,19 @@ fn panel(
   text: String,
 ) {
   control(id, name, campy_form.Panel, x, y, w, h, text, [#("border", "0")])
+}
+
+fn menu(
+  id: String,
+  name: String,
+  x: Int,
+  y: Int,
+  w: Int,
+  h: Int,
+  text: String,
+  props: List(#(String, String)),
+) {
+  control(id, name, campy_form.Menu, x, y, w, h, text, props)
 }
 
 fn label(
@@ -444,6 +490,17 @@ pub fn new_playlist_clicked() -> Nil {
   Nil
 }
 
+pub fn hamburger_selected(which: String) -> Nil {
+  // Settings, About Canora, Quit: the app's own menu.
+  let _ = which
+  Nil
+}
+
+pub fn profile_clicked() -> Nil {
+  // Opens the Profile module: the per-service credentials editor.
+  Nil
+}
+
 pub fn tracks_api_loaded(count: Int) -> Nil {
   let _ = count
   Nil
@@ -475,21 +532,34 @@ pub fn results_api_loaded(count: Int) -> Nil {
 }
 
 fn connect_source() -> String {
-  "// Canora · services
+  "// Canora · profile
 //
-// One client, two services. `provider` picks Spotify or Tidal, `token` holds
-// the access token, and the catalogue datasource reads what the service
-// answers. The demo reads assets/canora/tidal.json, so there is no login; a
-// real deployment trades a refresh token for an access token here.
+// One client, two services, and they are not the same API:
 //
-// Tidal:   https://openapi.tidal.com/v2/searchResults/{query}?countryCode=…
-//          Authorization: Bearer <token>
-// Spotify: https://api.spotify.com/v1/search?q=…&type=track
-//          Authorization: Bearer <token>
+// Spotify — OAuth 2.0 authorization code with PKCE (the desktop flow):
+//   authorize  https://accounts.spotify.com/authorize  (code_challenge)
+//   token      https://accounts.spotify.com/api/token    (code + code_verifier)
+//   refresh    https://accounts.spotify.com/api/token    (grant_type=refresh_token)
+//   api        https://api.spotify.com/v1/...            Authorization: Bearer <token>
+//
+// Tidal — OAuth 2.0 client credentials for an application, and every request
+// needs a country:
+//   token      https://auth.tidal.com/v1/oauth2/token    (client_id + client_secret)
+//   api        https://openapi.tidal.com/v2/...?countryCode=US
+//              Authorization: Bearer <token>
+//
+// The demo reads assets/canora/tidal.json so it runs without credentials; these
+// fields are what a real deployment would keep in a secret store and use to
+// fill the catalogue datasource.
 
 pub type Provider {
   Spotify
   Tidal
+}
+
+pub fn hamburger_selected(which: String) -> Nil {
+  let _ = which
+  Nil
 }
 
 pub fn provider_selected(which: String) -> Nil {
@@ -501,9 +571,14 @@ pub fn provider_selected(which: String) -> Nil {
   Nil
 }
 
+pub fn save_clicked() -> Nil {
+  // Store the provider's client id and token outside the form.
+  Nil
+}
+
 pub fn connect_clicked() -> Nil {
-  // `token` holds the service's access token; the datasource then reads the
-  // catalogue it is pointed at.
+  // Exchange the stored credentials for a token and point the datasource at
+  // the catalogue it unlocks.
   Nil
 }
 

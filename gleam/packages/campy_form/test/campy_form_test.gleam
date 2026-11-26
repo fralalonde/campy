@@ -1004,6 +1004,23 @@ pub fn the_canora_demo_project_roundtrips_test() {
   services.form.controls
   |> list.any(fn(control) { control.name == "provider" })
   |> should.be_true
+  // Each service has its own credentials; they are not the same API.
+  let names =
+    list.map(services.form.controls, fn(control) { control.name })
+  list.each(
+    ["spotify_id", "spotify_token", "tidal_id", "tidal_secret", "tidal_token", "tidal_country"],
+    fn(name) { list.contains(names, name) |> should.be_true },
+  )
+  // The hamburger menu is on the app's own forms, with its three items.
+  let assert Some(library) = project.find_module(loaded, "library")
+  let assert Ok(hamburger) =
+    list.find(library.form.controls, fn(control) { control.name == "hamburger" })
+  hamburger.kind |> should.equal(campy_form.Menu)
+  campy_form.control_prop(hamburger, "model", "")
+  |> should.equal("Settings\nAbout Canora\nQuit")
+  library.form.controls
+  |> list.any(fn(control) { control.name == "profile" })
+  |> should.be_true
 }
 
 pub fn checked_in_campy_project_is_the_current_demo_test() {
