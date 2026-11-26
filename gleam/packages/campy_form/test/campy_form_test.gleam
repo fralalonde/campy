@@ -576,7 +576,9 @@ pub fn border_insets_aligned_children_test() {
         [],
       ),
     )
-  #(cx, cy, cw, ch) |> should.equal(#(30, 30, 280, 180))
+  // The bottom child takes its 20px band out of the client area: the two must
+  // not overlap.
+  #(cx, cy, cw, ch) |> should.equal(#(30, 30, 280, 160))
   let #(bx, by, bw, bh) =
     campy_form.bounds(
       form,
@@ -922,6 +924,47 @@ pub fn legacy_project_version_is_rejected_test() {
 
 // The checked-in demo is the codec's reference file: it loads at v13 and is
 // exactly what `project.campy()` builds (path aside).
+pub fn client_fills_what_the_border_siblings_leave_test() {
+  // A form with a top bar, a bottom bar and a left rail: alClient is what is
+  // left of the middle.
+  let form = campy_form.new_form()
+  let #(form, top) = campy_form.add_control(form, campy_form.Panel, "")
+  let #(form, bottom) = campy_form.add_control(form, campy_form.Panel, "")
+  let #(form, left) = campy_form.add_control(form, campy_form.Panel, "")
+  let #(form, client) = campy_form.add_control(form, campy_form.Panel, "")
+  let sizes = [
+    #(top.id, 0, 0, form.width, 40, campy_form.Top),
+    #(bottom.id, 0, 0, form.width, 30, campy_form.Bottom),
+    #(left.id, 0, 0, 60, 0, campy_form.Left),
+    #(client.id, 0, 0, 0, 0, campy_form.Client),
+  ]
+  let form =
+    list.fold(sizes, form, fn(acc, entry) {
+      let #(id, x, y, w, h, align) = entry
+      let acc = campy_form.set_align(acc, id, align)
+      campy_form.update_control(
+        acc,
+        campy_form.Control(
+          ..assert_control(acc, id),
+          x: x,
+          y: y,
+          width: w,
+          height: h,
+        ),
+      )
+    })
+  let client = assert_control(form, client.id)
+  let #(x, y, w, h) = campy_form.bounds(form, client)
+  // Border: 0, so the inner rect is the form itself.
+  #(x, y, w, h)
+  |> should.equal(#(60, 40, form.width - 60, form.height - 40 - 30))
+}
+
+fn assert_control(form: campy_form.Form, id: String) -> campy_form.Control {
+  let assert Some(control) = campy_form.find_control(form, id)
+  control
+}
+
 pub fn checked_in_campy_project_is_the_current_demo_test() {
   let loaded = case project.load("campy.campy") {
     Ok(loaded) -> loaded

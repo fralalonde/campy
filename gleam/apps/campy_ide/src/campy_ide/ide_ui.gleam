@@ -79,6 +79,8 @@ pub type UiOp {
   SetCode(control: Int, source: String)
   AppendConsole(control: Int, bytes: String)
   SetMarks(control: Int, layer: String, items: List(#(Int, Int, String)))
+  /// The pointer's shape over this window, sent only when it changes.
+  SetCursor(cursor: String)
   /// The document must be rebuilt (structural change); the old shell's F6 path.
   Reload(view: Snapshot)
 }
@@ -101,6 +103,7 @@ pub fn snapshot(model: State) -> Snapshot {
     theme: theme_name(model.scheme),
     status: model.status,
     path: model.project.path,
+    cursor: state.cursor(model),
     running: state.any_running(model),
     project_apps: list.map(model.workspace.projects, fn(target) {
       case project.default_module(target) {
@@ -1011,6 +1014,7 @@ fn command(generation: Int, op: UiOp) -> bridge.Command {
       bridge.AppendConsole(generation, control, bytes)
     SetMarks(control, layer, items) ->
       bridge.SetMarks(generation, control, layer, items)
+    SetCursor(cursor) -> bridge.SetCursor(generation, cursor)
     Reload(view) ->
       bridge.LoadUi(
         generation,
@@ -1032,12 +1036,15 @@ pub fn ops(previous: Snapshot, next: Snapshot) -> List(UiOp) {
         Error(_) -> [Reload(next)]
         Ok(changes) ->
           list.append(
-            list.map(changes, change_op),
+            cursor_ops(previous, next),
             list.append(
-              code_ops(previous, next),
+              list.map(changes, change_op),
               list.append(
-                console_ops(previous, next),
-                marks_ops(previous, next),
+                code_ops(previous, next),
+                list.append(
+                  console_ops(previous, next),
+                  marks_ops(previous, next),
+                ),
               ),
             ),
           )
@@ -1058,6 +1065,13 @@ type Change {
   IntChange(control: Int, key: String, value: Int)
   GeoChange(control: Int, x: Int, y: Int, w: Int, h: Int)
   ModelChange(control: Int, items: List(bridge.WireValue))
+}
+
+fn cursor_ops(previous: Snapshot, next: Snapshot) -> List(UiOp) {
+  case previous.cursor == next.cursor {
+    True -> []
+    False -> [SetCursor(next.cursor)]
+  }
 }
 
 fn change_op(change: Change) -> UiOp {

@@ -760,6 +760,20 @@ pub fn a_marquee_outlines_its_candidates_before_release_test() {
   list.length(released.selection) |> should.equal(2)
 }
 
+pub fn the_pointer_says_what_it_would_do_test() {
+  let model = demo_state() |> state.select("pet-button")
+  // Over a component that is in the block: grab. The block's grip: a resize
+  // arrow for that edge. The title bar: move. Nothing: the arrow.
+  state.cursor(state.pointer_move(model, 60, 240)) |> should.equal("grab")
+  state.cursor(state.pointer_move(model, 184, 250)) |> should.equal("ew")
+  state.cursor(state.pointer_move(model, 44, 236)) |> should.equal("nwse")
+  state.cursor(state.pointer_move(model, 100, -14)) |> should.equal("move")
+  state.cursor(state.pointer_move(model, 620, 410)) |> should.equal("default")
+  // A drag in flight is the closed hand, whatever it is over.
+  let dragging = state.pointer_move(state.pointer_down(model, 60, 240), 80, 260)
+  state.cursor(dragging) |> should.equal("grabbing")
+}
+
 pub fn a_press_in_the_selection_gap_drags_the_block_test() {
   let model =
     demo_state()

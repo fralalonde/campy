@@ -74,6 +74,11 @@ impl Command {
                     return Err("UI description exceeds 512 KiB".into());
                 }
             }
+            Op::SetCursor { cursor } => {
+                if cursor.len() > 32 {
+                    return Err("Cursor name exceeds 32 bytes".into());
+                }
+            }
             Op::SetText { value, .. } | Op::SetCode { source: value, .. } => {
                 if value.len() > wire::MAX_TEXT_BYTES {
                     return Err("Text exceeds 64 KiB".into());
@@ -1119,6 +1124,12 @@ fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
                 other => return Err(format!("Unsupported read key: {other}")),
             }
         }
+        Op::SetCursor { cursor } => {
+            let Some(handle) = host.window.borrow().clone() else {
+                return Ok(());
+            };
+            handle.set_cursor(cursor_style(cursor));
+        }
         Op::Resize { width, height } => {
             let handle = host.window.borrow().clone();
             let Some(handle) = handle else {
@@ -1128,6 +1139,23 @@ fn apply_op(host: &Rc<Host>, op: &Op) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The window's cursor for one of the editor's cursor names.
+fn cursor_style(name: &str) -> zgui::platform::CursorStyle {
+    use zgui::platform::CursorStyle as Cursor;
+    match name {
+        "grab" => Cursor::Grab,
+        "grabbing" => Cursor::Grabbing,
+        "move" => Cursor::Move,
+        "ew" => Cursor::ResizeEastWest,
+        "ns" => Cursor::ResizeNorthSouth,
+        "nwse" => Cursor::ResizeNorthWestSouthEast,
+        "nesw" => Cursor::ResizeNorthEastSouthWest,
+        "text" => Cursor::Text,
+        "pointer" => Cursor::Pointer,
+        _ => Cursor::Default,
+    }
 }
 
 fn reap_closed(ui: &Rc<ThreadState>) {

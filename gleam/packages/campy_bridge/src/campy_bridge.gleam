@@ -58,6 +58,9 @@ pub type Command {
   )
   ReadText(generation: Int, control: Int, key: String)
   Resize(generation: Int, width: Int, height: Int)
+  /// Asks the window for a different pointer (the editor's cursor names:
+  /// `default`, `grab`, `grabbing`, `move`, `ew`, `ns`, `nwse`, `nesw`).
+  SetCursor(generation: Int, cursor: String)
   /// Several commands that belong to one moment, applied as one. One submit
   /// is one wake and one frame: a gesture that used to wake the window per
   /// changed field now wakes it once.

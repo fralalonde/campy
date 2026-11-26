@@ -168,6 +168,11 @@ pub enum Op {
         control: u64,
         key: String,
     },
+    /// What the pointer should look like over this window, by name
+    /// (`default`, `grab`, `grabbing`, `move`, `ew`, `ns`, `nwse`, `nesw`).
+    SetCursor {
+        cursor: String,
+    },
     /// Several ops that belong to one moment, applied as one command.
     ///
     /// A gesture changes a dozen things at once — the control's rectangle,

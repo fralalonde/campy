@@ -1168,6 +1168,49 @@ fn move_selected_raw(state: State, dx: Int, dy: Int) -> State {
   }
 }
 
+/// What the pointer over the canvas is over, as a cursor name the renderer
+/// asks the window manager for: a drag in flight wins, then a resize handle,
+/// then the block, then the module window's title bar.
+pub fn cursor(state: State) -> String {
+  case state.gesture {
+    Moving(_) -> "grabbing"
+    Resizing(mode, _, _) -> resize_cursor(mode, True)
+    _ ->
+      case active_form(state) {
+        None -> "default"
+        Some(form) -> {
+          let #(x, y) = state.last_pointer
+          case grip_at(state, form, x, y) {
+            Some(#(mode, window)) -> resize_cursor(mode, window)
+            None ->
+              case y < 0 && y >= -28 && x >= 0 && x <= form.width {
+                True -> "move"
+                False ->
+                  case selection_grab(state, form, x, y) {
+                    "" -> "default"
+                    _ -> "grab"
+                  }
+              }
+          }
+        }
+      }
+  }
+}
+
+fn resize_cursor(mode: String, window: Bool) -> String {
+  case window {
+    True -> "nwse"
+    False ->
+      case mode {
+        "n" | "s" -> "ns"
+        "e" | "w" -> "ew"
+        "nw" | "se" -> "nwse"
+        "ne" | "sw" -> "nesw"
+        _ -> "default"
+      }
+  }
+}
+
 /// The container the current drag would drop into and its rectangle, in form
 /// coordinates. `#(active, x, y, w, h)`; an empty container id is the window.
 pub fn drop_target_rect(state: State) -> #(Bool, Int, Int, Int, Int) {

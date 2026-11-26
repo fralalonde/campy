@@ -125,6 +125,7 @@ enum Command {
     SetMarks(i64, i64, String, Vec<(i64, i64, String)>),
     ReadText(i64, i64, String),
     Resize(i64, f64, f64),
+    SetCursor(i64, String),
     /// Several commands that belong to one moment; the outer generation wins.
     Batch(i64, Vec<Command>),
 }
@@ -223,6 +224,7 @@ impl Command {
                 },
             ),
             Self::Resize(generation, width, height) => (generation, Op::Resize { width, height }),
+            Self::SetCursor(generation, cursor) => (generation, Op::SetCursor { cursor }),
             Self::Batch(generation, commands) => (
                 generation,
                 Op::Batch {

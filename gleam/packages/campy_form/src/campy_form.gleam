@@ -366,7 +366,7 @@ pub fn bounds(form: Form, control: Control) -> #(Int, Int, Int, Int) {
             Bottom -> #(ix, iy + ih - control.height, iw, control.height)
             Left -> #(ix, iy, control.width, ih)
             Right -> #(ix + iw - control.width, iy, control.width, ih)
-            Client -> #(ix, iy, iw, ih)
+            Client -> client_bounds(form, control, parent_id, ix, iy, iw, ih)
             Fill -> fill_bounds(form, control, parent_id, ix, iy, iw, ih)
           }
         Column -> arranged_column(form, control, parent_id, ix, iy, iw)
@@ -407,6 +407,42 @@ fn arranged_row(
   let offset =
     list.fold(before, px, fn(total, sibling) { total + sibling.width + 6 })
   #(offset, py, control.width, int.max(1, ph))
+}
+
+// `Client` fills what the border-aligned siblings leave: the top band (every
+// Top sibling's height), the bottom band, then the left and right columns of
+// the strip that remains.
+fn client_bounds(
+  form: Form,
+  control: Control,
+  parent_id: String,
+  ix: Int,
+  iy: Int,
+  iw: Int,
+  ih: Int,
+) -> #(Int, Int, Int, Int) {
+  let others =
+    children_of(form, parent_id)
+    |> list.filter(fn(sibling) { sibling.id != control.id })
+  let of = fn(wanted: Align) {
+    list.filter(others, fn(sibling) { align_of(form, sibling.id) == wanted })
+  }
+  let height = fn(items: List(Control)) {
+    list.fold(items, 0, fn(total, item) { total + item.height })
+  }
+  let width = fn(items: List(Control)) {
+    list.fold(items, 0, fn(total, item) { total + item.width })
+  }
+  let top = height(of(Top))
+  let bottom = height(of(Bottom))
+  let left = width(of(Left))
+  let right = width(of(Right))
+  #(
+    ix + left,
+    iy + top,
+    int.max(0, iw - left - right),
+    int.max(0, ih - top - bottom),
+  )
 }
 
 fn fill_bounds(

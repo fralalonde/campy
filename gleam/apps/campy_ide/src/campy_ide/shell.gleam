@@ -401,6 +401,8 @@ pub type ShellView {
     theme: String,
     status: String,
     path: String,
+    /// The pointer's shape over this window (`default`, `grab`, `nwse`, …).
+    cursor: String,
     running: Bool,
     /// Per project row, the module that project's app runs ("" = not
     /// runnable). The navigator draws a run button on the row's right end.
@@ -483,6 +485,7 @@ pub fn empty_view() -> ShellView {
     theme: "dark",
     status: "",
     path: "",
+    cursor: "default",
     running: False,
     project_apps: [],
     running_modules: [],
