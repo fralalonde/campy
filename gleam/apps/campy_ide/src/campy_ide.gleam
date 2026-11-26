@@ -123,6 +123,9 @@ fn new_workspace() -> workspace.Workspace {
 fn debug_view(model: State) -> State {
   case debug_view_env() {
     "settings" -> state.set_settings_open(model, True)
+    // The in-app file browser, for a validation run that cannot drive a native
+    // dialog: the Open dialog as its users see it.
+    "browser" -> state.browser_open(model, state.OpenFile, "", "campy.campy")
 
     "code" -> state.set_view(model, state.CodeView)
     "light" -> state.set_scheme(model, state.Light)

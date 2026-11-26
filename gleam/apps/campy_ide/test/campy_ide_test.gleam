@@ -1246,6 +1246,19 @@ pub fn drop_target_follows_the_cursor_test() {
   campy_form.parent_of(form, button.id) |> should.equal("panel-1")
 }
 
+pub fn file_dialogs_start_in_the_project_directory_test() {
+  // Opening or saving a project begins where the project lives (an absolute
+  // path under CAMPY_ROOT), not in the home directory.
+  let model = demo_state()
+  let dir = state.project_dir(model)
+  string.starts_with(dir, "/") |> should.be_true
+  string.ends_with(dir, "/..") |> should.be_false
+  // The dialog's picker lands on the project file itself.
+  let browser = state.browser_open(model, state.OpenFile, "", "campy.campy")
+  let assert Some(opened) = browser.browser
+  opened.dir |> should.equal(dir)
+}
+
 pub fn console_logs_and_clears_test() {
   let logged =
     demo_state()

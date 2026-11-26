@@ -242,6 +242,11 @@ pub const CAMPY_SHEET: &str = css!(
     ".campy-project-icon-action .campy-widget-button { background: transparent;
                                                        border-color: var(--campy-border); }",
     // --- lists --------------------------------------------------------------
+    // A list is a scroll port: its rows live inside the control's rectangle.
+    // The port's own block box otherwise grows to its content and paints the
+    // rows straight out of the dialog (or the navigator) and across the window.
+    ".campy-list { overflow: hidden; }",
+    ".campy-list .zui-virtual-list { height: 100%; width: 100%; }",
     ".campy-list-row { display: flex; align-items: center; padding: 0 10px; height: 100%;
                        color: var(--campy-muted); border-radius: 5px; font-size: 13px; }",
     ".campy-list-row:hover { background: var(--campy-hover); color: var(--campy-text); }",

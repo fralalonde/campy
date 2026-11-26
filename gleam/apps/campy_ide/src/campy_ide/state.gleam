@@ -2549,6 +2549,9 @@ fn external_path(module: Module) -> String {
 @external(erlang, "campy_fs_ffi", "home")
 fn fs_home() -> String
 
+@external(erlang, "campy_fs_ffi", "abs_path")
+fn fs_abs_path(path: String) -> String
+
 @external(erlang, "campy_fs_ffi", "make_dir")
 fn fs_make_dir(path: String) -> Result(Nil, String)
 
@@ -2600,6 +2603,25 @@ fn read_entries(mode: Popup, dir: String) -> List(BrowserEntry) {
 
 // Open the browser for one of the Popup modes. Empty/relative start
 // directories resolve against the working directory.
+/// Where a file dialog starts: the project's own directory, which is what a
+/// person opening or saving a project expects to see, rather than the home
+/// directory with nothing in it they were looking for.
+pub fn project_dir(state: State) -> String {
+  let absolute = fs_abs_path(state.project.path)
+  let #(directory, _name) = case string.split(absolute, "/") {
+    [_] -> #(".", absolute)
+    parts -> {
+      let assert [_, ..] = parts
+      let name = result.unwrap(list.last(parts), "")
+      #(string.join(list.take(parts, list.length(parts) - 1), "/"), name)
+    }
+  }
+  case directory {
+    "" -> "/"
+    _ -> directory
+  }
+}
+
 pub fn browser_open(
   state: State,
   mode: Popup,
@@ -2607,7 +2629,7 @@ pub fn browser_open(
   name: String,
 ) -> State {
   let dir = case dir {
-    "" -> fs_home()
+    "" -> project_dir(state)
     path ->
       case string.starts_with(path, "/") {
         True -> path

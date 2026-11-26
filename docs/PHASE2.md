@@ -133,7 +133,10 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   with no default module, so a user's workspace survives the upgrade; older
   versions are still rejected.
 - The in-app file browser filters by what the dialog is for (project files,
-  images), so the Open dialog cannot offer files the codec will refuse.
+  images), so the Open dialog cannot offer files the codec will refuse, starts
+  in the project's own directory rather than the home directory, and its list
+  is clipped to the dialog (a list's scroll port otherwise grows to its content
+  and paints the entries across the window).
 
 ### Presentation is a first-class part of drag feel
 

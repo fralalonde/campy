@@ -1,5 +1,6 @@
 -module(campy_fs_ffi).
--export([list_dir/1, home/0, make_dir/1, read_file/1, write_file/2]).
+-export([list_dir/1, home/0, root/0, abs_path/1, make_dir/1, read_file/1,
+         write_file/2]).
 
 %% Filesystem browsing for the in-app file dialog. Entries come back as
 %% {Name, IsDir} pairs (binaries); the caller sorts and renders them.
@@ -11,6 +12,23 @@ home() ->
             _ -> os:getenv("HOME", "/")
         end,
     unicode:characters_to_binary(Dir).
+
+%% Project paths are stored relative to CAMPY_ROOT (the same rule the project
+%% codec uses), so the browser needs the absolute form to start somewhere.
+root() ->
+    unicode:characters_to_binary(
+      case os:getenv("CAMPY_ROOT") of
+          false -> ".";
+          Value -> Value
+      end).
+
+abs_path(Path) ->
+    List = unicode:characters_to_list(Path),
+    Absolute = case filename:pathtype(List) of
+        absolute -> List;
+        _ -> filename:join(unicode:characters_to_list(root()), List)
+    end,
+    unicode:characters_to_binary(Absolute).
 
 list_dir(Path) ->
     case file:list_dir(unicode:characters_to_list(Path)) of
