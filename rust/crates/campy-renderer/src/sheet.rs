@@ -270,6 +270,11 @@ pub const CAMPY_SHEET: &str = css!(
     // --- module tabs --------------------------------------------------------
     ".campy-tab-strip { background: var(--campy-panel);
                         border-bottom: 1px solid var(--campy-border); }",
+    ".campy-tab-x .campy-widget-button { background: transparent; border-color: transparent;
+                                        color: var(--campy-muted); font-size: 14px;
+                                        padding: 0; min-height: 0; border-radius: 4px; }",
+    ".campy-tab-x .campy-widget-button:hover { background: var(--campy-hover);
+                                              color: var(--campy-text); }",
     ".campy-module-tab .campy-widget-button { justify-content: flex-start; padding: 0 12px;
                                               background: transparent;
                                               border-color: transparent; color: var(--campy-muted);

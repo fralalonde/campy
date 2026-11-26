@@ -145,6 +145,19 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   filter in its title, takes an absolute path in the Name field (Open navigates
   into a typed directory), and accepts with Enter.
 
+### Tabs and opening projects (as built)
+
+- **Tabs close one at a time.** Every editor tab carries its own × (and
+  `Ctrl+F4`/`Ctrl+W` close the tab in front). Closing a tab removes the tab,
+  not the module: it stays in the navigator, and closing the active tab makes
+  the last remaining one active.
+- **Opening a project joins the workspace.** The file dialog's Open went
+  through `set_project`, which built a fresh state from the loaded file and
+  replaced everything — which is why the project never appeared in the
+  projects list and its modules were not the ones the editor showed. It now
+  goes through `open_project`: up-sert into the workspace, become active, and
+  open its first module's tab.
+
 ### Reachability (as built)
 
 - **Hints everywhere.** Every control that answers a click carries a `hint`

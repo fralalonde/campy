@@ -916,6 +916,8 @@ pub fn key_action(combo: String) -> Option(String) {
     "f7" -> Some("update-app")
     "shift+f5" -> Some("stop-app")
     "ctrl+tab" -> Some("toggle-view")
+    "ctrl+f4" -> Some("nav-close-tab")
+    "ctrl+w" -> Some("nav-close-tab")
     "ctrl+space" -> Some("completion-request")
     "escape" -> Some("escape")
     "ctrl+," -> Some("open-settings")
@@ -1142,7 +1144,11 @@ fn on_control(
       None ->
         case tab_name(model, id) {
           Some(name) -> Some(name)
-          None -> shell.nav_run_name(id)
+          None ->
+            case tab_close_name(model, id) {
+              Some(name) -> Some(name)
+              None -> shell.nav_run_name(id)
+            }
         }
     }
   {
@@ -1177,32 +1183,52 @@ fn control_action(
 
 /// Control names the shell derives from state rather than from a fixed table:
 /// one per palette tile, one per inspector row, one per open module tab.
+/// A tab's close button (`tab-close:<module id>`), one per open tab.
+fn tab_close_name(model: State, id: Int) -> Option(String) {
+  case
+    list.find_map(model.opened, fn(module_id) {
+      case campy_form.wire_id("tab-close:" <> module_id) == id {
+        True -> Ok(module_id)
+        False -> Error(Nil)
+      }
+    })
+  {
+    Ok(module_id) -> Some("tab-close:" <> module_id)
+    Error(_) -> None
+  }
+}
+
 fn derived_control(
   model: State,
   name: String,
   event_key: String,
   payload: String,
 ) -> ControlEffect {
-  case string.starts_with(name, "run-p:") {
-    True -> ControlRun("toggle-project-run", string.drop_start(name, 6))
+  case string.starts_with(name, "tab-close:") {
+    True -> ControlRun("nav-close-tab", string.drop_start(name, 10))
     False ->
-      case string.starts_with(name, "run-m:") {
-        True -> ControlRun("toggle-module-run", string.drop_start(name, 6))
+      case string.starts_with(name, "run-p:") {
+        True -> ControlRun("toggle-project-run", string.drop_start(name, 6))
         False ->
-          case string.starts_with(name, "tab:") {
-            True -> ControlRun("tab-module", string.drop_start(name, 4))
+          case string.starts_with(name, "run-m:") {
+            True -> ControlRun("toggle-module-run", string.drop_start(name, 6))
             False ->
-              case string.starts_with(name, "tile:") {
-                True -> ControlRun("add-component", string.drop_start(name, 5))
+              case string.starts_with(name, "tab:") {
+                True -> ControlRun("tab-module", string.drop_start(name, 4))
                 False ->
-                  case string.starts_with(name, "insp:") {
+                  case string.starts_with(name, "tile:") {
                     True ->
-                      inspector_effect(
-                        string.drop_start(name, 5),
-                        event_key,
-                        payload,
-                      )
-                    False -> section_effect(model, name, event_key, payload)
+                      ControlRun("add-component", string.drop_start(name, 5))
+                    False ->
+                      case string.starts_with(name, "insp:") {
+                        True ->
+                          inspector_effect(
+                            string.drop_start(name, 5),
+                            event_key,
+                            payload,
+                          )
+                        False -> section_effect(model, name, event_key, payload)
+                      }
                   }
               }
           }
@@ -1268,7 +1294,6 @@ fn button_action(name: String) -> ControlEffect {
     "project-add" -> "open-project-dialog"
     "project-delete" -> "delete-project"
     "module-add" -> "file-new-module"
-    "tab-close" -> "nav-close-tab"
     "view-toggle" -> "toggle-view"
     "console-clear" -> "clear-console"
     "insp-tab-properties" -> "tab-properties"
@@ -1870,11 +1895,19 @@ fn dispatch(model: State, name: String, payload: String) -> State {
     "nav-delete" -> state.nav_delete(model)
     // Close tab acts on the right-clicked module (nav_id); the shell's
     // `tab-close` button has no nav target and closes the active tab.
-    "nav-close-tab" ->
-      case model.nav_id {
-        "" -> state.close_module(model, model.active)
-        id -> state.close_module(model, id)
+    "nav-close-tab" -> {
+      // A tab's × names its module; the keybinding and the navigator's menu
+      // mean the tab in front.
+      let target = case payload {
+        "" ->
+          case model.nav_context_open {
+            True -> model.nav_id
+            False -> model.active
+          }
+        id -> id
       }
+      state.close_module(model, target)
+    }
     "console-goto-line" ->
       case string.split_once(payload, ";") {
         Ok(#(line_text, _)) ->
@@ -2043,9 +2076,11 @@ fn popup_accept(model: State, path: String) -> State {
     OpenFile ->
       case project.load(path) {
         Ok(loaded) ->
-          state.set_project(model, loaded)
+          // Joins the workspace rather than replacing it: the project shows up
+          // in the projects list, becomes active, and its modules are what the
+          // navigator and the tabs list.
+          state.open_project(model, loaded)
           |> state.set_popup(NoPopup)
-          |> state.set_status("Opened " <> path)
         Error(error) -> state.set_status(model, "Open failed: " <> error)
       }
     SaveAs ->

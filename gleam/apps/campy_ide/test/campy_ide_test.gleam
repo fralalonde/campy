@@ -7,6 +7,7 @@
 import campy_bridge as bridge
 import campy_ccl
 import campy_form
+import campy_form/canora
 import campy_form/live_preview
 import campy_form/project
 import campy_form/workspace
@@ -64,7 +65,6 @@ pub fn toolbar_and_dialog_controls_are_buttons_test() {
     [
       #("view-toggle", "button"),
       #("module-add", "button"),
-      #("tab-close", "button"),
       #("console-clear", "button"),
       #("project-icon-choose", "button"),
       #("settings-close", "button"),
@@ -337,6 +337,8 @@ pub fn key_bindings_keep_their_actions_test() {
     #("f7", "update-app"),
     #("shift+f5", "stop-app"),
     #("ctrl+tab", "toggle-view"),
+    #("ctrl+f4", "nav-close-tab"),
+    #("ctrl+w", "nav-close-tab"),
     #("ctrl+space", "completion-request"),
     #("escape", "escape"),
   ]
@@ -1285,6 +1287,41 @@ pub fn a_typed_absolute_path_is_used_as_it_is_test() {
   // Directories are recognised, which is what makes Open look inside one.
   state.is_directory("/tmp") |> should.be_true
   state.is_directory("/tmp/campy-no-such-file.campy") |> should.be_false
+}
+
+pub fn closing_a_tab_keeps_the_module_test() {
+  // A tab's × closes the tab, not the module: it stays in the navigator, and
+  // closing the active tab makes the last remaining one active.
+  let model =
+    demo_state()
+    |> state.open_module("widgets")
+    |> state.close_module("cat-cafe")
+  model.opened |> should.equal(["widgets"])
+  model.active |> should.equal("widgets")
+  list.length(model.project.modules) |> should.equal(4)
+  // The last tab cannot be closed.
+  state.close_module(model, "widgets").status
+  |> should.equal("Cannot close the last tab")
+}
+
+pub fn opening_a_project_joins_the_workspace_test() {
+  // The reported bug: opening a file replaced the workspace instead of adding
+  // to it, so the project vanished from the list and its modules were not the
+  // ones the editor showed.
+  let model = demo_state()
+  let canora = canora_project()
+  let opened = state.open_project(model, canora)
+  opened.workspace.projects
+  |> list.map(fn(target) { target.path })
+  |> list.contains(canora.path)
+  |> should.be_true
+  opened.project.path |> should.equal(canora.path)
+  opened.opened |> should.equal(["library"])
+  opened.active |> should.equal("library")
+}
+
+fn canora_project() -> project.Project {
+  canora.project()
 }
 
 pub fn console_logs_and_clears_test() {

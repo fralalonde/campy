@@ -570,16 +570,32 @@ pub fn activate_module(state: State, id: String) -> State {
   }
 }
 
+/// Closes one module's editor tab. The module stays in the project — it is
+/// still in the navigator — and only its tab goes; closing the active tab
+/// makes the last remaining tab active.
 pub fn close_module(state: State, id: String) -> State {
   case list.filter(state.opened, fn(open) { open != id }) {
     [] -> status(state, "Cannot close the last tab")
     remaining ->
       case state.active == id {
-        // Closing the active tab removes the module from the workspace
-        // index; committed so undo restores it.
         False ->
           commit(state, State(..state, opened: remaining, status: "Closed tab"))
-        True -> remove_module(state, id, remaining, "Closed tab")
+        True ->
+          commit(
+            state,
+            State(
+              ..state,
+              opened: remaining,
+              active: result.unwrap(list.last(remaining), ""),
+              selected: None,
+              selection: [],
+              selected_project: False,
+              active_handler: None,
+              highlight: None,
+              editing: None,
+              status: "Closed tab",
+            ),
+          )
       }
   }
 }

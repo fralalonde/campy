@@ -996,9 +996,6 @@ fn centre(view: ShellView) -> List(ControlDesc) {
   let l = view.layout
   [
     tab_strip(view),
-    node("tab-close", "button", "×", l.right_x - 51, l.body_y + 4, 24, 24)
-      |> with_class("campy-icon-button")
-      |> with_props([hint_prop("Close tab")]),
     canvas(view),
     rule("canvas-rule", l.canvas_x, l.rule_y, l.centre_w, 1)
       |> shown(!view.code_view),
@@ -1082,7 +1079,24 @@ fn tab_strip(view: ShellView) -> ControlDesc {
       node("tab:" <> item.id, "button", item.name, 2 + index * 136, 4, 132, 26)
       |> with_class("campy-module-tab")
       |> with_class_if("campy-tab-on", item.active)
-      |> with_props([hint_prop("Switch to this module")])
+      |> with_props([hint_prop("Switch to " <> item.name)])
+    })
+  // One close button per tab, at its right end. Closing a tab leaves the
+  // module in the navigator; it is the tab that goes.
+  let closes =
+    view.tabs
+    |> list.index_map(fn(item: TabItem, index: Int) {
+      node(
+        "tab-close:" <> item.id,
+        "button",
+        "×",
+        2 + index * 136 + 108,
+        7,
+        20,
+        20,
+      )
+      |> with_class("campy-tab-x")
+      |> with_props([hint_prop("Close " <> item.name <> " (Ctrl+F4)")])
     })
   node(
     "tab-strip",
@@ -1095,7 +1109,7 @@ fn tab_strip(view: ShellView) -> ControlDesc {
   )
   |> with_class("campy-tab-strip")
   |> with_props([layout_prop("free")])
-  |> with_children(tabs)
+  |> with_children(list.append(tabs, closes))
 }
 
 fn toggle_glyph(view: ShellView) -> String {

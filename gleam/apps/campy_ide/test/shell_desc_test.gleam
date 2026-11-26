@@ -13,6 +13,7 @@ import campy_ide/state
 import gleam/int
 import gleam/list
 import gleam/option.{Some}
+import gleam/string
 import gleeunit/should
 
 fn demo_state() -> state.State {
@@ -99,7 +100,6 @@ pub fn every_wire_contract_section_is_present_test() {
     #("projects-nav", "list"),
     #("modules-nav", "list"),
     #("tab-strip", "panel"),
-    #("tab-close", "button"),
     #("canvas", "surface"),
     #("inspector", "panel"),
     #("inspector-events", "panel"),
@@ -495,6 +495,44 @@ pub fn every_clickable_control_explains_itself_test() {
       }
     })
   missing |> should.equal([])
+}
+
+pub fn each_tab_has_a_close_button_test() {
+  let document = shell.desc(demo_view())
+  // One × per open tab, at the tab's right end.
+  let view = demo_view()
+  view.tabs
+  |> list.each(fn(item) {
+    let module_id = item.id
+    let name = "tab-close:" <> module_id
+    let close = case
+      list.find(flatten(document), fn(control) {
+        control.id == shell.section_id(name)
+      })
+    {
+      Ok(control) -> control
+      Error(_) -> panic as { "missing tab close " <> name }
+    }
+    close.kind |> should.equal("button")
+    close.text |> should.equal("×")
+    let tab = case
+      list.find(flatten(document), fn(control) {
+        control.id == shell.section_id("tab:" <> module_id)
+      })
+    {
+      Ok(control) -> control
+      Error(_) -> panic as { "missing tab " <> module_id }
+    }
+    close.x |> should.equal(tab.x + tab.w - 24)
+    close.props
+    |> list.any(fn(prop) {
+      case prop {
+        #("hint", bridge.WireText(text)) -> string.contains(text, "Close")
+        _ -> False
+      }
+    })
+    |> should.be_true
+  })
 }
 
 pub fn commands_tag_ops_with_the_generation_test() {
