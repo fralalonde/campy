@@ -199,9 +199,13 @@ pub type State {
     nav_id: String,
     nav_context_x: Int,
     nav_context_y: Int,
-    /// Absolute paths of the file tree's open folders.
+    /// Absolute paths of the file tree's open folders, the flattened rows and
+    /// the key they were built from. A drag's pointer moves reuse the rows;
+    /// only a target/expansion/selection change asks the filesystem again.
     files_expanded: List(String),
     files_selected: String,
+    files: List(shell.FileItem),
+    files_key: String,
     /// A file opened from the tree, shown read-only in the code pane.
     file_preview: Option(FilePreview),
     gesture: Gesture,
@@ -400,6 +404,8 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     nav_context_y: 0,
     files_expanded: [],
     files_selected: "",
+    files: [],
+    files_key: "",
     file_preview: None,
     gesture: Idle,
     last_pointer: #(0, 0),
@@ -408,6 +414,7 @@ pub fn initial_workspace(workspace: Workspace) -> State {
     window_size: #(shell.window_width, shell.window_height),
     hover_status: None,
   )
+  |> refresh_files
 }
 
 fn history(state: State) -> History {
@@ -439,6 +446,7 @@ fn restore(state: State, past: History) -> State {
     editing: None,
     editor: View,
   )
+  |> refresh_files
 }
 
 // Record one undo step when the document (or selection context) changed.
@@ -525,6 +533,7 @@ fn with_project(state: State, workspace: Workspace, project: Project) -> State {
     diagnostics: state.diagnostics,
     status: "Project · " <> project.title,
   )
+  |> refresh_files
 }
 
 pub fn switch_project(state: State, path: String) -> State {
@@ -542,6 +551,7 @@ pub fn switch_project(state: State, path: String) -> State {
         file_preview: None,
         status: "Project · " <> target.title,
       )
+      |> refresh_files
     Some(target) -> {
       let ws = workspace.update_active(state.workspace, state.project)
       with_project(state, ws, target)
@@ -654,6 +664,7 @@ pub fn open_module(state: State, id: String) -> State {
         completion_index: 0,
         status: "Opened " <> module.name,
       )
+      |> refresh_files
     }
   }
 }
@@ -679,6 +690,7 @@ pub fn activate_module(state: State, id: String) -> State {
         completion_index: 0,
         status: "Switched to " <> module.name,
       )
+      |> refresh_files
   }
 }
 
@@ -691,7 +703,11 @@ pub fn close_module(state: State, id: String) -> State {
     remaining ->
       case state.active == id {
         False ->
-          commit(state, State(..state, opened: remaining, status: "Closed tab"))
+          commit(
+            state,
+            State(..state, opened: remaining, status: "Closed tab")
+              |> refresh_files,
+          )
         True ->
           commit(
             state,
@@ -706,7 +722,8 @@ pub fn close_module(state: State, id: String) -> State {
               highlight: None,
               editing: None,
               status: "Closed tab",
-            ),
+            )
+              |> refresh_files,
           )
       }
   }
@@ -762,7 +779,8 @@ fn remove_module(
       editing: None,
       editor: View,
       status: note,
-    ),
+    )
+      |> refresh_files,
   )
 }
 
@@ -821,7 +839,8 @@ pub fn add(state: State, kind: Kind) -> State {
           selected_project: False,
           tab: Properties,
           status: "Added " <> campy_form.kind_label(kind),
-        ),
+        )
+          |> refresh_files,
       )
     }
   }
@@ -867,6 +886,7 @@ pub fn select(state: State, id: String) -> State {
         highlight: None,
         editing: None,
       )
+      |> refresh_files
     False ->
       case active_form(state) {
         Some(form) ->
@@ -883,6 +903,7 @@ pub fn select(state: State, id: String) -> State {
                 editing: None,
                 editor: View,
               )
+              |> refresh_files
             None -> state
           }
         None -> state
@@ -929,6 +950,7 @@ pub fn toggle_select(state: State, id: String) -> State {
                 status: "Selected "
                   <> int.to_string(list.length(state.selection) + 1),
               )
+              |> refresh_files
           }
         }
       }
@@ -2875,9 +2897,36 @@ pub fn files_hint(state: State) -> String {
   "Files — " <> files_root(state) <> " · right-click a row for actions"
 }
 
-/// The flattened tree: open folders recurse, everything else is one row. Rows
-/// are capped so a repository root can never make one document unbounded.
+/// The flattened tree, cached: a drag presents many frames, and every one of
+/// them must not stat the filesystem. `refresh_files` is the only writer, and
+/// `file_items` recomputes if the key ever disagrees (a transition that forgot
+/// to refresh is slow, never wrong).
 pub fn file_items(state: State) -> List(shell.FileItem) {
+  case files_key(state) == state.files_key {
+    True -> state.files
+    False -> compute_file_items(state)
+  }
+}
+
+/// Rebuild the cached tree. Called when the target, an open folder or the
+/// selected file changes.
+pub fn refresh_files(state: State) -> State {
+  State(..state, files: compute_file_items(state), files_key: files_key(state))
+}
+
+fn files_key(state: State) -> String {
+  string.join(
+    [
+      files_root(state),
+      files_highlight(state),
+      state.files_selected,
+      string.join(state.files_expanded, "\u{0000}"),
+    ],
+    "\u{0000}",
+  )
+}
+
+fn compute_file_items(state: State) -> List(shell.FileItem) {
   let #(items, _budget) =
     walk_files(
       files_root(state),
@@ -2997,6 +3046,7 @@ pub fn toggle_file_dir(state: State, path: String) -> State {
       False -> "Closed folder " <> basename(path)
     },
   )
+  |> refresh_files
 }
 
 pub fn collapse_files(state: State) -> State {
@@ -3006,6 +3056,7 @@ pub fn collapse_files(state: State) -> State {
     files_selected: "",
     status: "Folders collapsed",
   )
+  |> refresh_files
 }
 
 pub fn open_file_preview(state: State, path: String) -> State {
@@ -3020,13 +3071,14 @@ pub fn open_file_preview(state: State, path: String) -> State {
         editing: None,
         status: "Reading " <> basename(path),
       )
+      |> refresh_files
     Error(reason) ->
       status(state, "Cannot read " <> basename(path) <> ": " <> reason)
   }
 }
 
 pub fn close_file_preview(state: State) -> State {
-  State(..state, file_preview: None)
+  State(..state, file_preview: None) |> refresh_files
 }
 
 pub fn browser_open(
@@ -3234,6 +3286,7 @@ pub fn nav_context_row(state: State, list_name: String, index: Int) -> State {
           _ -> "File actions"
         },
       )
+      |> refresh_files
     }
   }
 }
@@ -3336,7 +3389,7 @@ pub fn set_saved(state: State, saved: Project) -> State {
     True -> workspace.update_active(state.workspace, saved)
     False -> workspace.replace_path(state.workspace, state.project.path, saved)
   }
-  State(..state, project: saved, workspace: ws)
+  State(..state, project: saved, workspace: ws) |> refresh_files
 }
 
 pub fn set_status(state: State, message: String) -> State {
@@ -3543,6 +3596,7 @@ pub fn select_frame(state: State, additive: Bool) -> State {
           count -> int.to_string(count) <> " components selected"
         },
       )
+      |> refresh_files
     }
   }
 }
@@ -3589,7 +3643,8 @@ pub fn place_component(state: State) -> State {
           drop_active: False,
           drop_candidate: "",
           status: "Added " <> campy_form.kind_label(kind),
-        ),
+        )
+          |> refresh_files,
       )
     }
   }
@@ -4049,6 +4104,7 @@ pub fn pointer_up(state: State, x: Int, y: Int, additive: Bool) -> State {
                 None -> ""
               },
           )
+          |> refresh_files
         False -> state
       }
       State(..next, gesture: Idle, last_click: None)
@@ -4145,6 +4201,7 @@ fn toggle_in_selection(state: State, id: String) -> State {
         status: int.to_string(list.length(state.selection) + 1)
           <> " components selected",
       )
+      |> refresh_files
   }
 }
 

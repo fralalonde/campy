@@ -1937,6 +1937,7 @@ fn dispatch(model: State, name: String, payload: String) -> State {
       state.nav_context_close(model) |> state.collapse_files
     "files-refresh" ->
       state.nav_context_close(model)
+      |> state.refresh_files
       |> state.set_status("Files refreshed")
     "nav-save" ->
       state.nav_context_close(model)

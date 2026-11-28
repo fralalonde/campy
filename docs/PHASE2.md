@@ -212,7 +212,11 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   shows that module's source directory (an embedded module points at the
   project file itself). Folders expand in place (`▸`/`▾`); the tree is capped
   so a repository root cannot make the document unbounded. Rows are real paths,
-  not labels, and file names never wrap into the next virtual-list row.
+  not labels, and file names never wrap into the next virtual-list row. The
+  flattened rows are cached in the state and rebuilt only when the target,
+  an open folder or the selected file changes (or the refresh button asks):
+  a drag presents a frame per pointer move, and those frames must not stat
+  the filesystem. Warm snapshots measured under 1ms instead of ~5ms.
 - **Files open read-only.** Clicking a file reads it into the code pane with the
   editor's `read-only` prop set, so a preview can never overwrite the handler
   source beside it; the file name replaces the handler label. A `.campy` row
