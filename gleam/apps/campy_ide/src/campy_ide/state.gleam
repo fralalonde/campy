@@ -222,6 +222,84 @@ pub fn initial(project: Project) -> State {
   initial_workspace(workspace.new(project))
 }
 
+/// The file a path names, with a relative path resolved against CAMPY_ROOT.
+/// Two spellings of one project file (what a dialog returns and what a project
+/// row stores) compare equal through this.
+fn canonical_path(path: String) -> String {
+  fs_abs_path(path)
+}
+
+fn find_project(workspace: Workspace, path: String) -> Option(Project) {
+  case workspace.find(workspace, path) {
+    Some(project) -> Some(project)
+    None -> {
+      let key = canonical_path(path)
+      case
+        list.find(workspace.projects, fn(project) {
+          canonical_path(project.path) == key
+        })
+      {
+        Ok(project) -> Some(project)
+        Error(_) -> None
+      }
+    }
+  }
+}
+
+/// One row per project file. A workspace saved before paths were compared
+/// canonically can hold the same file under a relative and an absolute path;
+/// keep the first row and move `active` to it.
+pub fn normalize_workspace(workspace: Workspace) -> Workspace {
+  // The active row is the live one: if it is a duplicate spelling of another
+  // row, keep its state, or normalizing would silently discard the edits the
+  // user is working in.
+  let active_key = canonical_path(workspace.active)
+  let active_project = case workspace.find(workspace, workspace.active) {
+    Some(project) -> Some(project)
+    None ->
+      case
+        list.find(workspace.projects, fn(project) {
+          canonical_path(project.path) == active_key
+        })
+      {
+        Ok(project) -> Some(project)
+        Error(_) -> None
+      }
+  }
+  let #(projects, _seen) =
+    list.fold(workspace.projects, #([], []), fn(accumulator, project) {
+      let #(kept, seen) = accumulator
+      let key = canonical_path(project.path)
+      case list.contains(seen, key) {
+        True -> #(kept, seen)
+        False -> {
+          let representative = case active_project {
+            Some(active) ->
+              case canonical_path(active.path) == key {
+                True -> active
+                False -> project
+              }
+            None -> project
+          }
+          #(list.append(kept, [representative]), list.append(seen, [key]))
+        }
+      }
+    })
+  let active = case
+    list.find(projects, fn(project) {
+      canonical_path(project.path) == active_key
+    })
+  {
+    Ok(project) -> project.path
+    Error(_) ->
+      case projects {
+        [first, ..] -> first.path
+        [] -> workspace.active
+      }
+  }
+  workspace.Workspace(..workspace, projects: projects, active: active)
+}
+
 // A hot reload (F6) swaps in new beams while the running process still holds
 // state built by the previous code. When the project format version moved on,
 // the in-memory document is stale — its records may not even have the fields
@@ -437,6 +515,9 @@ fn with_project(state: State, workspace: Workspace, project: Project) -> State {
     // The editor mode is the user's, not the document's: switching modules or
     // projects leaves the Form/Code view where it was.
     view: state.view,
+    // So is the window: a maximized or resized window must not snap back to
+    // the default size because another project was switched in.
+    window_size: state.window_size,
     clipboard: state.clipboard,
     previews: state.previews,
     selected_project: True,
@@ -496,8 +577,10 @@ pub fn delete_active_project(state: State) -> State {
 }
 
 pub fn open_project(state: State, loaded: Project) -> State {
-  let ws = workspace.update_active(state.workspace, state.project)
-  case workspace.find(ws, loaded.path) {
+  let ws =
+    workspace.update_active(state.workspace, state.project)
+    |> normalize_workspace
+  case find_project(ws, loaded.path) {
     Some(existing) ->
       with_project(state, ws, existing)
       |> status("Switched to " <> existing.title)

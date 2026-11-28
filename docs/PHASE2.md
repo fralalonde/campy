@@ -198,6 +198,12 @@ per-stage frame trace (`f.layout`, `acq.in/out`, `p.draw`, …).
   projects list and its modules were not the ones the editor showed. It now
   goes through `open_project`: up-sert into the workspace, become active, and
   open its first module's tab.
+- **One row per project file.** Workspaces compare project paths canonically
+  (absolute, resolved against `CAMPY_ROOT`), so the same file named by a
+  dialog (absolute) and by a workspace row (relative) is one project. Loading
+  a workspace also collapses duplicates, keeping the active spelling's state;
+  the old sample path left behind when Canora moved is what produced two
+  identical rows.
 
 ### The navigator's files pane and its context menus
 
@@ -804,7 +810,10 @@ longer a fixed 1280×860 frame: `shell.layout(width, height)` derives
 every pane from the window size, the renderer reports the window's CSS
 size on change (a `size` event), and the resize reaches the document as
 `SetGeometry` ops — the side panes keep their widths, the centre column,
-canvas and console take the rest, and dialogs centre themselves.
+canvas and console take the rest, and dialogs centre themselves. The window
+size is the window's, not the document's: `with_project` carries
+`window_size`, so switching projects (or modules after one) no longer snaps a
+maximized window back to the default 1280×860.
 Choice rows are real dropdowns on the same popup machinery as menus
 (a check on the current value, `selected` with the option text), which
 retires the click-to-cycle stopgap.

@@ -106,7 +106,18 @@ fn native_main() {
 // console line — never a crash.
 fn open_workspace() -> #(workspace.Workspace, String) {
   case workspace.load(workspace.default_path) {
-    Ok(loaded) -> #(migrate_workspace(loaded), "")
+    Ok(loaded) -> {
+      let migrated = migrate_workspace(loaded)
+      let normalized = state.normalize_workspace(migrated)
+      // Drop duplicate rows now, not only when the next edit persists them.
+      case normalized == loaded {
+        True -> #(normalized, "")
+        False -> {
+          let _ = workspace.save(normalized)
+          #(normalized, "")
+        }
+      }
+    }
     Error(error) -> #(
       new_workspace(),
       "Workspace reset (" <> short_error(error) <> ")",

@@ -28,6 +28,9 @@ fn fs_make_dir(path: String) -> Result(Nil, String)
 @external(erlang, "campy_fs_ffi", "write_file")
 fn fs_write_file(path: String, text: String) -> Result(Nil, String)
 
+@external(erlang, "campy_fs_ffi", "abs_path")
+fn fs_abs_path(path: String) -> String
+
 import gleeunit
 import gleeunit/should
 
@@ -462,6 +465,53 @@ pub fn module_context_delete_removes_inactive_module_test() {
   let last =
     menu |> state.nav_context_menu("module;search-box") |> state.nav_delete
   last.status |> should.equal("Cannot delete the last module")
+}
+
+pub fn the_window_size_survives_project_and_module_switches_test() {
+  // A maximized window stays maximized: the layout is the window's, not the
+  // document's, and `with_project` rebuilds the document.
+  let model = demo_state() |> state.set_window_size(1920, 1080)
+  let other =
+    project.Project(
+      ..project.campy(),
+      title: "Other",
+      path: "/tmp/other-project.campy",
+    )
+  let opened = state.open_project(model, other)
+  opened.window_size |> should.equal(#(1920, 1080))
+  let back = state.switch_project(opened, project.default_path)
+  back.window_size |> should.equal(#(1920, 1080))
+  state.open_module(back, "widgets").window_size
+  |> should.equal(#(1920, 1080))
+}
+
+pub fn one_project_file_is_one_workspace_row_test() {
+  // The same file named relatively and absolutely is one project, whether it
+  // is loaded from a workspace or opened again from the file tree.
+  let base = project.campy()
+  let absolute = fs_abs_path(base.path)
+  let duplicate = project.Project(..base, path: absolute)
+  let ws =
+    workspace.Workspace(
+      workspace.version,
+      [base, duplicate],
+      absolute,
+      workspace.default_path,
+    )
+  let normalized = state.normalize_workspace(ws)
+  list.length(normalized.projects) |> should.equal(1)
+  // The active spelling won: its project state is the live one.
+  normalized.active |> should.equal(absolute)
+
+  let opened = state.open_project(demo_state(), duplicate)
+  list.length(opened.workspace.projects) |> should.equal(1)
+  opened.project.path |> should.equal(base.path)
+
+  // An existing project opened through its absolute spelling switches to the
+  // row already there rather than appending another.
+  let again =
+    state.open_project(demo_state(), project.Project(..base, path: absolute))
+  list.length(again.workspace.projects) |> should.equal(1)
 }
 
 pub fn the_file_tree_follows_the_selected_project_test() {
